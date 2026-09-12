@@ -1,6 +1,6 @@
 import { contextBridge, ipcRenderer } from 'electron';
 import type { QueryContext } from '../core/query/types';
-import { IPC_CHANNELS } from '../main/ipc';
+import { IPC_CHANNELS } from '../core/ipc/channels';
 
 const desktopApi = {
   systems: {
