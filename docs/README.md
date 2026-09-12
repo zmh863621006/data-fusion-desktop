@@ -12,6 +12,11 @@
 6. [05-license-update-security.md](./05-license-update-security.md) — 密钥授权、自动更新、插件更新、安全边界
 7. [06-task-engine-and-runtime.md](./06-task-engine-and-runtime.md) — 分页查询、任务引擎、恢复、重试、运行时
 8. [07-development-roadmap.md](./07-development-roadmap.md) — 分阶段开发计划和当前优先级
+9. [08-real-system-onboarding-checklist.md](./08-real-system-onboarding-checklist.md) — 真实业务系统接入检查表
+10. [09-decisions-and-open-questions.md](./09-decisions-and-open-questions.md) — 已确定架构决策与待确认事项
+11. [10-ui-screen-specification.md](./10-ui-screen-specification.md) — 全部桌面页面与交互规格
+12. [11-testing-release-and-quality.md](./11-testing-release-and-quality.md) — 测试、CI、发布、迁移与质量基线
+13. [12-security-threat-model.md](./12-security-threat-model.md) — 本地数据、业务会话、插件和更新安全模型
 
 ## 核心不可破坏原则
 
