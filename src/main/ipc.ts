@@ -1,15 +1,7 @@
 import { ipcMain } from 'electron';
 import { appRuntime } from './runtime';
+import { IPC_CHANNELS } from '../core/ipc/channels';
 import type { QueryContext } from '../core/query/types';
-
-export const IPC_CHANNELS = {
-  systemsList: 'systems:list',
-  systemSession: 'system:session',
-  systemLogin: 'system:login',
-  systemLogout: 'system:logout',
-  mattersList: 'matters:list',
-  matterQuery: 'matter:query',
-} as const;
 
 function requireSystem(systemId: string) {
   const plugin = appRuntime.plugins.get(systemId);
@@ -57,7 +49,7 @@ export function registerIpcHandlers(): void {
         throw new Error('请先登录该业务系统');
       }
 
-      // Force authentication material to be resolved inside the main-process plugin boundary.
+      // Authentication material is resolved only inside the main process.
       await plugin.auth.getSessionForRequest();
 
       const matter = plugin.matters.find((item) => item.id === matterId);
