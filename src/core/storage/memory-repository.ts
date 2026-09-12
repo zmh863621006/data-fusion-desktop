@@ -17,8 +17,14 @@ export class MemoryLocalRepository implements LocalRepository {
   }
 
   async appendVersion(version: RecordVersion): Promise<void> {
-    const current = this.versions.get(version.recordKey) ?? [];
+    const key = this.key(version.systemId, version.matterId, version.recordKey);
+    const current = this.versions.get(key) ?? [];
     current.push(version);
-    this.versions.set(version.recordKey, current);
+    this.versions.set(key, current);
+  }
+
+  async listVersions(systemId: string, matterId: string, recordKey: string): Promise<RecordVersion[]> {
+    return [...(this.versions.get(this.key(systemId, matterId, recordKey)) ?? [])]
+      .sort((a, b) => b.capturedAt - a.capturedAt);
   }
 }
