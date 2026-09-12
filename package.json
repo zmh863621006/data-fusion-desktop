@@ -3,24 +3,25 @@
   "version": "0.1.0",
   "private": true,
   "description": "本地数据融合桌面工具",
-  "main": "dist/main/index.js",
+  "main": "out/main/index.js",
   "scripts": {
-    "dev": "vite",
-    "build": "tsc -b && vite build",
-    "typecheck": "tsc --noEmit",
-    "electron": "electron ."
+    "dev": "electron-vite dev",
+    "build": "electron-vite build",
+    "preview": "electron-vite preview",
+    "typecheck": "tsc --noEmit -p tsconfig.json"
   },
   "dependencies": {
-    "@vitejs/plugin-react": "latest",
-    "electron": "latest",
     "react": "latest",
-    "react-dom": "latest",
-    "vite": "latest"
+    "react-dom": "latest"
   },
   "devDependencies": {
     "@types/node": "latest",
     "@types/react": "latest",
     "@types/react-dom": "latest",
-    "typescript": "latest"
+    "@vitejs/plugin-react": "latest",
+    "electron": "latest",
+    "electron-vite": "latest",
+    "typescript": "latest",
+    "vite": "latest"
   }
 }
