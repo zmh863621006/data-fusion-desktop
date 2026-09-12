@@ -72,6 +72,8 @@ export class DefaultLocalSyncEngine implements LocalSyncEngine {
       };
       await this.repository.upsert(record);
       await this.repository.appendVersion({
+        systemId,
+        matterId,
         recordKey: change.key,
         version: now,
         data: change.current,
