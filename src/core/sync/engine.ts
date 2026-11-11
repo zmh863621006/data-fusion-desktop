@@ -9,18 +9,21 @@ function stable(value: unknown): string {
       .map(([key, item]) => `${JSON.stringify(key)}:${stable(item)}`)
       .join(',')}}`;
   }
-  return JSON.stringify(value);
+  if (value === undefined) return 'undefined:';
+  if (typeof value === 'number' && Number.isNaN(value)) return 'number:NaN';
+  return `${typeof value}:${JSON.stringify(value)}`;
 }
 
 export function buildRecordKey(row: Record<string, unknown>, uniqueKey: string[]): string {
   if (!uniqueKey.length) throw new Error('uniqueKey is required');
-  return uniqueKey.map((key) => {
+  const components = uniqueKey.map((key) => {
     const value = row[key];
     if (value === undefined || value === null || value === '') {
       throw new Error(`Missing unique key field: ${key}`);
     }
-    return `${key}=${String(value)}`;
-  }).join('|');
+    return [key, stable(value)];
+  });
+  return JSON.stringify(components);
 }
 
 export class DefaultLocalSyncEngine implements LocalSyncEngine {
@@ -31,11 +34,18 @@ export class DefaultLocalSyncEngine implements LocalSyncEngine {
     matterId: string,
     uniqueKey: string[],
     rows: T[],
+    mergeRecord?: (incoming: T, previous: T) => T,
   ): Promise<SyncSummary<T>> {
     const changes: SyncChange<T>[] = [];
-    for (const row of rows) {
+    const uniqueRows = new Map(rows.map(row => [buildRecordKey(row, uniqueKey), row]));
+    for (const incoming of uniqueRows.values()) {
+      let row = incoming;
       const key = buildRecordKey(row, uniqueKey);
       const previous = await this.repository.find(systemId, matterId, key);
+      if (previous && mergeRecord) {
+        row = mergeRecord(incoming, previous.data as T);
+        if (buildRecordKey(row, uniqueKey) !== key) throw new Error('Record merge cannot change the unique key');
+      }
       if (!previous) {
         changes.push({ type: 'insert', key, current: row });
       } else if (stable(previous.data) === stable(row)) {
@@ -58,27 +68,29 @@ export class DefaultLocalSyncEngine implements LocalSyncEngine {
     matterId: string,
     summary: SyncSummary<T>,
   ): Promise<void> {
-    const now = Date.now();
-    for (const change of summary.changes) {
-      if (change.type === 'unchanged') continue;
-      const existing = await this.repository.find(systemId, matterId, change.key);
-      const record: StoredRecord<T> = {
-        systemId,
-        matterId,
-        recordKey: change.key,
-        data: change.current,
-        firstSeenAt: existing?.firstSeenAt ?? now,
-        updatedAt: now,
-      };
-      await this.repository.upsert(record);
-      await this.repository.appendVersion({
-        systemId,
-        matterId,
-        recordKey: change.key,
-        version: now,
-        data: change.current,
-        capturedAt: now,
-      });
-    }
+    await this.repository.transaction(async () => {
+      const now = Date.now();
+      for (const change of summary.changes) {
+        if (change.type === 'unchanged') continue;
+        const existing = await this.repository.find(systemId, matterId, change.key);
+        const record: StoredRecord<T> = {
+          systemId,
+          matterId,
+          recordKey: change.key,
+          data: change.current,
+          firstSeenAt: existing?.firstSeenAt ?? now,
+          updatedAt: now,
+        };
+        await this.repository.upsert(record);
+        await this.repository.appendVersion({
+          systemId,
+          matterId,
+          recordKey: change.key,
+          version: now,
+          data: change.current,
+          capturedAt: now,
+        });
+      }
+    });
   }
 }

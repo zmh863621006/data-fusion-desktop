@@ -17,12 +17,31 @@ jobs:
         uses: actions/setup-node@v4
         with:
           node-version: 22
+          cache: npm
 
       - name: Install dependencies
-        run: npm install
+        run: npm ci
 
       - name: Typecheck
         run: npm run typecheck
 
+      - name: Test
+        run: npm test
+
+      - name: Export preservation under restricted script policy
+        run: npm run test:export-preservation
+
       - name: Build
         run: npm run build
+
+      - name: Admin API regression
+        run: npm run test:admin
+
+      - name: Install admin frontend dependencies
+        run: npm --prefix admin-server/web ci
+
+      - name: Audit admin frontend dependencies
+        run: npm --prefix admin-server/web audit --audit-level=high --registry=https://registry.npmjs.org
+
+      - name: Build admin frontend
+        run: npm run admin:web:build

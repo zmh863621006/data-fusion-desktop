@@ -1,0 +1,187 @@
+[
+  {
+    "id": "drainage-permit-new",
+    "name": "污水排入排水管网许可证核发（新办）",
+    "sxType": "1",
+    "departmentId": "water-affairs",
+    "departmentName": "水务局",
+    "departmentOrder": 1,
+    "matterOrder": 1,
+    "supportsDoublePublicityEnrichment": true
+  },
+  {
+    "id": "drainage-permit-change-renewal",
+    "name": "污水排入排水管网许可证核发（变更或延续）",
+    "sxType": "1",
+    "departmentId": "water-affairs",
+    "departmentName": "水务局",
+    "departmentOrder": 1,
+    "matterOrder": 2,
+    "supportsDoublePublicityEnrichment": true
+  },
+  {
+    "id": "construction-waste-discharge",
+    "name": "城市建筑垃圾处置（排放）核准",
+    "sxType": "1",
+    "departmentId": "water-affairs",
+    "departmentName": "水务局",
+    "departmentOrder": 1,
+    "matterOrder": 3,
+    "supportsDoublePublicityEnrichment": true
+  },
+  {
+    "id": "river-construction-plan",
+    "name": "河道管理范围内建设项目工程建设方案审批",
+    "sxType": "1",
+    "departmentId": "water-affairs",
+    "departmentName": "水务局",
+    "departmentOrder": 1,
+    "matterOrder": 4,
+    "supportsDoublePublicityEnrichment": true
+  },
+  {
+    "id": "drainage-facility-relocation",
+    "name": "迁移、移动城镇排水与污水处理设施方案审核",
+    "sxType": "1",
+    "departmentId": "water-affairs",
+    "departmentName": "水务局",
+    "departmentOrder": 1,
+    "matterOrder": 5,
+    "supportsDoublePublicityEnrichment": true
+  },
+  {
+    "id": "soil-water-conservation-enterprise",
+    "name": "生产建设项目水土保持方案审批（企业投资类）",
+    "sxType": "1",
+    "departmentId": "water-affairs",
+    "departmentName": "水务局",
+    "departmentOrder": 1,
+    "matterOrder": 6,
+    "supportsDoublePublicityEnrichment": true
+  },
+  {
+    "id": "soil-water-conservation-other",
+    "name": "生产建设项目水土保持方案审批（政府投资、非盈利组织投资和个人投资类）",
+    "sxType": "1",
+    "departmentId": "water-affairs",
+    "departmentName": "水务局",
+    "departmentOrder": 1,
+    "matterOrder": 7,
+    "supportsDoublePublicityEnrichment": true
+  },
+  {
+    "id": "public-water-facility-alteration",
+    "name": "因工程建设确需改装、拆除或者迁移城市公共供水设施审批",
+    "sxType": "1",
+    "departmentId": "water-affairs",
+    "departmentName": "水务局",
+    "departmentOrder": 1,
+    "matterOrder": 8,
+    "supportsDoublePublicityEnrichment": true
+  },
+  {
+    "id": "urban-green-space-occupation",
+    "name": "占用城市绿地审批",
+    "sxType": "13",
+    "departmentId": "urban-management",
+    "departmentName": "城管局",
+    "departmentOrder": 2,
+    "matterOrder": 1,
+    "supportsDoublePublicityEnrichment": true
+  },
+  {
+    "id": "tree-felling-relocation",
+    "name": "砍伐、迁移城市树木",
+    "sxType": "13",
+    "departmentId": "urban-management",
+    "departmentName": "城管局",
+    "departmentOrder": 2,
+    "matterOrder": 2,
+    "supportsDoublePublicityEnrichment": true
+  },
+  {
+    "id": "teacher-qualification",
+    "name": "初中、小学、幼儿园教师资格认定",
+    "sxType": "8",
+    "departmentId": "other",
+    "departmentName": "其他",
+    "departmentOrder": 3,
+    "matterOrder": 1,
+    "supportsDoublePublicityEnrichment": false
+  },
+  {
+    "id": "disabled-child-rehabilitation-subsidy",
+    "name": "残疾儿童康复救助服务补贴",
+    "sxType": "9",
+    "departmentId": "other",
+    "departmentName": "其他",
+    "departmentOrder": 3,
+    "matterOrder": 2,
+    "supportsDoublePublicityEnrichment": false
+  },
+  {
+    "id": "commercial-performance-change",
+    "name": "国内营业性演出变更演出时间、场地、演员、节目审批",
+    "sxType": "10",
+    "departmentId": "other",
+    "departmentName": "其他",
+    "departmentOrder": 3,
+    "matterOrder": 3,
+    "supportsDoublePublicityEnrichment": false,
+    "supportsCertificateEnrichment": true
+  },
+  {
+    "id": "housing-lease-registration",
+    "name": "房屋租赁合同备案登记",
+    "sxType": "11",
+    "departmentId": "other",
+    "departmentName": "其他",
+    "departmentOrder": 3,
+    "matterOrder": 4,
+    "supportsDoublePublicityEnrichment": false
+  },
+  {
+    "id": "hazardous-chemicals-license-new",
+    "name": "危险化学品经营许可证核发（新领）",
+    "sxType": "12",
+    "departmentId": "other",
+    "departmentName": "其他",
+    "departmentOrder": 3,
+    "matterOrder": 5,
+    "supportsDoublePublicityEnrichment": false,
+    "supportsCertificateEnrichment": true
+  },
+  {
+    "id": "hazardous-chemicals-license-renewal",
+    "name": "危险化学品经营许可证核发（延期）",
+    "sxType": "12",
+    "departmentId": "other",
+    "departmentName": "其他",
+    "departmentOrder": 3,
+    "matterOrder": 6,
+    "supportsDoublePublicityEnrichment": false,
+    "supportsCertificateEnrichment": true
+  },
+  {
+    "id": "precursor-chemicals-filing-new",
+    "name": "第三类非药品类易制毒化学品经营备案（新申请）",
+    "sxType": "12",
+    "departmentId": "other",
+    "departmentName": "其他",
+    "departmentOrder": 3,
+    "matterOrder": 7,
+    "supportsDoublePublicityEnrichment": false,
+    "supportsCertificateEnrichment": true
+  },
+  {
+    "id": "precursor-chemicals-filing-cancellation",
+    "name": "注销第三类非药品类易制毒化学品经营备案",
+    "sxType": "12",
+    "departmentId": "other",
+    "departmentName": "其他",
+    "departmentOrder": 3,
+    "matterOrder": 8,
+    "supportsDoublePublicityEnrichment": false,
+    "supportsCertificateEnrichment": true
+  }
+]

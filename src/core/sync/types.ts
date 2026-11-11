@@ -21,6 +21,7 @@ export interface LocalSyncEngine {
     matterId: string,
     uniqueKey: string[],
     rows: T[],
+    mergeRecord?: (incoming: T, previous: T) => T,
   ): Promise<SyncSummary<T>>;
 
   commit<T extends Record<string, unknown>>(

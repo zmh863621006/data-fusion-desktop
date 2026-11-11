@@ -16,6 +16,8 @@ export interface ExportResult {
   path: string;
   rowCount: number;
   createdAt: number;
+  warningCount?: number;
+  missingRequiredCount?: number;
 }
 
 export interface ExportService {

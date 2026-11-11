@@ -72,3 +72,38 @@ CREATE TABLE IF NOT EXISTS app_settings (
   value_json TEXT NOT NULL,
   updated_at INTEGER NOT NULL
 );
+
+CREATE TABLE IF NOT EXISTS runtime_tasks (
+  id TEXT PRIMARY KEY,
+  type TEXT NOT NULL,
+  name TEXT NOT NULL,
+  system_id TEXT,
+  matter_id TEXT,
+  status TEXT NOT NULL,
+  progress_json TEXT NOT NULL,
+  created_at INTEGER NOT NULL,
+  started_at INTEGER,
+  finished_at INTEGER,
+  error_message TEXT,
+  metadata_json TEXT
+);
+
+CREATE INDEX IF NOT EXISTS idx_runtime_tasks_created_at
+  ON runtime_tasks(created_at DESC);
+
+CREATE INDEX IF NOT EXISTS idx_runtime_tasks_success_snapshot
+  ON runtime_tasks(system_id, matter_id, type, status, finished_at DESC, created_at DESC);
+
+CREATE TABLE IF NOT EXISTS task_output_rows (
+  task_id TEXT NOT NULL,
+  row_no INTEGER NOT NULL,
+  system_id TEXT NOT NULL,
+  matter_id TEXT NOT NULL,
+  record_key TEXT NOT NULL,
+  data_json TEXT NOT NULL,
+  PRIMARY KEY(task_id, row_no),
+  FOREIGN KEY(task_id) REFERENCES runtime_tasks(id) ON DELETE CASCADE
+);
+
+CREATE INDEX IF NOT EXISTS idx_task_output_rows_task
+  ON task_output_rows(task_id, row_no);

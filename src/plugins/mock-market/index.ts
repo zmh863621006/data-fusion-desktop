@@ -82,6 +82,7 @@ export const mockMarketPlugin: BusinessSystemPlugin = {
   version: '0.1.0',
   description: '用于搭建和验证系统插件框架，不连接真实业务系统。',
   auth,
+  loginPage: { url: 'https://example.invalid/', partition: 'persist:mock-market', allowedOrigin: 'https://example.invalid' },
   matters: [establishmentMatter],
   async initialize() {},
   async getSessionState() {

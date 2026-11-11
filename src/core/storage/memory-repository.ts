@@ -27,4 +27,20 @@ export class MemoryLocalRepository implements LocalRepository {
     return [...(this.versions.get(this.key(systemId, matterId, recordKey)) ?? [])]
       .sort((a, b) => b.capturedAt - a.capturedAt);
   }
+
+  async transaction<T>(work: () => Promise<T>): Promise<T> {
+    const recordsBefore = new Map(this.records);
+    const versionsBefore = new Map(
+      [...this.versions.entries()].map(([key, versions]) => [key, [...versions]]),
+    );
+    try {
+      return await work();
+    } catch (error) {
+      this.records.clear();
+      recordsBefore.forEach((value, key) => this.records.set(key, value));
+      this.versions.clear();
+      versionsBefore.forEach((value, key) => this.versions.set(key, value));
+      throw error;
+    }
+  }
 }

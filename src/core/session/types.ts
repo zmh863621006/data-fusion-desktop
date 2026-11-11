@@ -2,6 +2,7 @@ export type SessionStatus =
   | 'logged-out'
   | 'logging-in'
   | 'authenticated'
+  | 'unverified'
   | 'expiring'
   | 'expired';
 
@@ -10,6 +11,15 @@ export interface SessionState {
   systemId: string;
   expiresAt?: number;
   displayName?: string;
+  message?: string;
+}
+
+/** Main-process only. Never include these hooks or snapshots in IPC metadata. */
+export interface SessionRecovery {
+  snapshot(): Promise<Record<string, unknown> | null> | Record<string, unknown> | null;
+  restore(value: Record<string, unknown>): Promise<void> | void;
+  validate(signal: AbortSignal): Promise<{ displayName?: string }>;
+  homeUrl(): string;
 }
 
 /**

@@ -1,0 +1,23 @@
+[Unit]
+Description=Data Fusion administration API
+After=network.target
+
+[Service]
+Type=simple
+User=data-fusion
+Group=data-fusion
+WorkingDirectory=/opt/data-fusion
+EnvironmentFile=/etc/data-fusion/admin.env
+ExecStart=/usr/bin/node /opt/data-fusion/admin-server/server.mjs
+Restart=on-failure
+RestartSec=5
+TimeoutStopSec=20
+UMask=0077
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectHome=true
+ProtectSystem=strict
+ReadWritePaths=/var/lib/data-fusion
+
+[Install]
+WantedBy=multi-user.target

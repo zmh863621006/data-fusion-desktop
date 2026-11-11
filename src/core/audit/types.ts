@@ -7,8 +7,9 @@ export type AuditEventType =
   | 'query.failed'
   | 'sync.previewed'
   | 'sync.committed'
+  | 'record.updated'
   | 'export.created'
-  | 'plugin.updated';
+  | 'update.checked';
 
 export interface AuditEvent {
   id: string;

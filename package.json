@@ -1,27 +1,77 @@
 {
   "name": "data-fusion-desktop",
-  "version": "0.1.0",
+  "version": "1.0.23",
+  "productName": "数据融合助手",
+  "author": "数据融合助手",
+  "license": "UNLICENSED",
   "private": true,
   "description": "本地数据融合桌面工具",
   "main": "out/main/index.js",
   "scripts": {
+    "postinstall": "node node_modules/electron/install.js",
     "dev": "electron-vite dev",
     "build": "electron-vite build",
+    "build:win7": "electron-vite build --config electron.vite.win7.config.ts",
+    "package:universal": "node scripts/build-universal-installer.mjs",
+    "icons": "node scripts/create-app-icons.mjs",
+    "package:win": "npm run icons && node scripts/build-windows-update-host.mjs && node scripts/build-export-preserver.mjs && npm run build && electron-builder --config electron-builder.cjs --win --x64",
+    "package:win:dir": "npm run icons && node scripts/build-windows-update-host.mjs && node scripts/build-export-preserver.mjs && npm run build && electron-builder --config electron-builder.cjs --win --x64 --dir",
+    "package:linux:x64": "npm run icons && npm run build && electron-builder --config electron-builder.linux.cjs --linux --x64",
+    "package:linux:arm64": "npm run icons && npm run build && electron-builder --config electron-builder.linux.cjs --linux --arm64",
+    "test:release": "node scripts/verify-release-package.mjs",
+    "test:export-preservation": "node scripts/build-export-preserver.mjs && node scripts/verify-export-upgrade-preservation.mjs",
+    "test:nsis-preservation": "node scripts/verify-nsis-export-preservation.mjs",
+    "test:prerequisites": "node scripts/verify-nsis-prerequisites.mjs",
+    "test:installer": "node scripts/verify-nsis-export-preservation.mjs && node scripts/verify-nsis-system-graphics.mjs && node scripts/verify-packaged-export-preserver.mjs",
     "preview": "electron-vite preview",
-    "typecheck": "tsc --noEmit -p tsconfig.json"
+    "typecheck": "tsc --noEmit -p tsconfig.json",
+    "test": "vitest run",
+    "test:oversize-v3": "esbuild scripts/smoke-oversize-v3.ts --bundle --platform=node --format=cjs --external:electron --outfile=.tmp/smoke-oversize-v3.cjs && node scripts/run-ui-smoke.mjs oversize",
+    "test:government-menu": "npm run build && esbuild scripts/smoke-government-menu.ts --bundle --platform=node --format=cjs --external:electron --loader:.sql=text --outfile=.tmp/smoke-government-menu.cjs && electron .tmp/smoke-government-menu.cjs",
+    "test:health-tool": "npm run build && esbuild scripts/smoke-health-tool.ts --bundle --platform=node --format=cjs --external:electron --loader:.sql=text --outfile=.tmp/smoke-health-tool.cjs && electron .tmp/smoke-health-tool.cjs",
+    "test:session-recovery": "esbuild scripts/smoke-session-recovery.ts --bundle --platform=node --format=cjs --external:electron --outfile=.tmp/smoke-session-recovery.cjs && node scripts/run-session-recovery-smoke.mjs",
+    "test:source-tabs": "npm run build && esbuild scripts/fixtures/source-tabs-preload.ts --bundle --platform=node --format=cjs --external:electron --outfile=.tmp/source-tabs-preload.cjs && esbuild scripts/smoke-source-tabs.ts --bundle --platform=node --format=cjs --external:electron --outfile=.tmp/smoke-source-tabs.cjs && electron .tmp/smoke-source-tabs.cjs",
+    "test:ui:desktop": "npm run build && esbuild scripts/fixtures/ui-redesign-preload.ts --bundle --platform=node --format=cjs --external:electron --outfile=.tmp/ui-redesign-preload.cjs && esbuild scripts/smoke-ui-redesign.ts --bundle --platform=node --format=cjs --external:electron --outfile=.tmp/smoke-ui-redesign.cjs && node scripts/run-ui-smoke.mjs desktop",
+    "test:ui:admin": "npm run admin:web:build && esbuild scripts/smoke-admin-ui-redesign.ts --bundle --platform=node --format=cjs --external:electron --outfile=.tmp/smoke-admin-ui-redesign.cjs && node scripts/run-ui-smoke.mjs admin",
+    "test:hrss": "npm run build && esbuild scripts/fixtures/ui-redesign-preload.ts --bundle --platform=node --format=cjs --external:electron --outfile=.tmp/ui-redesign-preload.cjs && esbuild scripts/smoke-hrss.ts --bundle --platform=node --format=cjs --external:electron --outfile=.tmp/smoke-hrss.cjs && node scripts/run-ui-smoke.mjs hrss",
+    "test:hrss:login": "esbuild scripts/smoke-hrss-certificate.ts --bundle --platform=node --format=cjs --external:electron --outfile=.tmp/smoke-hrss-certificate.cjs && node scripts/run-ui-smoke.mjs hrss-certificate",
+    "test:ui": "npm run test:ui:desktop && npm run test:ui:admin",
+    "keys:generate": "node scripts/generate-signing-keys.mjs",
+    "license:issue": "node scripts/issue-license.mjs",
+    "admin:start": "node --env-file-if-exists=admin-server/.env admin-server/server.mjs",
+    "admin:backup": "node --env-file-if-exists=admin-server/.env admin-server/backup.mjs",
+    "test:admin": "node --test admin-server/tests/*.integration.mjs",
+    "admin:web:dev": "npm --prefix admin-server/web run dev",
+    "admin:web:build": "npm --prefix admin-server/web run build",
+    "practitioner:smoke": "esbuild scripts/smoke-practitioner.ts --bundle --platform=node --format=esm --loader:.sql=text --outfile=.tmp/smoke-practitioner.mjs && node .tmp/smoke-practitioner.mjs"
   },
   "dependencies": {
-    "react": "latest",
-    "react-dom": "latest"
+    "cheerio": "^1.1.2",
+    "exceljs": "4.4.0",
+    "jszip": "^3.10.1",
+    "react": "19.3.0",
+    "react-dom": "19.3.0"
+  },
+  "overrides": {
+    "exceljs": {
+      "uuid": "11.1.1"
+    }
   },
   "devDependencies": {
-    "@types/node": "latest",
-    "@types/react": "latest",
-    "@types/react-dom": "latest",
-    "@vitejs/plugin-react": "latest",
-    "electron": "latest",
-    "electron-vite": "latest",
-    "typescript": "latest",
-    "vite": "latest"
+    "@resvg/resvg-js": "2.6.2",
+    "@types/node": "24.13.4",
+    "@types/react": "19.3.0",
+    "@types/react-dom": "19.3.0",
+    "@vitejs/plugin-react": "5.2.0",
+    "electron": "44.3.0",
+    "electron-builder": "26.15.3",
+    "electron-vite": "5.0.0",
+    "esbuild": "^0.25.12",
+    "typescript": "5.9.3",
+    "vite": "7.3.6",
+    "vitest": "5.0.0"
+  },
+  "engines": {
+    "node": ">=22.12.0"
   }
 }

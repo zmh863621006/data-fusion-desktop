@@ -1,0 +1,20 @@
+[
+  {"id":"unemployment","name":"失业信息","departmentId":"employment","departmentName":"就业服务","departmentOrder":1,"matterOrder":1},
+  {"id":"employment-difficulty-recognition","name":"就业困难人员认定","departmentId":"employment","departmentName":"就业服务","departmentOrder":1,"matterOrder":2},
+  {"id":"self-employment-identity","name":"自主创业人员身份核实","departmentId":"employment","departmentName":"就业服务","departmentOrder":1,"matterOrder":3},
+  {"id":"poverty-alleviation-personnel","name":"脱贫人员","departmentId":"employment","departmentName":"就业服务","departmentOrder":1,"matterOrder":4},
+  {"id":"job-seeking-startup-subsidy","name":"求职创业补贴","departmentId":"subsidies","departmentName":"就业创业补贴","departmentOrder":2,"matterOrder":1},
+  {"id":"graduate-flexible-employment-subsidy","name":"高校毕业生灵活就业社保补贴","departmentId":"subsidies","departmentName":"就业创业补贴","departmentOrder":2,"matterOrder":2},
+  {"id":"difficult-flexible-employment-subsidy","name":"就业困难人员灵活就业社保补贴","departmentId":"subsidies","departmentName":"就业创业补贴","departmentOrder":2,"matterOrder":3},
+  {"id":"one-time-job-expansion-subsidy","name":"一次性扩岗补助","departmentId":"subsidies","departmentName":"就业创业补贴","departmentOrder":2,"matterOrder":4},
+  {"id":"one-time-startup-subsidy","name":"一次性创业补助","departmentId":"subsidies","departmentName":"就业创业补贴","departmentOrder":2,"matterOrder":5},
+  {"id":"startup-rent-subsidy","name":"场租补助","departmentId":"subsidies","departmentName":"就业创业补贴","departmentOrder":2,"matterOrder":6},
+  {"id":"startup-employment-subsidy","name":"创业带动就业补贴","departmentId":"subsidies","departmentName":"就业创业补贴","departmentOrder":2,"matterOrder":7},
+  {"id":"employment-internship-subsidy","name":"就业见习补贴","departmentId":"subsidies","departmentName":"就业创业补贴","departmentOrder":2,"matterOrder":8},
+  {"id":"greater-bay-youth-living-subsidy","name":"大湾区青年就业计划生活补助","departmentId":"subsidies","departmentName":"就业创业补贴","departmentOrder":2,"matterOrder":9},
+  {"id":"youth-internship-agreement","name":"青年见习协议备案","departmentId":"internships","departmentName":"青年就业见习","departmentOrder":3,"matterOrder":1},
+  {"id":"youth-internship-unit","name":"青年见习单位申报","departmentId":"internships","departmentName":"青年就业见习","departmentOrder":3,"matterOrder":2},
+  {"id":"graduate-tracking-service","name":"高校毕业生实名登记跟踪服务","departmentId":"tracking","departmentName":"重点群体跟踪服务","departmentOrder":4,"matterOrder":1},
+  {"id":"difficult-tracking-service","name":"就业困难人员跟踪服务","departmentId":"tracking","departmentName":"重点群体跟踪服务","departmentOrder":4,"matterOrder":2},
+  {"id":"unemployment-tracking-service","name":"失业人员跟踪服务","departmentId":"tracking","departmentName":"重点群体跟踪服务","departmentOrder":4,"matterOrder":3}
+]

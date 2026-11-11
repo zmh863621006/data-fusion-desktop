@@ -1,0 +1,29 @@
+.hrss-ledger { display: grid; gap: 20px; min-width: 0; }
+.hrss-ledger-head { display: flex; justify-content: space-between; align-items: center; gap: 24px; }
+.hrss-ledger-head h2 { margin: 6px 0 8px; font-size: 24px; letter-spacing: -.5px; }
+.hrss-ledger-head p { color: #6e6e73; margin: 0; line-height: 1.7; font-size: 13px; }
+.hrss-ledger-head button { display: inline-flex; align-items: center; gap: 8px; white-space: nowrap; }
+.hrss-ledger-filters { display: flex; align-items: end; gap: 12px; flex-wrap: wrap; }
+.hrss-ledger-filters label { display: grid; gap: 8px; font-size: 12px; color: #6e6e73; }
+.hrss-ledger-filters select { min-width: 240px; }
+.hrss-ledger-filters input { min-width: 240px; }
+.hrss-ledger-filters input,.hrss-ledger-filters select,.hrss-ledger-footer select { min-height: 44px; border: 1px solid #d9d9dd; border-radius: 10px; padding: 9px 12px; background: #fff; color: #1d1d1f; font: inherit; }
+.hrss-list-table { padding: 0; overflow: auto; max-height: 64vh; }
+.hrss-list-table table { width: 100%; border-collapse: collapse; font-size: 13px; }
+.hrss-list-table th { position: sticky; top: 0; background: #f5f5f7; z-index: 1; text-align: left; color: #6e6e73; font-weight: 500; white-space: nowrap; }
+.hrss-list-table th,.hrss-list-table td { padding: 15px 18px; border-bottom: 1px solid #eeeef0; min-width: 110px; white-space: nowrap; }
+.hrss-list-table th:first-child,.hrss-list-table td:first-child { min-width: 70px; }
+.hrss-list-table tbody tr:hover { background: #f8fbff; }
+.hrss-ledger-footer { display: flex; align-items: center; justify-content: space-between; color: #6e6e73; font-size: 13px; gap: 16px; flex-wrap: wrap; }
+.hrss-ledger-footer div { display: flex; gap: 12px; align-items: center; }
+.hrss-ledger-footer select { margin: 0 8px; }
+.hrss-ledger-footer label { display: inline-flex; align-items: center; white-space: nowrap; gap: 4px; }
+.hrss-ledger-footer label select { width: auto; min-width: 74px; }
+.hrss-ledger-preview { margin-top: 24px; }
+.hrss-ledger-preview .hrss-ledger-head h2 { font-size: 19px; }
+.hrss-date-condition { display: flex; align-items: baseline; gap: 10px 14px; flex-wrap: wrap; margin: 16px 0; padding: 13px 16px; border: 1px solid #dce8fa; border-radius: 10px; background: #f5f9ff; font-size: 13px; line-height: 1.7; color: #4c617e; }
+.hrss-date-condition strong { flex: 0 0 auto; font-weight: 600; color: #0065d4; }
+.hrss-date-condition.pending { border-color: #efdfbf; background: #fffaf0; color: #766244; }
+.hrss-date-condition.pending strong { color: #8a5c0a; }
+.hrss-ledger > .hrss-date-condition { margin: 0; }
+@media(max-width: 900px) { .hrss-ledger-head { align-items: flex-start; flex-wrap: wrap; }.hrss-ledger-filters input { min-width: 180px; }.hrss-ledger-footer div { flex-wrap: wrap; } }

@@ -1,5 +1,6 @@
 node_modules/
 out/
+out-win7/
 dist/
 release/
 *.log
@@ -12,4 +13,20 @@ Thumbs.db
 *.db-journal
 *.sqlite
 *.sqlite3
+admin-server/data/
 local-data/
+导出文件/
+private/
+*.pem
+.tmp/
+admin-server/public/
+admin-server/web/dist/
+resources/*.exe
+resources/win7-compat/*.exe
+*.pfx
+*.p12
+*.key
+*.har
+design/apple-style-preview-20261018/
+__pycache__/
+*.pyc

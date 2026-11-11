@@ -1,0 +1,42 @@
+{
+  "schema": 1,
+  "packages": [
+    {
+      "id": "SP1",
+      "name": "Windows 7 Service Pack 1 x64 (KB976932)",
+      "file": "windows6.1-KB976932-X64.exe",
+      "bytes": 947070088,
+      "sha1": "74865ef2562006e51d7f9333b4a8d45b7a749dab",
+      "sha256": "f4d1d418d91b1619688a482680ee032ffd2b65e420c6d2eaecf8aa3762aa64c8",
+      "url": "https://catalog.s.download.windowsupdate.com/msdownload/update/software/svpk/2011/02/windows6.1-kb976932-x64_74865ef2562006e51d7f9333b4a8d45b7a749dab.exe"
+    },
+    {
+      "id": "SSU",
+      "name": "Windows 7 x64 Servicing Stack Update (KB4490628)",
+      "file": "windows6.1-KB4490628-x64.msu",
+      "bytes": 9543846,
+      "sha1": "d3de52d6987f7c8bdc2c015dca69eac96047c76e",
+      "sha256": "8075f6d889bcb27be6f52ed47081675e5bb8a5390f2f5bfe4ec27a2bb70cbf5e",
+      "kind": "msu",
+      "url": "https://catalog.s.download.windowsupdate.com/c/msdownload/update/software/secu/2019/03/windows6.1-kb4490628-x64_d3de52d6987f7c8bdc2c015dca69eac96047c76e.msu"
+    },
+    {
+      "id": "SHA2",
+      "name": "Windows 7 x64 SHA-2 Support Update (KB4474419 v3)",
+      "file": "windows6.1-KB4474419-v3-x64.msu",
+      "bytes": 55853327,
+      "sha1": "b5614c6cea5cb4e198717789633dca16308ef79c",
+      "sha256": "99312df792b376f02e25607d2eb3355725c47d124d8da253193195515fe90213",
+      "kind": "msu",
+      "url": "https://catalog.s.download.windowsupdate.com/c/msdownload/update/software/secu/2019/09/windows6.1-kb4474419-v3-x64_b5614c6cea5cb4e198717789633dca16308ef79c.msu"
+    },
+    {
+      "id": "NET48",
+      "name": "Microsoft .NET Framework 4.8 Offline Installer",
+      "file": "ndp48-x86-x64-allos-enu.exe",
+      "bytes": 121307088,
+      "sha256": "68c9986a8dcc0214d909aa1f31bee9fb5461bb839edca996a75b08ddffc1483f",
+      "url": "https://download.visualstudio.microsoft.com/download/pr/2d6bb6b2-226a-4baa-bdec-798822606ff1/8494001c276a4b96804cde7829c04d7f/ndp48-x86-x64-allos-enu.exe"
+    }
+  ]
+}

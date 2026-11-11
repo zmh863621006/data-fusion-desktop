@@ -17,6 +17,20 @@
 11. [10-ui-screen-specification.md](./10-ui-screen-specification.md) — 全部桌面页面与交互规格
 12. [11-testing-release-and-quality.md](./11-testing-release-and-quality.md) — 测试、CI、发布、迁移与质量基线
 13. [12-security-threat-model.md](./12-security-threat-model.md) — 本地数据、业务会话、插件和更新安全模型
+14. [13-license-and-plugin-operations.md](./13-license-and-plugin-operations.md) — 在线/离线授权、后台部署与发行操作
+15. [14-government-query-export-comparison.md](./14-government-query-export-comparison.md) — 政务查询、导出及其他事项详情实测对比
+16. [15-government-certificate-enrichment.md](./15-government-certificate-enrichment.md) — 其他 5 项证照字段补充范围、接口依据及保护规则
+17. [16-browser-session-recovery.md](./16-browser-session-recovery.md) — 各系统跨重启会话保存、只读校验与首页标签页恢复
+18. [17-enterprise-management.md](./17-enterprise-management.md) — 企业资料共用、名称优先查询与信用代码兜底
+19. [18-admin-production.md](./18-admin-production.md) — 后台登录保护、权限、配套客户端升级及上线部署
+20. [19-windows-release.md](./19-windows-release.md) — Windows安装包、升级保全及正式分发验收
+21. [20-publication-platform-entries.md](./20-publication-platform-entries.md) — 政务回流数据的两处公示平台登录入口与标签页保留
+22. [21-government-completion-query.md](./21-government-completion-query.md) — 办结日期起止参数与排水许可新办固定内容规则
+23. [22-d3dcompiler-compatibility.md](./22-d3dcompiler-compatibility.md) — 官方图形编译组件版本替换与Windows系统加载对照验证
+24. [23-hrss-local-list-dashboard.md](./23-hrss-local-list-dashboard.md) — 人社18项列表台账、本地全屏看板、证书确认及本地测试交付
+25. [24-kylin-internal-build.md](./24-kylin-internal-build.md) — 麒麟 V10 内部测试打包与验证范围
+26. [25-windows-universal-compatibility.md](./25-windows-universal-compatibility.md) — Win7/Win10 自动选择运行环境的通用安装包与测试边界
+27. [26-windows-prerequisites-bootstrap.md](./26-windows-prerequisites-bootstrap.md) — 缺失系统组件自动补齐、管理员授权、重启续装与隔离回归
 
 ## 核心不可破坏原则
 

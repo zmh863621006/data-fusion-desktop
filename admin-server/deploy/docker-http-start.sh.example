@@ -1,0 +1,44 @@
+#!/bin/sh
+# Fresh deployment only. Existing containers/configuration must be reviewed first.
+set -eu
+if [ -z "${NODE_IMAGE:-}" ] && [ -r /etc/data-fusion/runtime-image.env ]; then
+    . /etc/data-fusion/runtime-image.env
+fi
+: "${NODE_IMAGE:?Set the verified admin runtime image ID (admin-runtime.Dockerfile)}"
+: "${NGINX_IMAGE:?Set a verified official Nginx image digest}"
+: "${RELEASE_DIR:?Set the absolute release directory}"
+test -f "$RELEASE_DIR/admin-server/server.mjs"
+test -f /etc/data-fusion/admin.env
+if docker inspect data-fusion-admin >/dev/null 2>&1 || docker inspect data-fusion-proxy >/dev/null 2>&1; then
+    echo 'Deployment containers already exist; inspect and back up before updating.' >&2
+    exit 1
+fi
+docker run --rm --network none --read-only --cap-drop ALL --security-opt no-new-privileges \
+    --user 18087:18087 "$NODE_IMAGE" sh -c \
+    'node --version >/dev/null && tar --version >/dev/null && xz --version >/dev/null'
+
+docker network inspect data-fusion-private >/dev/null 2>&1 || docker network create --subnet 172.31.248.0/28 data-fusion-private
+docker run -d --name data-fusion-admin --restart unless-stopped \
+    --network data-fusion-private --ip 172.31.248.2 \
+    --read-only --cap-drop ALL --security-opt no-new-privileges \
+    --user 18087:18087 --memory 512m --memory-swap 512m --cpus 1 --pids-limit 128 \
+    --tmpfs /tmp:rw,noexec,nosuid,size=16m \
+    --mount "type=bind,src=$RELEASE_DIR,dst=/app,readonly" \
+    --mount type=bind,src=/var/lib/data-fusion,dst=/data \
+    --mount type=bind,src=/etc/data-fusion/license-private.pem,dst=/run/secrets/license-private.pem,readonly \
+    --env-file /etc/data-fusion/admin.env --workdir /app \
+    --log-opt max-size=10m --log-opt max-file=3 \
+    --health-cmd 'node -e "fetch(\"http://127.0.0.1:8787/api/health\").then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"' \
+    --health-interval 30s --health-timeout 5s --health-retries 3 --health-start-period 15s \
+    "$NODE_IMAGE" node admin-server/server.mjs
+docker run -d --name data-fusion-proxy --restart unless-stopped \
+    --network data-fusion-private --ip 172.31.248.3 -p 9087:9087 \
+    --read-only --cap-drop ALL --security-opt no-new-privileges \
+    --user 101:101 --memory 96m --memory-swap 96m --cpus 0.5 --pids-limit 64 \
+    --tmpfs /tmp:rw,noexec,nosuid,size=16m \
+    --mount type=bind,src=/etc/data-fusion/nginx.conf,dst=/etc/nginx/nginx.conf,readonly \
+    --mount type=bind,src=/etc/data-fusion/management-allow.conf,dst=/etc/nginx/management-allow.conf,readonly \
+    --log-opt max-size=10m --log-opt max-file=3 \
+    --health-cmd 'curl -fsS -o /dev/null http://127.0.0.1:9087/api/health' \
+    --health-interval 30s --health-timeout 5s --health-retries 3 --health-start-period 15s \
+    --entrypoint nginx "$NGINX_IMAGE" -g 'daemon off;'

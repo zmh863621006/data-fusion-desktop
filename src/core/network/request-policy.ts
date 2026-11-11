@@ -15,12 +15,26 @@ export const DEFAULT_REQUEST_POLICY: RequestPolicy = {
 };
 
 const sleep = (ms: number, signal?: AbortSignal) => new Promise<void>((resolve, reject) => {
-  const timer = setTimeout(resolve, ms);
-  signal?.addEventListener('abort', () => {
+  const onAbort = () => {
     clearTimeout(timer);
     reject(new AppError('TASK_CANCELLED', '任务已取消'));
-  }, { once: true });
+  };
+  const timer = setTimeout(() => {
+    signal?.removeEventListener('abort', onAbort);
+    resolve();
+  }, ms);
+  signal?.addEventListener('abort', onAbort, { once: true });
 });
+
+const NON_RETRYABLE_CODES = new Set([
+  'LICENSE_INVALID',
+  'LICENSE_EXPIRED',
+  'SYSTEM_NOT_FOUND',
+  'SYSTEM_LOGIN_REQUIRED',
+  'SESSION_EXPIRED',
+  'QUERY_INVALID',
+  'TASK_CANCELLED',
+]);
 
 export class RequestGate {
   private lastStartedAt = 0;
@@ -43,14 +57,29 @@ export class RequestGate {
       try {
         return await operation(timeout.signal);
       } catch (error) {
-        lastError = error;
+        lastError = timeout.signal.aborted
+          ? new AppError('REMOTE_TIMEOUT', '远程系统请求超时')
+          : error;
         if (outerSignal?.aborted) throw new AppError('TASK_CANCELLED', '任务已取消');
+        if (
+          error instanceof AppError
+          && (NON_RETRYABLE_CODES.has(error.code) || error.details?.retryable === false)
+        ) throw error;
         if (attempt < this.policy.maxAttempts) await sleep(this.policy.retryDelayMs * attempt, outerSignal);
       } finally {
         clearTimeout(timer);
         outerSignal?.removeEventListener('abort', onAbort);
       }
     }
-    throw new AppError('REMOTE_REQUEST_FAILED', '远程系统请求失败', { attempts: this.policy.maxAttempts }, { cause: lastError });
+    if (lastError instanceof AppError) throw lastError;
+    const reason = lastError instanceof Error && lastError.message.trim()
+      ? `：${lastError.message.trim()}`
+      : '';
+    throw new AppError(
+      'REMOTE_REQUEST_FAILED',
+      `远程系统请求失败${reason}`,
+      { attempts: this.policy.maxAttempts },
+      { cause: lastError },
+    );
   }
 }

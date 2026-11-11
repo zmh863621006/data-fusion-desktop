@@ -20,5 +20,7 @@ export interface LocalRepository {
   find(systemId: string, matterId: string, recordKey: string): Promise<StoredRecord | null>;
   upsert(record: StoredRecord): Promise<void>;
   appendVersion(version: RecordVersion): Promise<void>;
-  listVersions?(systemId: string, matterId: string, recordKey: string): Promise<RecordVersion[]>;
+  listVersions(systemId: string, matterId: string, recordKey: string): Promise<RecordVersion[]>;
+  transaction<T>(work: () => Promise<T>): Promise<T>;
+  close?(): Promise<void>;
 }

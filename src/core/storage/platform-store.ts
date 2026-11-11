@@ -1,0 +1,255 @@
+import type { AuditEvent, AuditLog } from '../audit/types';
+import { DEFAULT_APP_SETTINGS, type AppSettings, type SettingsStore } from '../settings/types';
+import type { RuntimeTask, TaskStore } from '../tasks/engine';
+import type { DatabaseDriver } from './database';
+import type { StoredRecord } from './types';
+
+interface TaskRow {
+  id: string; type: string; name: string; system_id?: string; matter_id?: string; status: RuntimeTask['status'];
+  progress_json: string; created_at: number; started_at?: number; finished_at?: number; error_message?: string;
+  metadata_json?: string;
+}
+
+interface RecordRow {
+  system_id: string; matter_id: string; record_key: string; data_json: string; first_seen_at: number; updated_at: number;
+}
+
+export interface LocalRecordQuery {
+  systemId?: string;
+  matterId?: string;
+  keyword?: string;
+  page?: number;
+  pageSize?: number;
+  /** Added by the runtime, never accepted from IPC input. */
+  accessScopes?: Array<{ systemId: string; matterIds?: string[] }>;
+}
+
+export interface TaskOutputRow {
+  rowNo: number;
+  systemId: string;
+  matterId: string;
+  recordKey: string;
+  data: Record<string, unknown>;
+}
+
+export class SqlitePlatformStore implements TaskStore, AuditLog, SettingsStore {
+  constructor(private readonly database: DatabaseDriver) {}
+
+  async initialize(): Promise<void> {
+    const columns = await this.database.all<{ name: string }>('PRAGMA table_info(runtime_tasks)');
+    if (!columns.some((column) => column.name === 'metadata_json')) {
+      await this.database.exec('ALTER TABLE runtime_tasks ADD COLUMN metadata_json TEXT');
+    }
+  }
+
+  async recoverInterruptedTasks(): Promise<void> {
+    await this.database.run(
+      `UPDATE runtime_tasks SET status='failed', finished_at=?, error_message='应用上次退出时任务尚未完成'
+       WHERE status IN ('queued','running')`,
+      [Date.now()],
+    );
+  }
+
+  async save(task: RuntimeTask): Promise<void> {
+    await this.database.run(
+      `INSERT INTO runtime_tasks(id,type,name,system_id,matter_id,status,progress_json,created_at,started_at,finished_at,error_message,metadata_json)
+       VALUES(?,?,?,?,?,?,?,?,?,?,?,?) ON CONFLICT(id) DO UPDATE SET
+       status=excluded.status,progress_json=excluded.progress_json,started_at=excluded.started_at,
+       finished_at=excluded.finished_at,error_message=excluded.error_message,metadata_json=excluded.metadata_json`,
+      [task.id, task.type, task.name, task.systemId, task.matterId, task.status, JSON.stringify(task.progress),
+        task.createdAt, task.startedAt, task.finishedAt, task.error, task.details ? JSON.stringify(task.details) : undefined],
+    );
+  }
+
+  async listTasks(limit = 100): Promise<RuntimeTask[]> {
+    const rows = await this.database.all<TaskRow>('SELECT * FROM runtime_tasks ORDER BY created_at DESC LIMIT ?', [limit]);
+    return rows.map((row) => ({
+      id: row.id, type: row.type, name: row.name, systemId: row.system_id, matterId: row.matter_id,
+      status: row.status, progress: JSON.parse(row.progress_json), createdAt: row.created_at,
+      startedAt: row.started_at, finishedAt: row.finished_at, error: row.error_message,
+      details: row.metadata_json ? JSON.parse(row.metadata_json) : undefined,
+    }));
+  }
+
+  /** One completed snapshot per authorized ledger, including successful empty batches. */
+  async successfulSnapshots(systemId: string, matterIds: string[]): Promise<{ records: StoredRecord[]; tasks: RuntimeTask[] }> {
+    const records: StoredRecord[] = [];
+    const tasks: RuntimeTask[] = [];
+    for (const matterId of [...new Set(matterIds)]) {
+      const latest = await this.database.all<TaskRow>(
+        `SELECT * FROM runtime_tasks WHERE system_id=? AND matter_id=? AND type='data-return'
+         AND (id=(SELECT id FROM runtime_tasks WHERE system_id=? AND matter_id=? AND type='data-return' AND status='completed' ORDER BY finished_at DESC,created_at DESC,rowid DESC LIMIT 1)
+           OR id=(SELECT id FROM runtime_tasks WHERE system_id=? AND matter_id=? AND type='data-return' ORDER BY created_at DESC,rowid DESC LIMIT 1))`,
+        [systemId, matterId, systemId, matterId, systemId, matterId]);
+      for (const row of latest) {
+        tasks.push({ id: row.id, type: row.type, name: row.name, systemId, matterId, status: row.status,
+          progress: JSON.parse(row.progress_json), createdAt: row.created_at, finishedAt: row.finished_at,
+          details: row.metadata_json ? JSON.parse(row.metadata_json) : undefined });
+        if (row.status !== 'completed') continue;
+        const rows = await this.database.all<{ record_key: string; data_json: string }>(
+          'SELECT record_key,data_json FROM task_output_rows WHERE task_id=? AND system_id=? AND matter_id=? ORDER BY row_no',
+          [row.id, systemId, matterId]);
+        records.push(...rows.map(record => ({ systemId, matterId, recordKey: record.record_key, data: JSON.parse(record.data_json),
+          firstSeenAt: row.created_at, updatedAt: row.finished_at ?? row.created_at })));
+      }
+    }
+    return { records, tasks };
+  }
+
+  async transaction<T>(work: () => Promise<T>): Promise<T> { return this.database.transaction(work); }
+
+  async append(event: AuditEvent): Promise<void> {
+    await this.database.run(
+      'INSERT INTO audit_events(id,event_type,system_id,matter_id,task_id,metadata_json,created_at) VALUES(?,?,?,?,?,?,?)',
+      [event.id, event.type, event.systemId, event.matterId, event.taskId, event.metadata ? JSON.stringify(event.metadata) : undefined, event.createdAt],
+    );
+  }
+
+  async list(limit = 100): Promise<AuditEvent[]> {
+    const rows = await this.database.all<Record<string, unknown>>('SELECT * FROM audit_events ORDER BY created_at DESC LIMIT ?', [limit]);
+    return rows.map((row) => ({
+      id: String(row.id), type: row.event_type as AuditEvent['type'], systemId: row.system_id as string | undefined,
+      matterId: row.matter_id as string | undefined, taskId: row.task_id as string | undefined,
+      metadata: row.metadata_json ? JSON.parse(String(row.metadata_json)) : undefined, createdAt: Number(row.created_at),
+    }));
+  }
+
+  async get(): Promise<AppSettings> {
+    const row = await this.database.get<{ value_json: string }>('SELECT value_json FROM app_settings WHERE key = ?', ['global']);
+    return row ? { ...DEFAULT_APP_SETTINGS, ...JSON.parse(row.value_json) } : DEFAULT_APP_SETTINGS;
+  }
+
+  async update(patch: Partial<AppSettings>): Promise<AppSettings> {
+    const value = { ...await this.get(), ...patch, locale: 'zh-CN' as const };
+    if (value.defaultPageSize < 10 || value.defaultPageSize > 500) throw new Error('默认分页数量应为 10 至 500');
+    if (value.taskConcurrency < 1 || value.taskConcurrency > 10) throw new Error('任务并发数应为 1 至 10');
+    await this.database.run(
+      `INSERT INTO app_settings(key,value_json,updated_at) VALUES('global',?,?)
+       ON CONFLICT(key) DO UPDATE SET value_json=excluded.value_json,updated_at=excluded.updated_at`,
+      [JSON.stringify(value), Date.now()],
+    );
+    return value;
+  }
+
+  async listRecords(query: LocalRecordQuery): Promise<{ rows: StoredRecord[]; total: number }> {
+    const where: string[] = [];
+    const params: unknown[] = [];
+    if (query.accessScopes) {
+      const scopes = query.accessScopes.filter(scope => !scope.matterIds || scope.matterIds.length).map(scope => {
+        params.push(scope.systemId);
+        if (!scope.matterIds) return '(system_id=?)';
+        params.push(...scope.matterIds);
+        return `(system_id=? AND matter_id IN (${scope.matterIds.map(() => '?').join(',')}))`;
+      });
+      where.push(scopes.length ? `(${scopes.join(' OR ')})` : '0');
+    }
+    if (query.systemId) { where.push('system_id = ?'); params.push(query.systemId); }
+    if (query.matterId) { where.push('matter_id = ?'); params.push(query.matterId); }
+    if (query.keyword) { where.push('(record_key LIKE ? OR data_json LIKE ?)'); params.push(`%${query.keyword}%`, `%${query.keyword}%`); }
+    const clause = where.length ? `WHERE ${where.join(' AND ')}` : '';
+    const total = await this.database.get<{ count: number }>(`SELECT COUNT(*) AS count FROM local_records ${clause}`, params);
+    const pageSize = Math.min(200, Math.max(10, query.pageSize ?? 50));
+    const page = Math.max(1, query.page ?? 1);
+    const rows = await this.database.all<RecordRow>(
+      `SELECT * FROM local_records ${clause} ORDER BY COALESCE(json_extract(data_json, '$.xkJdrq'), '') DESC, COALESCE(json_extract(data_json, '$.xkWsh'), '') DESC, updated_at DESC, system_id, matter_id, record_key LIMIT ? OFFSET ?`,
+      [...params, pageSize, (page - 1) * pageSize],
+    );
+    return {
+      total: total?.count ?? 0,
+      rows: rows.map((row) => ({ systemId: row.system_id, matterId: row.matter_id, recordKey: row.record_key,
+        data: JSON.parse(row.data_json), firstSeenAt: row.first_seen_at, updatedAt: row.updated_at })),
+    };
+  }
+
+  async updateRecord(systemId: string, matterId: string, oldRecordKey: string, newRecordKey: string, data: Record<string, unknown>): Promise<StoredRecord> {
+    const existing = await this.database.get<RecordRow>(
+      'SELECT * FROM local_records WHERE system_id=? AND matter_id=? AND record_key=?',
+      [systemId, matterId, oldRecordKey],
+    );
+    if (!existing) throw new Error('待修改的数据不存在或已经变更');
+    const now = Date.now();
+    try {
+      await this.database.transaction(async () => {
+        await this.database.run(
+          'UPDATE local_records SET record_key=?, data_json=?, updated_at=? WHERE system_id=? AND matter_id=? AND record_key=?',
+          [newRecordKey, JSON.stringify(data), now, systemId, matterId, oldRecordKey],
+        );
+        if (newRecordKey !== oldRecordKey) {
+          await this.database.run(
+            'UPDATE record_versions SET record_key=? WHERE system_id=? AND matter_id=? AND record_key=?',
+            [newRecordKey, systemId, matterId, oldRecordKey],
+          );
+        }
+        await this.database.run(
+          'INSERT INTO record_versions(system_id,matter_id,record_key,version_no,data_json,captured_at) VALUES(?,?,?,?,?,?)',
+          [systemId, matterId, newRecordKey, now, JSON.stringify(data), now],
+        );
+      });
+    } catch (error) {
+      if (error instanceof Error && error.message.includes('UNIQUE')) throw new Error('修改后的关键字段与已有数据重复');
+      throw error;
+    }
+    return { systemId, matterId, recordKey: newRecordKey, data, firstSeenAt: existing.first_seen_at, updatedAt: now };
+  }
+
+  async replaceTaskOutput(
+    taskId: string,
+    systemId: string,
+    matterId: string,
+    rows: Array<{ recordKey: string; data: Record<string, unknown> }>,
+  ): Promise<void> {
+    await this.database.transaction(async () => {
+      await this.database.run('DELETE FROM task_output_rows WHERE task_id = ?', [taskId]);
+      const uniqueRows = [...new Map(rows.map(row => [row.recordKey, row])).values()];
+      for (const [index, row] of uniqueRows.entries()) {
+        await this.database.run(
+          'INSERT INTO task_output_rows(task_id,row_no,system_id,matter_id,record_key,data_json) VALUES(?,?,?,?,?,?)',
+          [taskId, index + 1, systemId, matterId, row.recordKey, JSON.stringify(row.data)],
+        );
+      }
+    });
+  }
+
+  /** Compare-and-set prevents a delayed enterprise response from overwriting a user's newer edit. */
+  async applyEnterpriseEnrichment(systemId: string, matterId: string, recordKey: string, previous: Record<string, unknown>, next: Record<string, unknown>): Promise<void> {
+    const oldJson = JSON.stringify(previous), newJson = JSON.stringify(next);
+    if (oldJson === newJson) return;
+    await this.database.transaction(async () => {
+      const now = Date.now();
+      // Keep business ordering stable while paginating; enrichment has its own timestamp and version.
+      const updated = await this.database.run('UPDATE local_records SET data_json=? WHERE system_id=? AND matter_id=? AND record_key=? AND data_json=?',
+        [newJson, systemId, matterId, recordKey, oldJson]);
+      if (updated.changes) await this.database.run('INSERT INTO record_versions(system_id,matter_id,record_key,version_no,data_json,captured_at) VALUES(?,?,?,?,?,?)',
+        [systemId, matterId, recordKey, now, newJson, now]);
+      await this.database.run('UPDATE task_output_rows SET data_json=? WHERE system_id=? AND matter_id=? AND record_key=? AND data_json=?',
+        [newJson, systemId, matterId, recordKey, oldJson]);
+    });
+  }
+
+  async listTaskOutput(taskId: string, page = 1, pageSize = 100, keyword?: string): Promise<{ rows: TaskOutputRow[]; total: number }> {
+    const safePage = Math.max(1, page);
+    const safePageSize = Math.min(500, Math.max(10, pageSize));
+    const keywordClause = keyword ? ' AND (record_key LIKE ? OR data_json LIKE ?)' : '';
+    const keywordParams = keyword ? [`%${keyword}%`, `%${keyword}%`] : [];
+    const total = await this.database.get<{ count: number }>(
+      `SELECT COUNT(*) AS count FROM task_output_rows WHERE task_id = ?${keywordClause}`,
+      [taskId, ...keywordParams],
+    );
+    const rows = await this.database.all<{
+      row_no: number; system_id: string; matter_id: string; record_key: string; data_json: string;
+    }>(
+      `SELECT * FROM task_output_rows WHERE task_id = ?${keywordClause} ORDER BY row_no LIMIT ? OFFSET ?`,
+      [taskId, ...keywordParams, safePageSize, (safePage - 1) * safePageSize],
+    );
+    return {
+      total: total?.count ?? 0,
+      rows: rows.map((row) => ({
+        rowNo: row.row_no,
+        systemId: row.system_id,
+        matterId: row.matter_id,
+        recordKey: row.record_key,
+        data: JSON.parse(row.data_json),
+      })),
+    };
+  }
+}
