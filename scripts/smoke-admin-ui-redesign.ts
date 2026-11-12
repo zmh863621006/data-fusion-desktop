@@ -344,12 +344,13 @@ async function run() {
   assert.equal(await dom(`Boolean(document.querySelector('input[autocomplete="current-password"]'))`), true); checks++;
   assert.equal(await dom(`(() => { const form=document.querySelector('form');return form.getAttribute('action')==='/api/admin/login'&&form.getAttribute('method')==='post'&&form.autocomplete==='on'; })()`), true); checks++;
   assert.equal(await dom(`Boolean(document.querySelector('input[name="username"][autocomplete="username"]'))`), true); checks++;
-  assert.equal(await dom(`document.querySelector('.login-page').innerText.includes('账号密码可由浏览器保存并自动填充')`), true); checks++;
-  assert.equal(await dom(`Boolean(document.querySelector('.login-page input[type="checkbox"]')) || /7 天免输密码|记住登录/.test(document.querySelector('.login-page').innerText)`), false); checks++;
+  assert.equal(await dom(`document.querySelector('.login-page').innerText.includes('由当前浏览器保存和自动填入账号密码')`), true); checks++;
+  assert.equal(await dom(`document.querySelector('.login-remember input[type="checkbox"]').checked`), true); checks++;
+  assert.equal(await dom(`/7 天免输密码|记住登录/.test(document.querySelector('.login-page').innerText)`), false); checks++;
   for (const width of [1440, 1180, 600]) { main.setContentSize(width, 1000); await verifyBounds(`login-${width}`); await screenshot(`login-${width}`); }
   main.setContentSize(1440, 1000);
-  await setInput('input[name="username"]', 'fixture-admin');
-  await setInput('input[name="password"]', 'FixtureOnly!123');
+  // Browser password managers can fill DOM inputs without React input events.
+  await dom(`(() => {document.querySelector('input[name="username"]').value='fixture-admin';document.querySelector('input[name="password"]').value='FixtureOnly!123';})()`);
   await setInput('input[aria-label="图片验证码"]', 'A7B9C');
   await dom(`document.querySelector('form').requestSubmit()`);
   await until(() => dom(`Boolean(document.querySelector('.admin-content'))`), 'fixture login'); checks++;

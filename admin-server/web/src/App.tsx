@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState, type FormEvent } from 'react';
 import {
   App as AntApp, Button, Card, Col, Descriptions, Drawer, Form, Input, Popconfirm, Row,
   Alert, Result, Space, Spin, Statistic, Tag, Typography, TreeSelect,
@@ -14,6 +14,7 @@ import {
 } from '@ant-design/pro-components';
 import dayjs, { type Dayjs } from 'dayjs';
 import { adminApi, ApiError, loadAdminSession } from './api';
+import { offerBrowserPasswordSave } from './browser-password';
 import { SecurityPage } from './SecurityPage';
 import { EnterprisePage } from './EnterprisePage';
 import { LicenseScopeEditor } from './LicenseScopeEditor';
@@ -42,33 +43,55 @@ const contains = (value: unknown, query: unknown) => !query || String(value ?? '
 export function LoginPage({ onSuccess, initialError }: { onSuccess: (data: BootstrapData) => void; initialError?: ApiError }) {
   const { message } = AntApp.useApp();
   const [submitting, setSubmitting] = useState(false);
-  const [form] = Form.useForm<LoginValues>();
+  const formRef = useRef<HTMLFormElement>(null);
+  const [rememberPassword, setRememberPassword] = useState(true);
   const [captcha, setCaptcha] = useState<{id:string;image:string;expiresAt:number} | null>(null);
   const [refreshing, setRefreshing] = useState(false);
   const [errorText, setErrorText] = useState(initialError?.message ?? '');
   const [blockedUntil, setBlockedUntil] = useState(initialError?.retryAfterSeconds ? Date.now() + initialError.retryAfterSeconds * 1000 : 0);
   const [clock, setClock] = useState(Date.now());
   const seconds = Math.max(0, Math.ceil((blockedUntil - clock) / 1000));
+  const clearField = (name: 'password' | 'captcha') => {
+    const input = formRef.current?.elements.namedItem(name);
+    if (input instanceof HTMLInputElement) input.value = '';
+  };
   const refreshCaptcha = useCallback(async () => {
-    setRefreshing(true); setCaptcha(null); form.setFieldValue('captcha','');
+    setRefreshing(true); setCaptcha(null);
+    const input = formRef.current?.elements.namedItem('captcha');
+    if (input instanceof HTMLInputElement) input.value = '';
     try { setCaptcha(await adminApi.captcha()); }
     catch(error) { setErrorText(error instanceof Error ? error.message : '验证码加载失败，请重试'); }
     finally { setRefreshing(false); }
-  },[form]);
+  },[]);
   useEffect(() => { void refreshCaptcha(); },[refreshCaptcha]);
   useEffect(() => { if (!blockedUntil) return; const timer = window.setInterval(() => { const now=Date.now();setClock(now);if(now>=blockedUntil)setBlockedUntil(0); },1000); return () => window.clearInterval(timer); },[blockedUntil]);
-  const submit = async (values: LoginValues) => {
+  const submit = async (event: FormEvent<HTMLFormElement>) => {
+    event.preventDefault();
     if (!captcha || seconds || submitting) return;
+    // Read the actual DOM values: password managers can autofill without firing
+    // input/change events, so a React form store may still hold empty values.
+    const fields = new FormData(event.currentTarget);
+    const values: LoginValues = {
+      username: String(fields.get('username') ?? '').trim(),
+      password: String(fields.get('password') ?? ''),
+      captcha: String(fields.get('captcha') ?? '').trim(),
+    };
+    if (!values.username) { setErrorText('请输入管理员账号'); return; }
+    if (!values.password) { setErrorText('请输入密码'); return; }
+    if (!/^[a-zA-Z0-9]{5}$/.test(values.captcha)) { setErrorText('请输入图片中的 5 位验证码'); return; }
     if (captcha.expiresAt <= Date.now()) { setErrorText('验证码已过期，请输入新验证码'); await refreshCaptcha(); return; }
+    setErrorText('');
     setSubmitting(true);
     try {
-      await adminApi.login({...values,username:values.username.trim(),captchaId:captcha.id});
-      onSuccess(await adminApi.bootstrap());
+      await adminApi.login({...values,captchaId:captcha.id});
+      const session = await adminApi.bootstrap();
+      if (rememberPassword) offerBrowserPasswordSave(values.username, values.password);
+      onSuccess(session);
       message.success('登录成功');
     } catch (error) {
       setErrorText(error instanceof Error ? error.message : '登录失败');
       if (error instanceof ApiError && error.retryAfterSeconds) { setBlockedUntil(Date.now()+error.retryAfterSeconds*1000); setClock(Date.now()); }
-      if (error instanceof ApiError && ['LOGIN_FAILED','LOGIN_LOCKED'].includes(error.code??'')) form.setFieldValue('password','');
+      if (error instanceof ApiError && ['LOGIN_FAILED','LOGIN_LOCKED'].includes(error.code??'')) clearField('password');
       await refreshCaptcha();
     } finally { setSubmitting(false); }
   };
@@ -86,17 +109,18 @@ export function LoginPage({ onSuccess, initialError }: { onSuccess: (data: Boots
       <div className="login-copy"><Typography.Title level={2}>欢迎回来</Typography.Title><Typography.Paragraph>请验证身份后进入管理后台</Typography.Paragraph></div>
       {errorText && <Alert className="login-alert" role="alert" type="error" showIcon message={errorText} />}
       {seconds > 0 && <Alert className="login-alert" role="status" type="warning" showIcon message={`请在 ${Math.floor(seconds/60)} 分 ${seconds%60} 秒后重试`} />}
-      <Form<LoginValues> form={form} name="admin-login" action="/api/admin/login" method="post" autoComplete="on" layout="vertical" size="large" onFinish={submit} requiredMark={false}>
-        <Form.Item name="username" label="管理员账号" rules={[{ required: true, whitespace:true, message: '请输入账号' }]}><Input name="username" prefix={<UserOutlined />} autoComplete="username" placeholder="请输入账号" maxLength={80} autoFocus readOnly={submitting} /></Form.Item>
-        <Form.Item name="password" label="密码" rules={[{ required: true, message: '请输入密码' }]}><Input.Password name="password" prefix={<LockOutlined />} autoComplete="current-password" aria-describedby="password-manager-help" placeholder="请输入密码" maxLength={256} readOnly={submitting} /></Form.Item>
-        <Form.Item label="图片验证码" required>
-          <div className="captcha-row"><Form.Item name="captcha" noStyle rules={[{required:true,message:'请输入验证码'},{pattern:/^[a-zA-Z0-9]{5}$/,message:'请输入图片中的 5 位字符'}]}><Input aria-label="图片验证码" autoComplete="off" maxLength={5} placeholder="不区分大小写" disabled={submitting} /></Form.Item>
+      <form ref={formRef} name="admin-login" action="/api/admin/login" method="post" autoComplete="on" noValidate onSubmit={(event) => void submit(event)}>
+        <div className="login-field"><label htmlFor="admin-username">管理员账号</label><Input id="admin-username" name="username" prefix={<UserOutlined />} autoComplete="username" placeholder="请输入账号" maxLength={80} autoFocus readOnly={submitting} size="large" /></div>
+        <div className="login-field"><label htmlFor="admin-password">密码</label><Input.Password id="admin-password" name="password" prefix={<LockOutlined />} autoComplete="current-password" aria-describedby="password-manager-help" placeholder="请输入密码" maxLength={256} readOnly={submitting} size="large" /></div>
+        <div className="login-field"><label htmlFor="admin-captcha">图片验证码</label>
+          <div className="captcha-row"><Input id="admin-captcha" name="captcha" aria-label="图片验证码" autoComplete="off" maxLength={5} placeholder="不区分大小写" disabled={submitting} size="large" />
             <button className="captcha-image" type="button" onClick={() => void refreshCaptcha()} disabled={refreshing || submitting} aria-label="刷新验证码" title="点击更换验证码">{captcha ? <img src={captcha.image} alt="登录验证码，点击更换" /> : refreshing ? '加载中…' : '点击重新加载'}</button></div>
-        </Form.Item>
-        <div id="password-manager-help" className="login-password-help">账号密码可由浏览器保存并自动填充，验证码仍需每次输入。</div>
+        </div>
+        <label className="login-remember"><input type="checkbox" checked={rememberPassword} onChange={event => setRememberPassword(event.target.checked)} />记住密码</label>
+        <div id="password-manager-help" className="login-password-help">由当前浏览器保存和自动填入账号密码，验证码仍需每次填写。</div>
         {window.location.protocol === 'http:' && !['localhost', '127.0.0.1', '[::1]'].includes(window.location.hostname) && <div className="login-http-warning">当前使用 HTTP，密码及登录凭证传输未加密，请勿在不可信网络中使用。</div>}
         <Button block type="primary" htmlType="submit" disabled={!captcha || seconds>0} loading={submitting} className="login-submit">{seconds ? '暂时无法登录' : '登录管理后台'}</Button>
-      </Form>
+      </form>
       <div className="login-security"><SafetyCertificateOutlined /> 连续输错 5 次将锁定 15 分钟<br /><span>验证码两分钟有效，请妥善保管登录信息</span></div>
     </Card>
   </main>;

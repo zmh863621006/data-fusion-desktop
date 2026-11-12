@@ -35,11 +35,16 @@ button, a, input, textarea, select { -webkit-tap-highlight-color: transparent; }
 .login-copy .ant-typography:not(h2) { margin: 0; color: var(--admin-secondary); font-size: 15px; }
 .login-card .ant-form-item { margin-bottom: 20px; }
 .login-card .ant-form-item-label { padding-bottom: 7px; }
+.login-field { margin-bottom: 20px; }
+.login-field > label { display: block; margin-bottom: 7px; color: var(--admin-text); font-size: 14px; }
 .login-card .ant-input-affix-wrapper, .login-card .ant-input { background: #fafafc; }
+.login-remember { display: inline-flex; align-items: center; gap: 8px; min-height: 32px; margin: -5px 0 0; color: #3d3d42; cursor: pointer; }
+.login-remember input { width: 16px; height: 16px; margin: 0; accent-color: #007aff; cursor: pointer; }
+.login-remember input:focus-visible { outline: 3px solid #007aff66; outline-offset: 2px; }
 .login-submit.ant-btn { height: 42px; margin-top: 4px; font-weight: 500; border-radius: 6px; }
 .login-security { margin-top: 20px; color: #6e6e73; text-align: center; font-size: 12px; line-height: 1.8; }
 .login-alert { margin-bottom: 16px; }
-.login-password-help { margin: -4px 0 16px; color: #6e6e73; font-size: 12px; line-height: 1.6; }
+.login-password-help { margin: 2px 0 16px; color: #6e6e73; font-size: 12px; line-height: 1.6; }
 .login-http-warning { margin-bottom: 16px; padding: 10px 12px; border-radius: 6px; background: #fff8e8; color: #966014; font-size: 12px; line-height: 1.7; }
 .captcha-row { display: flex; align-items: center; gap: 12px; }
 .captcha-row > .ant-input { min-width: 0; }

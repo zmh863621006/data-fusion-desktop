@@ -22,7 +22,7 @@ function render(node: React.ReactNode) {
 afterEach(() => vi.unstubAllGlobals());
 
 describe('admin interface regression', () => {
-  it('offers a semantic password-manager form without a remember-login option and retains login protection', () => {
+  it('offers browser-saved passwords without persisting the login session', () => {
     atPage('overview');
     const html = render(<LoginPage onSuccess={() => {}} />);
     expect(html).toContain('login-introduction');
@@ -30,7 +30,8 @@ describe('admin interface regression', () => {
     expect(html).toContain('刷新验证码');
     expect(html).not.toContain('7 天免输密码');
     expect(html).not.toContain('记住登录');
-    expect(html).not.toContain('name="remember"');
+    expect(html).toContain('记住密码');
+    expect(html).toMatch(/<input[^>]+type="checkbox"[^>]+checked/);
     expect(html).toContain('连续输错 5 次将锁定 15 分钟');
     const form = html.match(/<form\b[^>]*>/)?.[0] ?? '';
     expect(form).toContain('action="/api/admin/login"');
@@ -41,7 +42,7 @@ describe('admin interface regression', () => {
     const password = html.match(/<input\b[^>]*\bname="password"[^>]*>/)?.[0] ?? '';
     expect(password).toContain('autoComplete="current-password"');
     expect(password).toContain('type="password"');
-    expect(html).toContain('账号密码可由浏览器保存并自动填充');
+    expect(html).toContain('由当前浏览器保存和自动填入账号密码，验证码仍需每次填写。');
   });
 
   it('retains lockout feedback and does not hide an API error behind the design', () => {
