@@ -28,6 +28,14 @@ describe('licensed desktop navigation', () => {
     expect(access.canOpenMatter('government-info', 'city')).toBe(false);
     expect(access.resolvePage('tools')).toBe('home');
   });
+  it('allows hazardous-chemicals publication tabs only with that source grant', () => {
+    const hazardous = workspaceAccess(status(['shenzhen-hazardous-chemicals']), now);
+    expect(hazardous.canOpenSourceTab('hazchem-nanshan-publicity')).toBe(true);
+    expect(hazardous.canOpenSourceTab('hazchem-guangdong-law-publicity')).toBe(true);
+    expect(hazardous.canOpenSourceTab('nanshan-publicity')).toBe(false);
+    expect(workspaceAccess(status(['government-info']), now).canOpenSourceTab('hazchem-nanshan-publicity')).toBe(false);
+    expect(workspaceAccess(status(['market-access']), now).canOpenSourceTab('hazchem-guangdong-law-publicity')).toBe(false);
+  });
   it('opens the tool directly without business navigation', () => {
     const access = workspaceAccess(status([], ['health-publicity']), now);
     expect(access.defaultPage).toBe('tools');

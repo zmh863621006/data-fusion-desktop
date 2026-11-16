@@ -240,15 +240,16 @@ describe('persistent source system tabs', () => {
   });
   it('reads only named main-process portal keys before validating login, including SPA navigation', async () => {
     const controller = new LoginTabController(); const source = plugin('a'); const accept = vi.fn();
-    source.loginPage!.browserAuth = { localStorageKeys: ['pro__Access-Token'], accept };
+    source.loginPage!.browserAuth = { localStorageKeys: ['pro__Access-Token'], sessionStorageKeys: ['Authorization', 'userId'], accept };
     source.getSessionState = vi.fn(async () => ({ status: 'authenticated' as const, systemId: 'a' }));
     const window = windowMock(); controller.open(window, source);
     const contents = mocks.views[0].webContents;
-    contents.executeJavaScript.mockResolvedValue({ 'pro__Access-Token': 'fixture-secret' });
+    contents.executeJavaScript.mockResolvedValue({ 'pro__Access-Token': 'fixture-secret', Authorization: 'fixture-secret', userId: 'fixture-user' });
     contents.emit('did-navigate-in-page', {}, 'https://a.example/home');
-    await vi.waitFor(() => expect(accept).toHaveBeenCalledWith({ 'pro__Access-Token': 'fixture-secret' }));
+    await vi.waitFor(() => expect(accept).toHaveBeenCalledWith({ 'pro__Access-Token': 'fixture-secret', Authorization: 'fixture-secret', userId: 'fixture-user' }));
     expect(source.getSessionState).toHaveBeenCalledOnce();
     expect(contents.executeJavaScript.mock.calls[0][0]).toContain('pro__Access-Token');
+    expect(contents.executeJavaScript.mock.calls[0][0]).toContain('sessionStorage.getItem');
     expect(JSON.stringify(vi.mocked(window.webContents.send).mock.calls)).not.toContain('fixture-secret');
     controller.close();
   });

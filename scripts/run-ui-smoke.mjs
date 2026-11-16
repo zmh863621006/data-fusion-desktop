@@ -7,7 +7,7 @@ import { basename, dirname, join, resolve } from 'node:path';
 
 // Chromium keeps some SQLite caches locked until the entire Electron process
 // exits. A parent process must own and clean the isolated test profile.
-const targets = { desktop: '.tmp/smoke-ui-redesign.cjs', admin: '.tmp/smoke-admin-ui-redesign.cjs', oversize: '.tmp/smoke-oversize-v3.cjs', hrss: '.tmp/smoke-hrss.cjs', 'hrss-certificate': '.tmp/smoke-hrss-certificate.cjs' };
+const targets = { desktop: '.tmp/smoke-ui-redesign.cjs', admin: '.tmp/smoke-admin-ui-redesign.cjs', oversize: '.tmp/smoke-oversize-v3.cjs', hrss: '.tmp/smoke-hrss.cjs', hazardous: '.tmp/smoke-hazardous.cjs', 'hrss-certificate': '.tmp/smoke-hrss-certificate.cjs' };
 const target = targets[process.argv[2]];
 assert(target, 'Choose desktop, admin or oversize smoke test');
 const profile = await mkdtemp(join(tmpdir(), 'fusion-ui-runner-'));

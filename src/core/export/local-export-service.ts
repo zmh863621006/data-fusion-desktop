@@ -9,7 +9,7 @@ import { createProvincialPermitWorkbook, validateProvincialPermit } from '../dou
 import { assertGovernmentExportTarget, type GovernmentExportTarget } from './government-target';
 import { createNanshanPermitWorkbook, validateNanshanPermit } from '../double-publicity/nanshan-permit';
 
-const permitSystems = new Set(['government-info', 'oversize-transport', 'online-car-permit', 'transport-practitioner', 'health-publicity']);
+const permitSystems = new Set(['government-info', 'oversize-transport', 'online-car-permit', 'transport-practitioner', 'health-publicity', 'shenzhen-hazardous-chemicals']);
 
 function highlight(sheet: ExcelJS.Worksheet, issue: ExportRowIssue, rowNumber: number, columns: string[]) {
   const row = sheet.getRow(rowNumber);

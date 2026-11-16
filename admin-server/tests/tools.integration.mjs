@@ -23,7 +23,7 @@ async function fixture(t) {
 }
 test('tools are a separate catalog; tools-only online licenses activate and refresh without business system access', async t => {
   const f = await fixture(t), bootstrap = await f.api('/api/admin/bootstrap');
-  assert.equal(bootstrap.body.systems.length, 6);
+  assert.equal(bootstrap.body.systems.length, 7);
   assert.equal(bootstrap.body.systems.some(system => system.id === 'health-publicity'), false);
   assert.equal(bootstrap.body.tools[0].id, 'health-publicity');
   const issued = await f.license({}); assert.equal(issued.status, 201);

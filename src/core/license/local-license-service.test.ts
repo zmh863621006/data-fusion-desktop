@@ -1,5 +1,5 @@
 import { generateKeyPairSync, sign } from 'node:crypto';
-import { mkdtemp, rm } from 'node:fs/promises';
+import { mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { afterEach, describe, expect, it, vi } from 'vitest';
@@ -82,6 +82,7 @@ describe('LocalLicenseService', () => {
     const service = new LocalLicenseService(options);
     expect((await service.activate(key)).licenseId).toBe('test-license');
     expect((await new LocalLicenseService(options).getStatus()).state).toBe('active');
+    expect((await new LocalLicenseService(options).getCurrent())?.allowedSystems).toEqual(['market-access']);
   });
 
   it('only accepts the development key when explicitly enabled', async () => {
@@ -91,6 +92,21 @@ describe('LocalLicenseService', () => {
     const base = { storagePath: join(directory, 'license.json'), publicKeyPem: publicKey.export({ type: 'spki', format: 'pem' }).toString() };
     await expect(new LocalLicenseService(base).activate('DF-DEV-LOCAL')).rejects.toThrow('格式无效');
     const service = new LocalLicenseService({ ...base, allowDevelopmentLicense: true });
-    expect((await service.activate('DF-DEV-LOCAL')).licenseId).toBe('development-local');
+    const grant = await service.activate('DF-DEV-LOCAL');
+    expect(grant.licenseId).toBe('development-local');
+    expect(grant.allowedSystems).toContain('shenzhen-hazardous-chemicals');
+  });
+
+  it('adds new built-ins to an existing development grant only in development mode', async () => {
+    const directory = await mkdtemp(join(tmpdir(), 'data-fusion-license-'));
+    temporaryDirectories.push(directory);
+    const options = { storagePath: join(directory, 'license.json'), publicKeyPem: '', allowDevelopmentLicense: true };
+    await writeFile(options.storagePath, JSON.stringify({ activatedAt: Date.now(), developmentGrant: {
+      licenseId: 'development-local', expiresAt: Date.now() + 60_000, allowedSystems: ['market-access'],
+    } }));
+    const service = new LocalLicenseService(options);
+    expect((await service.getCurrent())?.allowedSystems).toContain('shenzhen-hazardous-chemicals');
+    expect((await service.getStatus()).grant?.allowedSystems).toContain('shenzhen-hazardous-chemicals');
+    expect(await new LocalLicenseService({ ...options, allowDevelopmentLicense: false }).getCurrent()).toBeNull();
   });
 });

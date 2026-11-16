@@ -43,12 +43,12 @@ function grant(envelope) {
   return JSON.parse(Buffer.from(envelope.payload, 'base64url'));
 }
 
-test('HRSS catalog exposes 18 grouped list ledgers alongside the existing five systems', async t => {
+test('HRSS catalog exposes 18 grouped list ledgers alongside the other registered systems', async t => {
   const f = await fixture(t);
   assert.equal((await f.api('/api/admin/bootstrap', undefined, false)).status, 401);
   const bootstrap = (await f.api('/api/admin/bootstrap')).body;
   assert.deepEqual(bootstrap.systems.map(system => system.id).sort(), [
-    'government-info', SYSTEM, 'market-access', 'online-car-permit', 'oversize-transport', 'transport-practitioner',
+    'government-info', SYSTEM, 'market-access', 'online-car-permit', 'oversize-transport', 'transport-practitioner', 'shenzhen-hazardous-chemicals',
   ].sort());
   assert.equal(bootstrap.systems.find(system => system.id === SYSTEM).name, '广东省集中式人力资源和社会保障一体化门户系统');
   const matters = bootstrap.matters.filter(matter => matter.system_id === SYSTEM && matter.enabled);

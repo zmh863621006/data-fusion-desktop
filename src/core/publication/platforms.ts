@@ -22,11 +22,32 @@ export const PUBLICATION_PLATFORMS = {
   },
 } as const;
 
-export type PublicationPlatformId = keyof typeof PUBLICATION_PLATFORMS;
+// Keep the source-system permission attached to a publication tab for its
+// entire lifetime. Separate IDs prevent another system's grant from reopening
+// a tab after the original source grant has been removed.
+export const HAZCHEM_PUBLICATION_PLATFORMS = {
+  'hazchem-nanshan-publicity': {
+    ...PUBLICATION_PLATFORMS['nanshan-publicity'],
+    id: 'hazchem-nanshan-publicity', ownerSystemId: 'shenzhen-hazardous-chemicals',
+    partition: 'persist:publication-hazchem-nanshan',
+  },
+  'hazchem-guangdong-law-publicity': {
+    ...PUBLICATION_PLATFORMS['guangdong-law-publicity'],
+    id: 'hazchem-guangdong-law-publicity', ownerSystemId: 'shenzhen-hazardous-chemicals',
+    partition: 'persist:publication-hazchem-guangdong-law',
+  },
+} as const;
+
+const ALL_PUBLICATION_PLATFORMS = { ...PUBLICATION_PLATFORMS, ...HAZCHEM_PUBLICATION_PLATFORMS } as const;
+export type PublicationPlatformId = keyof typeof ALL_PUBLICATION_PLATFORMS;
+
+export function publicationPlatformsForSystem(systemId: string) {
+  return Object.values(ALL_PUBLICATION_PLATFORMS).filter(platform => platform.ownerSystemId === systemId);
+}
 
 export function publicationPlatform(id: unknown) {
-  return typeof id === 'string' && Object.hasOwn(PUBLICATION_PLATFORMS, id)
-    ? PUBLICATION_PLATFORMS[id as PublicationPlatformId] : undefined;
+  return typeof id === 'string' && Object.hasOwn(ALL_PUBLICATION_PLATFORMS, id)
+    ? ALL_PUBLICATION_PLATFORMS[id as PublicationPlatformId] : undefined;
 }
 
 export const sourceTabOwner = (id: string): string => publicationPlatform(id)?.ownerSystemId ?? id;

@@ -21,7 +21,7 @@ export interface BusinessSystemPlugin {
     additionalAllowedOrigins?: string[];
     credentialPaths?: string[];
     /** Main-process-only capture of named portal keys, never renderer metadata. */
-    browserAuth?: { localStorageKeys: string[]; accept(values: Record<string, string>): void };
+    browserAuth?: { localStorageKeys: string[]; sessionStorageKeys?: string[]; accept(values: Record<string, string>): void };
     /** Explicit selectors for legacy login forms with nonstandard field names. */
     credentialFields?: { account: string; password: string };
     onNavigate?: (url: string) => void;

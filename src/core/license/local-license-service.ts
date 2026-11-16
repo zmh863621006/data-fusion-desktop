@@ -53,7 +53,7 @@ export class LocalLicenseService implements LicenseService {
         customerName: '本机开发授权',
         issuedAt: Date.now(),
         expiresAt: Date.now() + 365 * 24 * 60 * 60 * 1000,
-        allowedSystems: ['market-access', 'government-info', 'transport-practitioner', 'oversize-transport', 'online-car-permit', 'guangdong-hrss'],
+        allowedSystems: ['market-access', 'government-info', 'transport-practitioner', 'oversize-transport', 'online-car-permit', 'guangdong-hrss', 'shenzhen-hazardous-chemicals'],
         allowedTools: ['health-publicity'],
         deviceId: this.deviceId,
         allowExport: true,
@@ -180,7 +180,7 @@ export class LocalLicenseService implements LicenseService {
 
   /** Development licenses follow built-in modules so an existing local grant survives module additions. */
   private currentDevelopmentGrant(grant: LicenseGrant): LicenseGrant {
-    const allowedSystems = [...new Set([...grant.allowedSystems, 'market-access', 'government-info', 'transport-practitioner', 'oversize-transport', 'online-car-permit', 'guangdong-hrss'])];
+    const allowedSystems = [...new Set([...grant.allowedSystems, 'market-access', 'government-info', 'transport-practitioner', 'oversize-transport', 'online-car-permit', 'guangdong-hrss', 'shenzhen-hazardous-chemicals'])];
     return { ...grant, allowedSystems, allowedTools: [...new Set([...(grant.allowedTools ?? []), 'health-publicity'])] };
   }
 

@@ -60,7 +60,8 @@ for (const text of ['bj_bjsj', '办结开始日期', '办结截止日期', '2022
 const compactMain = mainCode.replace(/\s+/g, '');
 for (const bound of ['flag:16,sqlType:93', 'flag:17,sqlType:93']) assert(compactMain.includes(bound), `Timestamp type missing from packaged completion bound: ${bound}`);
 assert(mainCode.includes('EMPTY_EXPORT_RESPONSE'), 'Explicit empty-export response handling is missing');
-for (const id of ['market-access', 'government-info', 'transport-practitioner', 'oversize-transport', 'online-car-permit', 'guangdong-hrss']) assert(mainCode.includes(id), `Missing bundled system: ${id}`);
+for (const id of ['market-access', 'government-info', 'transport-practitioner', 'oversize-transport', 'online-car-permit', 'guangdong-hrss', 'shenzhen-hazardous-chemicals']) assert(mainCode.includes(id), `Missing bundled system: ${id}`);
+for (const marker of ['https://szwh.yjgl.sz.gov.cn', 'selectHandleDoneApprProcessList', 'getElectronicLicenseList', 'certificationDataReportList']) assert(mainCode.includes(marker), `Missing hazardous-chemical reflow capability: ${marker}`);
 for (const marker of ['HrssDashboardWindow', 'successfulSnapshots', 'installSourceCertificateTrust']) assert(mainCode.includes(marker), `Missing HRSS capability: ${marker}`);
 assert(mainCode.includes('99:A4:5E:36:EF:E5:CE:EA:37:77:76:CB:D3:AE:1E:3C:67:40:3E:A3:98:26:0B:D6:73:20:B7:BD:08:13:AF:6F')
   && /unknownCertificate:\s*["']reject["']/.test(mainCode), 'HRSS approved first-use certificate policy must be bundled');
@@ -175,7 +176,7 @@ try {
   const report = { status: 'pass', version: metadata.version, startupMs, applicationFiles: files.length,
     runtimeDependencies: ['cheerio', 'exceljs', 'jszip'], privateArtifactsExcluded: true, fuseHardening: true,
     developmentPageIgnored: true, developmentLicenseRejected: true, substitutedSigningKeyRejected: true,
-    bundledBusinessModules: 6, unauthorizedModulesHidden: true, bundledFilesMatchCurrentBuild: true,
+    bundledBusinessModules: 7, unauthorizedModulesHidden: true, bundledFilesMatchCurrentBuild: true,
     hrssLocalDashboardPresent: true, hrssAggregateIpcRestricted: true,
     hrssApprovedFirstUseCertificatePolicyBundled: true,
     exportTemplateAndReflowCodePresent: true, exportFolderIpcRestricted: true,

@@ -32,7 +32,7 @@ export function provincialValue(record: StoredRecord, key: string): string {
   // As in the original gdSgsExport, no attachment names without an attached PDF.
   if (key === 'decisionAttachmentName') return '';
   let value = text(exportFieldValue(record, key));
-  if (key === 'xkXkjg') {
+  if (key === 'xkXkjg' && record.systemId === 'government-info') {
     // Only the water department has been confirmed for this new export. Preserve
     // explicit authorities of other departments; never default them to water.
     if (waterMatters.has(record.matterId)) return WATER_AUTHORITY;

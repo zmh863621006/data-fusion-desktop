@@ -31,6 +31,8 @@
 25. [24-kylin-internal-build.md](./24-kylin-internal-build.md) — 麒麟 V10 内部测试打包与验证范围
 26. [25-windows-universal-compatibility.md](./25-windows-universal-compatibility.md) — Win7/Win10 自动选择运行环境的通用安装包与测试边界
 27. [26-windows-prerequisites-bootstrap.md](./26-windows-prerequisites-bootstrap.md) — 缺失系统组件自动补齐、管理员授权、重启续装与隔离回归
+28. [27-multiplatform-releases.md](./27-multiplatform-releases.md) — Windows、麒麟x86_64与ARM64版本分发及更新校验
+29. [28-shenzhen-hazardous-chemicals.md](./28-shenzhen-hazardous-chemicals.md) — 深圳危化品5项回流、会话与双公示字段、后台权限及本地测试包
 
 ## 核心不可破坏原则
 

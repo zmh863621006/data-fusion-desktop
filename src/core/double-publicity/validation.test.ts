@@ -24,7 +24,7 @@ describe('unified double publicity export validation',()=>{
     expect(exportFieldValue(resolved, 'xkXdrMc')).toBe('施工公司');
     expect(validateExport([resolved]).invalid).toBe(0);
   });
-  it.each(['oversize-transport','online-car-permit','transport-practitioner','government-info'])('checks all 14 base requirements for %s',system=>{
+  it.each(['oversize-transport','online-car-permit','transport-practitioner','government-info','shenzhen-hazardous-chemicals'])('checks all 14 base requirements for %s',system=>{
     const value=validateExport([record({},system)]);
     expect(value.issues[0].fields).toHaveLength(14); expect(value.missingRows).toBe(1);
   });

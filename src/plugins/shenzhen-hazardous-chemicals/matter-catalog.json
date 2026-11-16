@@ -1,0 +1,7 @@
+[
+  {"id":"hazchem-business-new","name":"危险化学品经营许可证核发（新领）","sourceCode":"00754567901008950013440305","departmentId":"hazardous-chemicals","departmentName":"危险化学品经营许可","departmentOrder":1,"matterOrder":1},
+  {"id":"hazchem-business-renewal","name":"危险化学品经营许可证核发（延期）","sourceCode":"00754567901008950023440305","departmentId":"hazardous-chemicals","departmentName":"危险化学品经营许可","departmentOrder":1,"matterOrder":2},
+  {"id":"hazchem-business-change","name":"危险化学品经营许可证核发（变更）","sourceCode":"00754567901008950043440305","departmentId":"hazardous-chemicals","departmentName":"危险化学品经营许可","departmentOrder":1,"matterOrder":3},
+  {"id":"hazchem-business-cancel","name":"危险化学品经营许可证（注销）","sourceCode":"MB2D2883441440178008004440305","departmentId":"hazardous-chemicals","departmentName":"危险化学品经营许可","departmentOrder":1,"matterOrder":4},
+  {"id":"hazchem-precursor-filing","name":"第三类非药品类易制毒化学品经营备案（新申请）","sourceCode":"4403050000000075456791000300388003","departmentId":"precursor-filing","departmentName":"易制毒化学品备案","departmentOrder":2,"matterOrder":1}
+]

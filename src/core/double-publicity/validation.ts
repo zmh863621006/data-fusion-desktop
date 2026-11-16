@@ -3,7 +3,7 @@ import { DOUBLE_PUBLICITY_TEMPLATE } from './template';
 import { readOversizeApplicationEvidence } from '../../plugins/oversize-transport/application';
 import { isDelegatedConstructionWaste, resolvedConstructionWasteContractor } from '../../plugins/government-info/construction-waste';
 
-const systems = new Set(['government-info', 'oversize-transport', 'online-car-permit', 'transport-practitioner', 'health-publicity']);
+const systems = new Set(['government-info', 'oversize-transport', 'online-car-permit', 'transport-practitioner', 'health-publicity', 'shenzhen-hazardous-chemicals']);
 const common = ['xkXdrMc','xkXdrLb','xkXkws','xkWsh','xkXklb','xkNr','xkJdrq','xkYxqz','xkYxqzi','xkXkjg','xkXkjgdm','xkZt','xkLydw','xkLydwdm'];
 const labels = new Map<string,string>(DOUBLE_PUBLICITY_TEMPLATE);
 // Only semantic equivalents. Never substitute certificate dates, license number or case title.

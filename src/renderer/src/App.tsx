@@ -17,12 +17,12 @@ import { workspaceAccess, type AppPage } from './workspace-access';
 import { UpdateBanner, UpdateStatus, useUpdateState } from './UpdateStatus';
 import type { ComponentSummary } from '../../core/plugins/components';
 import { ComponentCatalog } from './ComponentCatalog';
-import { PUBLICATION_PLATFORMS, publicationPlatform, type PublicationPlatformId } from '../../core/publication/platforms';
+import { publicationPlatform, publicationPlatformsForSystem, type PublicationPlatformId } from '../../core/publication/platforms';
 import { HrssLedgerPage, type HrssListColumn } from './HrssLedgerPage';
 import { HrssDashboardWindowPage } from './HrssDashboardWindowPage';
 import { HrssDateNotice } from './HrssDateNotice';
 import { hrssTaskDateLabel } from '../../core/hrss/date-filters';
-import { GOVERNMENT_EXPORT_LABELS, type GovernmentExportTarget } from '../../core/export/government-target';
+import { GOVERNMENT_EXPORT_LABELS, supportsGovernmentExport, type GovernmentExportTarget } from '../../core/export/government-target';
 
 type SessionState = {
   status: 'logged-out' | 'logging-in' | 'authenticated' | 'unverified' | 'expiring' | 'expired';
@@ -627,7 +627,7 @@ function Workspace({ license }: { license: LicenseStatus }) {
         {showPractitionerNumbers && selectedSystemId === 'transport-practitioner' && <PractitionerNumberPanel onClose={() => setShowPractitionerNumbers(false)} />}
         {showSystemCredentials && selectedSystem?.supportsCredentialConfiguration && <SystemCredentialPanel systemId={selectedSystemId} systemName={selectedSystem?.name ?? '当前业务系统'} onClose={() => setShowSystemCredentials(false)} onLogin={() => { setShowSystemCredentials(false); void login(); }} />}
 
-        {['return-ledger', 'list-ledger'].includes(selectedSystem?.workspaceMode ?? '') && <nav className={`matter-workspace-tabs ${selectedSystemId === 'government-info' ? 'government-workspace-tabs' : ''}`} aria-label="事项工作区">
+        {['return-ledger', 'list-ledger'].includes(selectedSystem?.workspaceMode ?? '') && <nav className={`matter-workspace-tabs ${supportsGovernmentExport(selectedSystemId) ? 'government-workspace-tabs' : ''}`} aria-label="事项工作区">
           <button aria-pressed={matterSection === 'return'} className={matterSection === 'return' ? 'active' : ''} onClick={() => setMatterSection('return')}>数据回流</button>
           <button aria-pressed={matterSection === 'tasks'} className={matterSection === 'tasks' ? 'active' : ''} onClick={() => setMatterSection('tasks')}>回流任务</button>
           <button aria-pressed={matterSection === 'data'} className={matterSection === 'data' ? 'active' : ''} onClick={() => setMatterSection('data')}>回流数据</button>
@@ -1005,7 +1005,7 @@ function LocalDataPage({ systemId, matterId, matterName, selectedBatchId, onBatc
     ['approveDate', '办结日期'], ['fdApproveDate', '法定办结时间'],
     ...CERTIFICATE_FIELDS.map(({ key, label }) => [key, label] as const),
     ...provincialFields,
-  ] : systemId === 'government-info' ? [...DOUBLE_PUBLICITY_TEMPLATE, ...provincialFields] : DOUBLE_PUBLICITY_TEMPLATE;
+  ] : supportsGovernmentExport(systemId) ? [...DOUBLE_PUBLICITY_TEMPLATE, ...provincialFields] : DOUBLE_PUBLICITY_TEMPLATE;
   const visibleListKeys: readonly string[] = rawGovernment
     ? ['cityLsh', 'sxmc', 'applyer', 'cardNumber', 'approveDate', 'certificateNumber']
     : RECORD_LIST_COLUMN_KEYS;
@@ -1021,9 +1021,9 @@ function LocalDataPage({ systemId, matterId, matterName, selectedBatchId, onBatc
     return `${task.id.slice(0, 8).toUpperCase()} · ${start} 至 ${end} · ${new Date(task.createdAt).toLocaleString()}`;
   };
   return <>
-    <PageHeader className={systemId === 'government-info' ? 'publication-page-header' : ''} eyebrow="事项工作区 / 本地数据" title={`${matterName ?? '当前事项'} · 回流数据`} description={selectedBatch ? `当前查看批次 ${selectedBatch.id.slice(0, 8).toUpperCase()}，共 ${total} 条回流记录。` : `当前查看合并台账，共 ${total} 条回流记录。`} action={<div className="button-row publication-actions">
-      {systemId === 'government-info' ? (['guangdong-law', 'nanshan'] as const).map((target, index) => <button key={target} className={index === 0 ? 'primary' : 'secondary'} disabled={exporting} aria-busy={exporting && exportingTarget === target} title={`${selectedBatchId ? '导出当前批次' : '导出当前筛选台账'}，使用${GOVERNMENT_EXPORT_LABELS[target]}模板`} onClick={() => void exportData(target)}><AppIcon name="download" size={16} />{exporting && exportingTarget === target ? '导出中…' : `导出${GOVERNMENT_EXPORT_LABELS[target]}`}</button>) : <button className="primary" disabled={exporting} aria-busy={exporting} onClick={() => void exportData()}><AppIcon name="download" size={16} />{exporting ? '导出中…' : `导出数据${selectedBatchId ? '当前批次' : ''}`}</button>}
-      {systemId === 'government-info' && Object.values(PUBLICATION_PLATFORMS).map(platform => <button className="secondary" key={platform.id} disabled={Boolean(openingPublication)} aria-busy={openingPublication === platform.id} title={`打开${platform.name}，登录后保留页面`} onClick={() => void onOpenPublication(platform.id)}><AppIcon name="upload" size={16} />{openingPublication === platform.id ? '正在打开…' : platform.buttonLabel}</button>)}
+    <PageHeader className={supportsGovernmentExport(systemId) ? 'publication-page-header' : ''} eyebrow="事项工作区 / 本地数据" title={`${matterName ?? '当前事项'} · 回流数据`} description={selectedBatch ? `当前查看批次 ${selectedBatch.id.slice(0, 8).toUpperCase()}，共 ${total} 条回流记录。` : `当前查看合并台账，共 ${total} 条回流记录。`} action={<div className="button-row publication-actions">
+      {supportsGovernmentExport(systemId) ? (['guangdong-law', 'nanshan'] as const).map((target, index) => <button key={target} className={index === 0 ? 'primary' : 'secondary'} disabled={exporting} aria-busy={exporting && exportingTarget === target} title={`${selectedBatchId ? '导出当前批次' : '导出当前筛选台账'}，使用${GOVERNMENT_EXPORT_LABELS[target]}模板`} onClick={() => void exportData(target)}><AppIcon name="download" size={16} />{exporting && exportingTarget === target ? '导出中…' : `导出${GOVERNMENT_EXPORT_LABELS[target]}`}</button>) : <button className="primary" disabled={exporting} aria-busy={exporting} onClick={() => void exportData()}><AppIcon name="download" size={16} />{exporting ? '导出中…' : `导出数据${selectedBatchId ? '当前批次' : ''}`}</button>}
+      {publicationPlatformsForSystem(systemId).map(platform => <button className="secondary" key={platform.id} disabled={Boolean(openingPublication)} aria-busy={openingPublication === platform.id} title={`打开${platform.name}，登录后保留页面`} onClick={() => void onOpenPublication(platform.id)}><AppIcon name="upload" size={16} />{openingPublication === platform.id ? '正在打开…' : platform.buttonLabel}</button>)}
     </div>} />
     {message && <div className="message page-message" role="status">{message}</div>}
     {exportResult && <ExportNotice result={exportResult} />}

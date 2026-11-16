@@ -27,7 +27,7 @@ function identityKeys(systemId: string): [string[], string[], string[]] {
     : [['xkXdrMc'], ['xkXdrShxym'], ['xkFrdb']];
 }
 export function enterpriseInput(systemId: string, row: Record<string, unknown>): EnterpriseInput | null {
-  if (!['government-info', 'oversize-transport', 'online-car-permit', 'health-publicity'].includes(systemId)) return null;
+  if (!['government-info', 'oversize-transport', 'online-car-permit', 'health-publicity', 'shenzhen-hazardous-chemicals'].includes(systemId)) return null;
   if (systemId === 'oversize-transport' && readOversizeApplicationEvidence(row.oversizeApplicationEnrichment)?.status === 'conflict') return null;
   const government = systemId === 'government-info';
   const delegated = government && isDelegatedConstructionWaste(row);

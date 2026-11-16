@@ -66,8 +66,10 @@ export class LoginTabController {
         && new URL(tab.view.webContents.getURL()).origin === page.allowedOrigin) {
         const captured = await tab.view.webContents.executeJavaScript(`(() => {
           if (location.origin !== ${JSON.stringify(page.allowedOrigin)}) return null;
-          return Object.fromEntries(${JSON.stringify(page.browserAuth.localStorageKeys)}
-            .map(key => [key, localStorage.getItem(key)]).filter(([, value]) => typeof value === 'string'));
+          return Object.fromEntries([
+            ...${JSON.stringify(page.browserAuth.localStorageKeys)}.map(key => [key, localStorage.getItem(key)]),
+            ...${JSON.stringify(page.browserAuth.sessionStorageKeys ?? [])}.map(key => [key, sessionStorage.getItem(key)])
+          ].filter(([, value]) => typeof value === 'string'));
         })()`);
         if (captured && typeof captured === 'object' && !Array.isArray(captured)) page.browserAuth.accept(captured);
       }

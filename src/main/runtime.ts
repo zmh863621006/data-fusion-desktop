@@ -6,6 +6,7 @@ import { configurePractitionerCredentials, transportPractitionerPlugin } from '.
 import { configureOversizeTransportCredentials, oversizeTransportPlugin } from '../plugins/oversize-transport';
 import { configureOnlineCarPermitCredentials, onlineCarPermitPlugin } from '../plugins/online-car-permit';
 import { createGuangdongHrssPlugin } from '../plugins/guangdong-hrss';
+import { createShenzhenHazardousPlugin } from '../plugins/shenzhen-hazardous-chemicals';
 import { buildHrssDashboard } from '../core/hrss/dashboard';
 import { NodeSqliteDriver } from '../core/storage/database';
 import { SqliteLocalRepository } from '../core/storage/sqlite-repository';
@@ -59,6 +60,10 @@ b1oByVzE+8Uj5k4ApNg1P0JX3kxWn0qhcUFtRxsMO/nPAgMBAAE=
 -----END PUBLIC KEY-----`;
 
 const builtinModules = [
+  {
+    id: 'shenzhen-hazardous-chemicals', name: '深圳市危险化学品安全生产风险监测预警系统', version: '0.1.0', publisher: '数据融合助手',
+    description: '已办流程结束记录关联制证数据，生成省执法和南山双公示',
+  },
   {
     id: 'market-access', name: '广东省市场准入系统', version: '1.0.0', publisher: '数据融合助手',
     description: '市场准入业务办理查询与本地回流',
@@ -194,6 +199,7 @@ export class AppRuntime {
     this.plugins.register(oversizeTransportPlugin);
     this.plugins.register(onlineCarPermitPlugin);
     this.plugins.register(createGuangdongHrssPlugin());
+    this.plugins.register(createShenzhenHazardousPlugin());
     for (const plugin of this.plugins.list()) await plugin.initialize();
     this.sessionRecovery = new SessionRecoveryService(sessionStore);
     for (const plugin of this.plugins.list()) await this.sessionRecovery.register(plugin);
@@ -463,7 +469,7 @@ export class AppRuntime {
         return { total: summary.total, inserted: summary.inserted, updated: summary.updated, unchanged: summary.unchanged };
       } finally { this.hrssReturning = false; }
     }
-    const result = await matter.query({ ...queryContext, signal: context.signal });
+    const result = await matter.query({ ...queryContext, signal: context.signal, onProgress: context.report });
     if (context.signal.aborted) throw new Error('任务已取消');
 
     const localRows: Record<string, unknown>[] = [];

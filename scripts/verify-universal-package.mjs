@@ -86,6 +86,9 @@ try {
     }
     assert.equal(JSON.parse(extractFile(archive, 'package.json')).version, version);
     const main = extractFile(archive, join('out', 'main', 'index.js')).toString();
+    for (const marker of ['shenzhen-hazardous-chemicals', 'https://szwh.yjgl.sz.gov.cn', 'selectHandleDoneApprProcessList', 'getElectronicLicenseList', 'certificationDataReportList']) {
+      assert(main.includes(marker), `${track} component is missing hazardous-chemical reflow capability: ${marker}`);
+    }
     if (track === 'legacy') {
       assert(main.includes('Win7 兼容测试版暂未开放在线更新'));
       const sqlite = await readFile(join(unpacked, 'resources/legacy-runtime/node_modules/better-sqlite3/build/Release/better_sqlite3.node'));

@@ -33,7 +33,7 @@ const text = (value: unknown): string => typeof value === 'string' ? value.trim(
 /** Projection only: never change the stored record or copy the teacher's education bureau. */
 export function nanshanValue(record: StoredRecord, key: string): string {
   let value = text(exportFieldValue(record, key));
-  if (Object.hasOwn(authorities, key)) {
+  if (Object.hasOwn(authorities, key) && record.systemId === 'government-info') {
     if (waterMatters.has(record.matterId)) return authorities[key];
     // A non-water record must not retain an incorrectly inherited water authority.
     return value === WATER_NAME || value === WATER_CODE ? '' : value;

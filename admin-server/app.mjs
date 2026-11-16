@@ -16,6 +16,7 @@ import { DatabaseSync } from 'node:sqlite';
 import { fileURLToPath } from 'node:url';
 import governmentMatters from '../src/plugins/government-info/matter-catalog.json' with { type: 'json' };
 import hrssMatters from '../src/plugins/guangdong-hrss/matter-catalog.json' with { type: 'json' };
+import hazardousMatters from '../src/plugins/shenzhen-hazardous-chemicals/matter-catalog.json' with { type: 'json' };
 import toolCatalog from '../src/core/tools/catalog.json' with { type: 'json' };
 
 export function createAdminServer(options = {}) {
@@ -98,6 +99,7 @@ seedSystem.run('transport-practitioner', '广东省道路运输从业人员管�
 seedSystem.run('oversize-transport', '广东省交通运输厅大件运输许可系统', '0.1.0', now);
 seedSystem.run('online-car-permit', '网络预约出租汽车运输证系统', '0.1.0', now);
 seedSystem.run('guangdong-hrss', '广东省集中式人力资源和社会保障一体化门户系统', '0.1.0', now);
+seedSystem.run('shenzhen-hazardous-chemicals', '深圳市危险化学品安全生产风险监测预警系统', '0.1.0', now);
 const seedMatter = database.prepare('INSERT OR IGNORE INTO system_matters(id,system_id,name,created_at) VALUES(?,?,?,?)');
 seedMatter.run('business-application-query', 'market-access', '业务办理查询', now);
 transaction(() => {
@@ -126,6 +128,14 @@ transaction(() => {
     VALUES(?,'guangdong-hrss',?,?,?,?,?,?) ON CONFLICT(system_id,id) DO UPDATE SET name=excluded.name,
     department_id=excluded.department_id,department_name=excluded.department_name,department_order=excluded.department_order,matter_order=excluded.matter_order`);
   for (const matter of hrssMatters) upsert.run(matter.id, matter.name, matter.departmentId, matter.departmentName, matter.departmentOrder, matter.matterOrder, now);
+});
+// Catalog registration is additive. Existing signed scope and manual disabling
+// remain authoritative until an administrator explicitly assigns this system.
+transaction(() => {
+  const upsert = database.prepare(`INSERT INTO system_matters(id,system_id,name,department_id,department_name,department_order,matter_order,created_at)
+    VALUES(?,'shenzhen-hazardous-chemicals',?,?,?,?,?,?) ON CONFLICT(system_id,id) DO UPDATE SET name=excluded.name,
+    department_id=excluded.department_id,department_name=excluded.department_name,department_order=excluded.department_order,matter_order=excluded.matter_order`);
+  for (const matter of hazardousMatters) upsert.run(matter.id, matter.name, matter.departmentId, matter.departmentName, matter.departmentOrder, matter.matterOrder, now);
 });
 
 function passwordHash(password) {
@@ -277,7 +287,7 @@ async function api(request, response, url) {
     const licensed = database.prepare(`SELECT l.* FROM licenses l JOIN customers c ON c.id=l.customer_id JOIN devices d ON d.license_id=l.id
       WHERE l.id=? AND d.device_id=? AND d.status='active' AND c.enabled=1 AND l.status='active' AND l.expires_at>?`).get(String(grant.licenseId), String(body.deviceId), Date.now());
     const systemId = body.systemId, matterId = body.matterId;
-    const allowedSystem = licensed && ['government-info','oversize-transport','online-car-permit'].includes(systemId)
+    const allowedSystem = licensed && ['government-info','oversize-transport','online-car-permit','shenzhen-hazardous-chemicals'].includes(systemId)
       && JSON.parse(licensed.allowed_systems_json).includes(systemId)
       && JSON.parse(licensed.allowed_matters_json ?? '{}')[systemId]?.includes(matterId);
     const allowedTool = licensed && systemId === 'health-publicity' && matterId === 'word-to-publicity'

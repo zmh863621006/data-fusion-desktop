@@ -1,5 +1,10 @@
 export type GovernmentExportTarget = 'nanshan' | 'guangdong-law';
 
+/** Systems whose returned permit records support both publication templates. */
+export function supportsGovernmentExport(systemId: string): boolean {
+  return systemId === 'government-info' || systemId === 'shenzhen-hazardous-chemicals';
+}
+
 export function parseGovernmentExportTarget(value: unknown): GovernmentExportTarget | undefined {
   if (value === undefined) return undefined;
   if (value !== 'nanshan' && value !== 'guangdong-law') throw new Error('双公示导出模板无效');
@@ -8,8 +13,8 @@ export function parseGovernmentExportTarget(value: unknown): GovernmentExportTar
 
 export function assertGovernmentExportTarget(target: GovernmentExportTarget | undefined, format: string, systems: string[]): void {
   parseGovernmentExportTarget(target);
-  if (target && (format !== 'xlsx' || !systems.length || systems.some(system => system !== 'government-info'))) {
-    throw new Error('省执法和南山模板仅支持政务综合信息系统的 Excel 导出');
+  if (target && (format !== 'xlsx' || !systems.length || new Set(systems).size !== 1 || systems.some(system => !supportsGovernmentExport(system)))) {
+    throw new Error('省执法和南山模板仅支持政务综合信息或深圳危化品系统的单系统 Excel 导出');
   }
 }
 
