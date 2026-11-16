@@ -33,6 +33,7 @@
 27. [26-windows-prerequisites-bootstrap.md](./26-windows-prerequisites-bootstrap.md) — 缺失系统组件自动补齐、管理员授权、重启续装与隔离回归
 28. [27-multiplatform-releases.md](./27-multiplatform-releases.md) — Windows、麒麟x86_64与ARM64版本分发及更新校验
 29. [28-shenzhen-hazardous-chemicals.md](./28-shenzhen-hazardous-chemicals.md) — 深圳危化品5项回流、会话与双公示字段、后台权限及本地测试包
+30. [29-kirin990-gbm-compatibility.md](./29-kirin990-gbm-compatibility.md) — 海思990缺失GBM接口的私有库专项测试包、来源与ARM64回归
 
 ## 核心不可破坏原则
 

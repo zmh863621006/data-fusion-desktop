@@ -22,6 +22,8 @@ let shutdownPromise: Promise<void> | undefined;
 let updates: AutomaticUpdateController | undefined;
 const hrssDashboard = new HrssDashboardWindow();
 const legacyWindowsRuntime = process.platform === 'win32' && Number(process.versions.electron?.split('.')[0]) === 22;
+const kirin990Runtime = process.platform === 'linux' && process.arch === 'arm64'
+  && process.env.DATA_FUSION_LINUX_COMPAT_VARIANT === 'kirin990-arm64';
 const profileName = legacyWindowsRuntime ? 'data-fusion-desktop-win7' : 'data-fusion-desktop';
 
 // Keep the existing profile stable even when the displayed product name changes.
@@ -116,6 +118,7 @@ void app.whenReady().then(async () => {
     version: app.getVersion(), installMode, target: updateTarget,
     ...(!updateTarget ? { disabledReason: '当前系统或芯片架构暂不支持在线更新' } : {}),
     ...(legacyWindowsRuntime ? { disabledReason: 'Win7 兼容测试版暂未开放在线更新，请使用通用安装包升级' } : {}),
+    ...(kirin990Runtime ? { disabledReason: '麒麟990兼容测试版请使用对应兼容安装包升级，暂不接收通用ARM64更新' } : {}),
     ...(previousInstall?.status === 'failed' && previousInstall.version !== app.getVersion()
       ? { lastInstallError: updateInstallFailureMessage(previousInstall.code) } : {}),
     settings: () => appRuntime.getSettings(), check: () => appRuntime.checkUpdates(),

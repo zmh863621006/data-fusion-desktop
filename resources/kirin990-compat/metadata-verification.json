@@ -1,0 +1,169 @@
+{
+  "schema": 1,
+  "variant": "kirin990-arm64",
+  "verifiedAt": "2026-11-16T07:23:00.541678+00:00",
+  "trustAnchor": {
+    "fingerprint": "790BC7277767219C42C86F933B4FE6ACC0B21F32",
+    "description": "Ubuntu Archive Automatic Signing Key (2012)",
+    "publicKeyUrl": "https://keyserver.ubuntu.com/pks/lookup?op=get&search=0x790BC7277767219C42C86F933B4FE6ACC0B21F32",
+    "verification": "Cryptographic InRelease signature checked against this pinned primary key; signer identity is pinned independently of HTTPS."
+  },
+  "indexes": [
+    {
+      "suite": "bionic-updates",
+      "inReleaseUrl": "https://ports.ubuntu.com/ubuntu-ports/dists/bionic-updates/InRelease",
+      "inReleaseSha256": "bbdb006374d87aa4f744a7a0db36d6753d0510f8f84caaa375d8aee1abc79366",
+      "inReleaseBytes": 101771,
+      "releaseDate": "Sun, 15 Nov 2026 21:45:00 UTC",
+      "signerFingerprint": "790BC7277767219C42C86F933B4FE6ACC0B21F32",
+      "signatureVerified": true,
+      "signatureAlgorithms": [
+        "SHA512"
+      ],
+      "packagesUrl": "https://ports.ubuntu.com/ubuntu-ports/dists/bionic-updates/main/binary-arm64/Packages.xz",
+      "packagesByHashUrl": "https://ports.ubuntu.com/ubuntu-ports/dists/bionic-updates/main/binary-arm64/by-hash/SHA256/9df126edc1d10d1f241ca4cb9b5217a918bcee2f78e9d4804efc11836c883d2c",
+      "packagesSha256": "9df126edc1d10d1f241ca4cb9b5217a918bcee2f78e9d4804efc11836c883d2c",
+      "packagesBytes": 1879700,
+      "indexHashMatchedSignedRelease": true
+    },
+    {
+      "suite": "bionic",
+      "inReleaseUrl": "https://ports.ubuntu.com/ubuntu-ports/dists/bionic/InRelease",
+      "inReleaseSha256": "690bd875ab5799394af7406f32f2e698c48e772ac367d520f74ec1095662da4d",
+      "inReleaseBytes": 242048,
+      "releaseDate": "Thu, 26 Apr 2018 23:37:48 UTC",
+      "signerFingerprint": "790BC7277767219C42C86F933B4FE6ACC0B21F32",
+      "signatureVerified": true,
+      "signatureAlgorithms": [
+        "SHA512"
+      ],
+      "packagesUrl": "https://ports.ubuntu.com/ubuntu-ports/dists/bionic/main/binary-arm64/Packages.xz",
+      "packagesByHashUrl": "https://ports.ubuntu.com/ubuntu-ports/dists/bionic/main/binary-arm64/by-hash/SHA256/b594c3ae11a0227741779225a0d9d3f3f70704fe6153908aa67e877a27e9467e",
+      "packagesSha256": "b594c3ae11a0227741779225a0d9d3f3f70704fe6153908aa67e877a27e9467e",
+      "packagesBytes": 974764,
+      "indexHashMatchedSignedRelease": true
+    }
+  ],
+  "packages": [
+    {
+      "name": "libgbm1",
+      "version": "20.0.8-0ubuntu1~18.04.1",
+      "architecture": "arm64",
+      "suite": "bionic-updates",
+      "url": "https://ports.ubuntu.com/ubuntu-ports/pool/main/m/mesa/libgbm1_20.0.8-0ubuntu1~18.04.1_arm64.deb",
+      "bytes": 24800,
+      "sha256": "d335a7c879898b4f2fd83045ad344ff1bef33558c5db545467a87788cce61d8d",
+      "packageHashMatchedAuthenticatedIndex": true
+    },
+    {
+      "name": "libdrm2",
+      "version": "2.4.101-2~18.04.1",
+      "architecture": "arm64",
+      "suite": "bionic-updates",
+      "url": "https://ports.ubuntu.com/ubuntu-ports/pool/main/libd/libdrm/libdrm2_2.4.101-2~18.04.1_arm64.deb",
+      "bytes": 28384,
+      "sha256": "36128c58687bf226661c242b4f383fc9f37b67f9d1eb9be6d4291fb702a05776",
+      "packageHashMatchedAuthenticatedIndex": true
+    },
+    {
+      "name": "libexpat1",
+      "version": "2.2.5-3ubuntu0.9",
+      "architecture": "arm64",
+      "suite": "bionic-updates",
+      "url": "https://ports.ubuntu.com/ubuntu-ports/pool/main/e/expat/libexpat1_2.2.5-3ubuntu0.9_arm64.deb",
+      "bytes": 70412,
+      "sha256": "1d0d6b14720dbc17bb44b733d5e9ea0fd615fc9b94cef22a2092f29f53126196",
+      "packageHashMatchedAuthenticatedIndex": true
+    },
+    {
+      "name": "libwayland-server0",
+      "version": "1.16.0-1ubuntu1.1~18.04.4",
+      "architecture": "arm64",
+      "suite": "bionic-updates",
+      "url": "https://ports.ubuntu.com/ubuntu-ports/pool/main/w/wayland/libwayland-server0_1.16.0-1ubuntu1.1~18.04.4_arm64.deb",
+      "bytes": 25612,
+      "sha256": "4c0416ca6dd9637af4ca5dd500786dbc25efbcd08ec3a6a1b27ddf737034acac",
+      "packageHashMatchedAuthenticatedIndex": true
+    },
+    {
+      "name": "libffi6",
+      "version": "3.2.1-8",
+      "architecture": "arm64",
+      "suite": "bionic",
+      "url": "https://ports.ubuntu.com/ubuntu-ports/pool/main/libf/libffi/libffi6_3.2.1-8_arm64.deb",
+      "bytes": 17016,
+      "sha256": "d0f8d2b7613167317ec4f9bf65125a2e13c5f357e5acb5cc1fa9ed488c3c88b0",
+      "packageHashMatchedAuthenticatedIndex": true
+    }
+  ],
+  "elfVerification": {
+    "architecture": "AArch64",
+    "requiredStrongGbmImports": 19,
+    "missingStrongGbmImports": [],
+    "maximumRequiredGlibc": "2.25",
+    "libraries": [
+      {
+        "path": "libgbm.so.1",
+        "soname": "libgbm.so.1",
+        "needed": [
+          "libdrm.so.2",
+          "libwayland-server.so.0",
+          "libdl.so.2",
+          "libm.so.6",
+          "libexpat.so.1",
+          "libpthread.so.0",
+          "libc.so.6",
+          "ld-linux-aarch64.so.1"
+        ],
+        "highestGlibc": "GLIBC_2.17"
+      },
+      {
+        "path": "libdrm.so.2",
+        "soname": "libdrm.so.2",
+        "needed": [
+          "libm.so.6",
+          "libc.so.6",
+          "ld-linux-aarch64.so.1"
+        ],
+        "highestGlibc": "GLIBC_2.17"
+      },
+      {
+        "path": "libexpat.so.1",
+        "soname": "libexpat.so.1",
+        "needed": [
+          "libc.so.6",
+          "ld-linux-aarch64.so.1"
+        ],
+        "highestGlibc": "GLIBC_2.25"
+      },
+      {
+        "path": "libwayland-server.so.0",
+        "soname": "libwayland-server.so.0",
+        "needed": [
+          "libffi.so.6",
+          "libpthread.so.0",
+          "libc.so.6",
+          "ld-linux-aarch64.so.1"
+        ],
+        "highestGlibc": "GLIBC_2.17"
+      },
+      {
+        "path": "libffi.so.6",
+        "soname": "libffi.so.6",
+        "needed": [
+          "libc.so.6",
+          "ld-linux-aarch64.so.1"
+        ],
+        "highestGlibc": "GLIBC_2.17"
+      }
+    ],
+    "systemCLibraryBundled": false
+  },
+  "sourceBuildPerformed": false,
+  "notes": [
+    "These are unchanged official Bionic binary payloads, not a local reimplementation or symbol shim.",
+    "No Focal package or Mesa21 source artifact is included in the delivered library set.",
+    "All five packages include their original copyright notices; sources.json pins their extracted files.",
+    "The observed Kirin990 hardware has not been physically tested by this source verification."
+  ]
+}

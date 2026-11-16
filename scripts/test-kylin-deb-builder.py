@@ -1,6 +1,8 @@
 """Bounded fixture tests for the portable DEB writer and independent verifier."""
 import importlib.util
+import hashlib
 import io
+import json
 import lzma
 import pathlib
 import shutil
@@ -110,6 +112,51 @@ class PortableDebTests(unittest.TestCase):
         path.write_bytes(binary)
         with self.assertRaisesRegex(ValueError, 'ELF architecture'):
             builder.build(self.stage, 'x64', '1.2.3', self.output)
+
+    def stage_kirin_fixture(self):
+        for name in builder.EXECUTABLE_MODES:
+            path = self.stage / name
+            content = bytearray(path.read_bytes())
+            content[18:20] = (183).to_bytes(2, 'little')
+            path.write_bytes(content)
+        native = self.stage / 'opt/data-fusion/data-fusion.bin'
+        (self.stage / 'opt/data-fusion/data-fusion').rename(native)
+        wrapper = self.stage / 'opt/data-fusion/data-fusion'
+        wrapper.write_bytes((builder.PROJECT / 'resources/kirin990-launcher.sh').read_bytes().replace(b'\r\n', b'\n'))
+        private = self.stage / 'opt/data-fusion/resources/compat/kirin990'
+        private.mkdir(parents=True)
+        library = private / 'libgbm.so.1'
+        library.write_bytes(native.read_bytes())
+        sha = lambda path: hashlib.sha256(path.read_bytes()).hexdigest()
+        metadata = {'variant': 'kirin990-arm64', 'architecture': 'arm64', 'nativeExecutable': 'data-fusion.bin',
+                    'nativeSha256': sha(native), 'launcherSha256': sha(wrapper), 'rendererSandbox': True,
+                    'files': [{'path': 'libgbm.so.1', 'sha256': sha(library), 'kind': 'library'}]}
+        (private / 'provenance.json').write_text(json.dumps(metadata), encoding='utf-8')
+        (self.stage / 'DEBIAN/control').write_text('Package: data-fusion-desktop\nVersion: 1.2.3\nArchitecture: arm64\n', encoding='utf-8')
+        return private
+
+    def test_kirin_variant_verifies_wrapper_native_modes_private_bytes_and_arm64(self):
+        self.stage_kirin_fixture()
+        builder.build(self.stage, 'arm64', '1.2.3', self.output, 'kirin990')
+        result = verifier.verify(self.output, self.stage, 'arm64', '1.2.3', 'kirin990')
+        self.assertTrue(result['allPayloadBytesMatched'])
+        self.assertEqual(result['compatibility'], 'kirin990')
+        self.assertFalse(result['targetExecuted'])
+
+    def test_kirin_variant_rejects_changed_private_library_before_packaging(self):
+        private = self.stage_kirin_fixture()
+        (private / 'libgbm.so.1').write_bytes(b'changed library')
+        with self.assertRaisesRegex(ValueError, 'library digest'):
+            builder.build(self.stage, 'arm64', '1.2.3', self.output, 'kirin990')
+        self.assertFalse(self.output.exists())
+
+    def test_kirin_wrapper_cannot_be_built_or_verified_as_normal_arm64(self):
+        self.stage_kirin_fixture()
+        with self.assertRaisesRegex(ValueError, 'ELF architecture'):
+            builder.build(self.stage, 'arm64', '1.2.3', self.output)
+        with self.assertRaises(ValueError):
+            builder.build(self.stage, 'x64', '1.2.3', self.output, 'kirin990')
+        self.assertFalse(self.output.exists())
 
     def test_does_not_include_maintainer_scripts(self):
         (self.stage / 'DEBIAN/postinst').write_text('must never run', encoding='utf-8')

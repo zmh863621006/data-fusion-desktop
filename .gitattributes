@@ -1,0 +1,3 @@
+resources/kirin990-launcher.sh text eol=lf
+# Keep upstream bytes intact: the source manifest checks libraries and notices.
+resources/kirin990-compat/arm64/* -text

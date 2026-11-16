@@ -108,7 +108,7 @@ def check_owner(member, mode):
         raise ValueError('Incorrect archive owner, permission or timestamp: ' + member.name)
 
 
-def verify(package, stage, arch, version):
+def verify(package, stage, arch, version, compatibility=None):
     stage = stage.resolve()
     ar = ar_contents(package)
     for name in ('control.tar.xz', 'data.tar.xz'):
@@ -154,6 +154,30 @@ def verify(package, stage, arch, version):
                 pending.append(path)
     executable_modes = {'opt/data-fusion/data-fusion': 0o755, 'opt/data-fusion/chrome_crashpad_handler': 0o755,
                         'opt/data-fusion/chrome-sandbox': 0o4755}
+    elf_names = set(executable_modes)
+    if compatibility is not None:
+        if compatibility != 'kirin990' or arch != 'arm64':
+            raise ValueError('Kirin990 variant must use ARM64')
+        private = stage / 'opt/data-fusion/resources/compat/kirin990'
+        metadata = json.loads((private / 'provenance.json').read_text(encoding='utf-8'))
+        if metadata.get('variant') != 'kirin990-arm64' or metadata.get('architecture') != 'arm64' or metadata.get('nativeExecutable') != 'data-fusion.bin' or metadata.get('rendererSandbox') is not True:
+            raise ValueError('Invalid compatibility metadata')
+        wrapper = stage / 'opt/data-fusion/data-fusion'
+        reviewed = pathlib.Path(__file__).resolve().parent.parent / 'resources/kirin990-launcher.sh'
+        if wrapper.read_bytes() != reviewed.read_bytes().replace(b'\r\n', b'\n') or digest_file(wrapper)[0] != metadata.get('launcherSha256'):
+            raise ValueError('Compatibility launcher differs from reviewed source')
+        if digest_file(stage / 'opt/data-fusion/data-fusion.bin')[0] != metadata.get('nativeSha256'):
+            raise ValueError('Compatibility native executable changed')
+        executable_modes['opt/data-fusion/data-fusion.bin'] = 0o755
+        elf_names = set(executable_modes) - {'opt/data-fusion/data-fusion'}
+        if not any(entry.get('path') == 'libgbm.so.1' for entry in metadata.get('files', [])):
+            raise ValueError('Private GBM is absent')
+        for entry in metadata['files']:
+            name = entry.get('path', '')
+            if safe_name(name) != name or '/' in name or digest_file(private / name)[0] != entry.get('sha256'):
+                raise ValueError('Private compatibility file changed')
+            if entry.get('kind') == 'library':
+                elf_names.add('opt/data-fusion/resources/compat/kirin990/' + name)
     seen, files, asar_hash = set(), set(), None
     with tarfile.open(fileobj=io.BytesIO(ar['data.tar.xz']), mode='r|xz',
                       encoding='utf-8', errors='surrogateescape') as archive:
@@ -185,7 +209,7 @@ def verify(package, stage, arch, version):
             source_sha, source_md5 = digest_file(source)
             if sha.hexdigest() != source_sha or md5.hexdigest() != source_md5 or md5sums.get(name) != source_md5:
                 raise ValueError('Payload or md5sums differ from staged bytes: ' + name)
-            if name in executable_modes and (prefix[:6] != b'\x7fELF\x02\x01' or int.from_bytes(prefix[18:20], 'little') != (62 if arch == 'x64' else 183)):
+            if name in elf_names and (prefix[:6] != b'\x7fELF\x02\x01' or int.from_bytes(prefix[18:20], 'little') != (62 if arch == 'x64' else 183)):
                 raise ValueError('ELF architecture mismatch')
             if name == 'opt/data-fusion/resources/app.asar':
                 asar_hash = source_sha
@@ -195,7 +219,7 @@ def verify(package, stage, arch, version):
             'sha256': digest_file(package)[0], 'asarSha256': asar_hash, 'entries': len(seen),
             'allPayloadBytesMatched': True, 'permissionsVerified': True, 'rootOwnershipVerified': True,
             'gnuTarVerified': True, 'paxHeadersAbsent': True,
-            'targetExecuted': False}
+            'compatibility': compatibility, 'targetExecuted': False}
 
 
 if __name__ == '__main__':
@@ -204,5 +228,6 @@ if __name__ == '__main__':
     parser.add_argument('--stage', required=True, type=pathlib.Path)
     parser.add_argument('--arch', required=True, choices=['x64', 'arm64'])
     parser.add_argument('--version', required=True)
+    parser.add_argument('--compatibility', choices=['kirin990'])
     args = parser.parse_args()
-    print(json.dumps(verify(args.package, args.stage, args.arch, args.version), ensure_ascii=False))
+    print(json.dumps(verify(args.package, args.stage, args.arch, args.version, args.compatibility), ensure_ascii=False))

@@ -1,0 +1,122 @@
+{
+  "schema": 1,
+  "variant": "kirin990-arm64",
+  "architecture": "arm64",
+  "files": [
+    {
+      "kind": "library",
+      "path": "libgbm.so.1",
+      "sha256": "0c40e83443b61bd1eb33367f02255ff289f07d22086ae6ea9d7f231f541473c7",
+      "sourceUrl": "https://ports.ubuntu.com/ubuntu-ports/pool/main/m/mesa/libgbm1_20.0.8-0ubuntu1~18.04.1_arm64.deb",
+      "packageSha256": "d335a7c879898b4f2fd83045ad344ff1bef33558c5db545467a87788cce61d8d",
+      "packageName": "libgbm1",
+      "packageVersion": "20.0.8-0ubuntu1~18.04.1",
+      "license": "MIT and upstream/Debian package notices (see COPYRIGHT.libgbm1)"
+    },
+    {
+      "kind": "license",
+      "path": "COPYRIGHT.libgbm1",
+      "sha256": "30c36421275bf40e318d5d3e8662db6e332f97f047fa963bdb44e28ef9112232",
+      "sourceUrl": "https://ports.ubuntu.com/ubuntu-ports/pool/main/m/mesa/libgbm1_20.0.8-0ubuntu1~18.04.1_arm64.deb",
+      "packageSha256": "d335a7c879898b4f2fd83045ad344ff1bef33558c5db545467a87788cce61d8d",
+      "packageName": "libgbm1",
+      "packageVersion": "20.0.8-0ubuntu1~18.04.1",
+      "license": "MIT and upstream/Debian package notices (see COPYRIGHT.libgbm1)"
+    },
+    {
+      "kind": "library",
+      "path": "libdrm.so.2",
+      "sha256": "3172504008446d5fad455e317c79c458eacf6e800a76e459ead72212bca0eb2d",
+      "sourceUrl": "https://ports.ubuntu.com/ubuntu-ports/pool/main/libd/libdrm/libdrm2_2.4.101-2~18.04.1_arm64.deb",
+      "packageSha256": "36128c58687bf226661c242b4f383fc9f37b67f9d1eb9be6d4291fb702a05776",
+      "packageName": "libdrm2",
+      "packageVersion": "2.4.101-2~18.04.1",
+      "license": "MIT and upstream/Debian package notices (see COPYRIGHT.libdrm2)"
+    },
+    {
+      "kind": "license",
+      "path": "COPYRIGHT.libdrm2",
+      "sha256": "512c9a57fd8b449aa157351da9df07bf8e19f767e496a72205a4020268ddb2e0",
+      "sourceUrl": "https://ports.ubuntu.com/ubuntu-ports/pool/main/libd/libdrm/libdrm2_2.4.101-2~18.04.1_arm64.deb",
+      "packageSha256": "36128c58687bf226661c242b4f383fc9f37b67f9d1eb9be6d4291fb702a05776",
+      "packageName": "libdrm2",
+      "packageVersion": "2.4.101-2~18.04.1",
+      "license": "MIT and upstream/Debian package notices (see COPYRIGHT.libdrm2)"
+    },
+    {
+      "kind": "library",
+      "path": "libexpat.so.1",
+      "sha256": "ded87e196b89bbbb3194a022485348d3fd3195d091a3c326eea52ea5eac755df",
+      "sourceUrl": "https://ports.ubuntu.com/ubuntu-ports/pool/main/e/expat/libexpat1_2.2.5-3ubuntu0.9_arm64.deb",
+      "packageSha256": "1d0d6b14720dbc17bb44b733d5e9ea0fd615fc9b94cef22a2092f29f53126196",
+      "packageName": "libexpat1",
+      "packageVersion": "2.2.5-3ubuntu0.9",
+      "license": "MIT and upstream/Debian package notices (see COPYRIGHT.libexpat1)"
+    },
+    {
+      "kind": "license",
+      "path": "COPYRIGHT.libexpat1",
+      "sha256": "15721756f0bdfd8fb83d3ae9fd9f76ceb3285b0ecacb0532a547e9e2f324c35c",
+      "sourceUrl": "https://ports.ubuntu.com/ubuntu-ports/pool/main/e/expat/libexpat1_2.2.5-3ubuntu0.9_arm64.deb",
+      "packageSha256": "1d0d6b14720dbc17bb44b733d5e9ea0fd615fc9b94cef22a2092f29f53126196",
+      "packageName": "libexpat1",
+      "packageVersion": "2.2.5-3ubuntu0.9",
+      "license": "MIT and upstream/Debian package notices (see COPYRIGHT.libexpat1)"
+    },
+    {
+      "kind": "library",
+      "path": "libwayland-server.so.0",
+      "sha256": "a2562454cef3d0fb4a3974a31663054420ff34016ce70f6c50c33a3b3563008a",
+      "sourceUrl": "https://ports.ubuntu.com/ubuntu-ports/pool/main/w/wayland/libwayland-server0_1.16.0-1ubuntu1.1~18.04.4_arm64.deb",
+      "packageSha256": "4c0416ca6dd9637af4ca5dd500786dbc25efbcd08ec3a6a1b27ddf737034acac",
+      "packageName": "libwayland-server0",
+      "packageVersion": "1.16.0-1ubuntu1.1~18.04.4",
+      "license": "MIT and upstream/Debian package notices (see COPYRIGHT.libwayland-server0)"
+    },
+    {
+      "kind": "license",
+      "path": "COPYRIGHT.libwayland-server0",
+      "sha256": "3a943debedeac62002ce65da7a9b647875612c3d45840f0b001ae27fb76522a6",
+      "sourceUrl": "https://ports.ubuntu.com/ubuntu-ports/pool/main/w/wayland/libwayland-server0_1.16.0-1ubuntu1.1~18.04.4_arm64.deb",
+      "packageSha256": "4c0416ca6dd9637af4ca5dd500786dbc25efbcd08ec3a6a1b27ddf737034acac",
+      "packageName": "libwayland-server0",
+      "packageVersion": "1.16.0-1ubuntu1.1~18.04.4",
+      "license": "MIT and upstream/Debian package notices (see COPYRIGHT.libwayland-server0)"
+    },
+    {
+      "kind": "library",
+      "path": "libffi.so.6",
+      "sha256": "4fca2d72d71008423fdc880c853ab4e8753946322960c265db199323aeb72e25",
+      "sourceUrl": "https://ports.ubuntu.com/ubuntu-ports/pool/main/libf/libffi/libffi6_3.2.1-8_arm64.deb",
+      "packageSha256": "d0f8d2b7613167317ec4f9bf65125a2e13c5f357e5acb5cc1fa9ed488c3c88b0",
+      "packageName": "libffi6",
+      "packageVersion": "3.2.1-8",
+      "license": "MIT and upstream/Debian package notices (see COPYRIGHT.libffi6)"
+    },
+    {
+      "kind": "license",
+      "path": "COPYRIGHT.libffi6",
+      "sha256": "7258c8acc378030d8dbe1fcdf394e915769fa31dcbaf3d2991d9a79891f3bcdc",
+      "sourceUrl": "https://ports.ubuntu.com/ubuntu-ports/pool/main/libf/libffi/libffi6_3.2.1-8_arm64.deb",
+      "packageSha256": "d0f8d2b7613167317ec4f9bf65125a2e13c5f357e5acb5cc1fa9ed488c3c88b0",
+      "packageName": "libffi6",
+      "packageVersion": "3.2.1-8",
+      "license": "MIT and upstream/Debian package notices (see COPYRIGHT.libffi6)"
+    }
+  ],
+  "verification": {
+    "source": "Ubuntu official signed bionic/bionic-updates ARM64 indexes",
+    "archiveKeyFingerprints": [
+      "790BC7277767219C42C86F933B4FE6ACC0B21F32"
+    ],
+    "packageHashesVerified": true,
+    "maximumRequiredGlibc": "2.25",
+    "nativeHardwareTested": false,
+    "systemCLibraryBundled": false
+  },
+  "notes": [
+    "Application-private genuine upstream libraries; system graphics libraries are not replaced.",
+    "Optimized for software X11 rendering in the Kirin990 compatibility launcher.",
+    "Bionic Mesa20 satisfies all 19 strong GBM imports; gbm_bo_get_fd_for_plane is optional text-only in the tested Electron runtime."
+  ]
+}

@@ -47,6 +47,40 @@ def file_hash(path, algorithm='sha256'):
     return digest.hexdigest()
 
 
+def compatibility_modes(stage, arch, compatibility):
+    modes = dict(EXECUTABLE_MODES)
+    if compatibility is None:
+        return modes, set(modes)
+    if compatibility != 'kirin990' or arch != 'arm64':
+        raise ValueError('Kirin990 compatibility requires ARM64')
+    private = stage / 'opt/data-fusion/resources/compat/kirin990'
+    metadata = json.loads((private / 'provenance.json').read_text(encoding='utf-8'))
+    if metadata.get('variant') != 'kirin990-arm64' or metadata.get('architecture') != 'arm64' or metadata.get('nativeExecutable') != 'data-fusion.bin':
+        raise ValueError('Invalid Kirin990 compatibility manifest')
+    launcher = stage / 'opt/data-fusion/data-fusion'
+    expected = (PROJECT / 'resources/kirin990-launcher.sh').read_bytes().replace(b'\r\n', b'\n')
+    if launcher.read_bytes() != expected or file_hash(launcher) != metadata.get('launcherSha256'):
+        raise ValueError('Kirin990 launcher bytes do not match the reviewed launcher')
+    if file_hash(stage / 'opt/data-fusion/data-fusion.bin') != metadata.get('nativeSha256'):
+        raise ValueError('Kirin990 native executable changed')
+    modes['opt/data-fusion/data-fusion.bin'] = 0o755
+    elf_names = set(modes) - {'opt/data-fusion/data-fusion'}
+    files = metadata.get('files')
+    if not isinstance(files, list) or not files or not any(entry.get('path') == 'libgbm.so.1' for entry in files):
+        raise ValueError('Missing Kirin990 private library inventory')
+    for entry in files:
+        name = entry.get('path', '')
+        if not re.fullmatch(r'[A-Za-z0-9_.+-]+', name):
+            raise ValueError('Invalid private library path')
+        item = private / name
+        regular_kind(item)
+        if file_hash(item) != entry.get('sha256'):
+            raise ValueError('Private library digest changed')
+        if entry.get('kind') == 'library':
+            elf_names.add('opt/data-fusion/resources/compat/kirin990/' + name)
+    return modes, elf_names
+
+
 def parse_control(content):
     fields = {}
     for line in content.decode('utf-8').splitlines():
@@ -130,7 +164,7 @@ def ar_member(output, name, source, size):
         output.write(b'\n')
 
 
-def build(stage, arch, version, destination):
+def build(stage, arch, version, destination, compatibility=None):
     if arch not in ('x64', 'arm64') or not re.fullmatch(r'(?:0|[1-9][0-9]*)\.(?:0|[1-9][0-9]*)\.(?:0|[1-9][0-9]*)', version):
         raise ValueError('Invalid version or architecture')
     regular_kind(stage)
@@ -150,12 +184,13 @@ def build(stage, arch, version, destination):
     expected_arch = 'amd64' if arch == 'x64' else 'arm64'
     if fields.get('package') != 'data-fusion-desktop' or fields.get('version') != version or fields.get('architecture') != expected_arch:
         raise ValueError('Control package/version/architecture does not match the build target')
+    modes, elf_names = compatibility_modes(stage, arch, compatibility)
     entries = inventory(stage)
     names = {entry[1] for entry in entries}
-    for required in list(EXECUTABLE_MODES) + ['opt/data-fusion/resources/app.asar']:
+    for required in list(modes) + ['opt/data-fusion/resources/app.asar']:
         if required not in names:
             raise ValueError('Missing required staged resource: ' + required)
-    for name in EXECUTABLE_MODES:
+    for name in elf_names:
         with (stage / name).open('rb') as executable:
             header = executable.read(20)
         if len(header) != 20 or header[:4] != b'\x7fELF' or header[4:6] != b'\x02\x01' or int.from_bytes(header[18:20], 'little') != (62 if arch == 'x64' else 183):
@@ -187,7 +222,7 @@ def build(stage, arch, version, destination):
                     else:
                         with path.open('rb') as source:
                             reader = CheckedReader(source)
-                            archive.addfile(tar_info(name, original.st_size, EXECUTABLE_MODES.get(name, 0o644)), reader)
+                            archive.addfile(tar_info(name, original.st_size, modes.get(name, 0o644)), reader)
                             if reader.digest.hexdigest() != digest:
                                 raise ValueError('Staged bytes changed during assembly: ' + name)
             xz_gnu_tar(data_tar, write_data)
@@ -207,13 +242,14 @@ def build(stage, arch, version, destination):
             partial.unlink()
     return {'file': str(destination), 'stage': str(stage), 'version': version, 'arch': arch,
             'bytes': destination.stat().st_size, 'sha256': file_hash(destination), 'dataEntries': len(entries),
-            'asarSha256': file_hash(stage / 'opt/data-fusion/resources/app.asar'), 'targetExecuted': False}
+            'asarSha256': file_hash(stage / 'opt/data-fusion/resources/app.asar'), 'compatibility': compatibility, 'targetExecuted': False}
 
 
 if __name__ == '__main__':
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--arch', required=True, choices=['x64', 'arm64'])
     parser.add_argument('--stage', type=pathlib.Path)
+    parser.add_argument('--compatibility', choices=['kirin990'])
     args = parser.parse_args()
     package_version = json.loads((PROJECT / 'package.json').read_text(encoding='utf-8'))['version']
     deb_arch = 'amd64' if args.arch == 'x64' else 'arm64'
@@ -223,6 +259,7 @@ if __name__ == '__main__':
         if not candidates:
             parser.error('No matching staged package; run scripts/stage-kylin-deb.mjs first')
         stage = candidates[-1]
-    destination = PROJECT / 'release' / package_version / 'kylin' / ('数据融合助手-麒麟版-%s-%s.deb' % (package_version, args.arch))
-    result = build(stage, args.arch, package_version, destination)
+    label = '麒麟测试版' if args.compatibility else '麒麟版'
+    destination = PROJECT / 'release' / package_version / 'kylin' / ('数据融合助手-%s-%s-%s.deb' % (label, package_version, args.arch))
+    result = build(stage, args.arch, package_version, destination, args.compatibility)
     print(json.dumps(result, ensure_ascii=False))
