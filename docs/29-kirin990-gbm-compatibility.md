@@ -45,3 +45,5 @@ SHA256：`ac1023cf34a946c7ade634d6ece0dbd5c2ca351d4683791868a4607ea55a2f51`。
 现场首要证据是 `dpkg-query -W -f='${Status} ${Version}\n' data-fusion-desktop`：应确认 `install ok installed 1.0.25`，再结合当次系统安装服务日志判断未收到完成通知、状态复核等待或实际配置/触发器未结束。不能伪造系统完成通知，也不应强杀包管理器、删除锁文件或关闭软件来源校验。
 
 在独立ARM64麒麟V10 SP1 2303 Live模拟环境完成原1.0.25 DEB的实际图形安装：`kylin-installer 2.0.2.1-0k1.16`、`kylin-system-updater 2.0.5.16-0k1.20`。首次从串口启动安装器，未通过桌面会话认证，未进入安装事务；改为从普通用户的真实桌面会话打开安装器，通过正常单次授权后，07:08:19开始、07:09:31显示绿色“安装成功”，总计约72秒。95%阶段约55秒是TCG模拟下的正常解压，不能据此当作假死。捕获到 `InstalldebFinished(true, ...)` 和100%完成通知；`dpkg-query` 为 `install ok installed 1.0.25`，`dpkg --audit` 无输出。未改安全策略、软件来源校验或系统库，没有复现用户实体机的无期限等待。该结果不证明海思990实体机上的安装器问题已经解决，仍需现场证据区分。
+
+从最终DEB实际安装后的 `/opt/data-fusion/data-fusion` 以普通用户UID999启动，显示完整激活页，Renderer带 `--enable-sandbox` 且Seccomp2；`dpkg --verify` 和 `dpkg --audit` 均退出0且无输出。没有导入真实授权或进行业务查询。安装成功截图、启动截图、D-Bus信号和系统安装日志归档在 `private/deploy/kylin-installer-20261117/`。
