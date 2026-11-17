@@ -52,6 +52,26 @@ server {
         proxy_send_timeout 600s;
         proxy_pass http://127.0.0.1:8787;
     }
+    location = /api/admin/business-releases/upload {
+        allow 127.0.0.1;
+        # allow 203.0.113.10;
+        deny all;
+        limit_req zone=df_api burst=5 nodelay;
+        client_max_body_size 256m;
+        client_body_timeout 60s;
+        proxy_request_buffering off;
+        proxy_read_timeout 600s;
+        proxy_send_timeout 600s;
+        proxy_pass http://127.0.0.1:8787;
+    }
+    location /api/admin/business-releases/ {
+        allow 127.0.0.1;
+        # allow 203.0.113.10;
+        deny all;
+        limit_req zone=df_api burst=5 nodelay;
+        proxy_read_timeout 180s;
+        proxy_pass http://127.0.0.1:8787;
+    }
     location /api/releases/ {
         limit_req zone=df_api burst=60 nodelay;
         proxy_buffering off;

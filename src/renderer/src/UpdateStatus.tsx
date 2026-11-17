@@ -30,7 +30,7 @@ export function UpdateBanner({ state, onOpen }: { state: UpdatePresentationState
   const percent = updatePercent(state.progress?.percent);
   return <div className="update-banner" role="status"><span>{state.status === 'downloading'
     ? `正在后台下载 ${state.version ?? '新版本'}${percent !== undefined ? ` · ${percent}%` : ''}，不影响当前工作`
-    : state.status === 'ready' ? state.installMode === 'system' ? `新版本 ${state.version ?? ''} 已准备好，可打开系统安装器确认安装` : state.installMode === 'installed'
+    : state.status === 'ready' ? state.installMode === 'system' ? `新版本 ${state.version ?? ''} 已准备好，可打开系统安装器确认安装` : state.installMode === 'installed' || state.installMode === 'startup'
       ? `新版本 ${state.version ?? ''} 已准备好，保存工作后可重启更新` : `新版本 ${state.version ?? ''} 已下载，当前运行方式需手动安装正式版`
       : `发现新版本 ${state.version ?? ''}`}</span>
     <button onClick={onOpen}>查看更新</button></div>;
@@ -47,7 +47,7 @@ export function UpdateStatus({ state, checking, message, onCheck, onInstall }: {
   return <section className="panel settings-card update-settings" aria-busy={busy}>
     <h3>版本更新</h3>
     <div className="settings-update-row"><div><strong>数据融合助手{state ? ` · ${state.currentVersion}` : ''}</strong>
-      <p>{state?.installMode === 'system' ? '新版本自动检查并后台下载，保存工作后在系统安装器中确认安装。' : '新版本自动检查并后台下载，保存工作后重启完成更新。'}</p></div>
+      <p>{state?.kind === 'business' ? `启动前完成业务更新；基础环境 ${state.shellVersion ?? ''}。` : state?.installMode === 'system' ? '新版本自动检查并后台下载，保存工作后在系统安装器中确认安装。' : '新版本自动检查并后台下载，保存工作后重启完成更新。'}</p></div>
       <div className="button-row"><button className="secondary" disabled={busy} onClick={onCheck}>{checkLabel}</button>
         {state?.status === 'ready' && state.installMode !== 'manual' && <button className="primary" disabled={busy} onClick={onInstall}>{state.installMode === 'system' ? '打开系统安装器' : '重启并更新'} {state.version}</button>}</div>
     </div>

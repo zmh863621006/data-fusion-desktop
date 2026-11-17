@@ -26,6 +26,8 @@
     "preview": "electron-vite preview",
     "typecheck": "tsc --noEmit -p tsconfig.json",
     "test": "vitest run",
+    "test:packaging": "node --test scripts/business-updater.test.cjs scripts/business-package.test.mjs scripts/stage-kirin990-compat.test.mjs",
+    "test:startup:native": "node scripts/test-business-startup-native.mjs && node scripts/test-business-startup-native.mjs --legacy",
     "test:oversize-v3": "esbuild scripts/smoke-oversize-v3.ts --bundle --platform=node --format=cjs --external:electron --outfile=.tmp/smoke-oversize-v3.cjs && node scripts/run-ui-smoke.mjs oversize",
     "test:government-menu": "npm run build && esbuild scripts/smoke-government-menu.ts --bundle --platform=node --format=cjs --external:electron --loader:.sql=text --outfile=.tmp/smoke-government-menu.cjs && electron .tmp/smoke-government-menu.cjs",
     "test:health-tool": "npm run build && esbuild scripts/smoke-health-tool.ts --bundle --platform=node --format=cjs --external:electron --loader:.sql=text --outfile=.tmp/smoke-health-tool.cjs && electron .tmp/smoke-health-tool.cjs",

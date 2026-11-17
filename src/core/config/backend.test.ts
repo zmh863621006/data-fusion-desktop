@@ -20,4 +20,15 @@ describe('cloud backend and independently licensed tools', () => {
     expect(() => assertToolLicensed({ ...grant, allowedTools: [] }, 'health-publicity')).toThrow('LICENSE_TOOL_DENIED');
     expect(() => assertToolLicensed({ ...grant, expiresAt: 1 }, 'health-publicity')).toThrow('LICENSE_EXPIRED');
   });
+  it('migrates every managed backend service from verified business metadata while preserving explicit custom endpoints', () => {
+    const managed = { origin: 'https://new-backend.example.test:9443', revision: 2 };
+    const value = backendConfiguration({}, managed);
+    expect(value.origin).toBe(managed.origin);
+    for (const key of ['activationUrl', 'statusUrl', 'updateUrl', 'enterpriseUrl'] as const) expect(value[key]).toMatch(/^https:\/\/new-backend\.example\.test:9443\/api\//);
+    expect(backendConfiguration({ DATA_FUSION_ACTIVATION_URL: 'https://custom.example.test/activate' }, managed).activationUrl).toBe('https://custom.example.test/activate');
+    for (const origin of ['http://new.example.test', 'https://user:password@new.example.test', 'https://new.example.test/path', 'https://new.example.test/']) {
+      expect(() => backendConfiguration({}, { origin, revision: 2 })).toThrow();
+    }
+    expect(() => backendConfiguration({}, { origin: managed.origin, revision: 0 })).toThrow();
+  });
 });

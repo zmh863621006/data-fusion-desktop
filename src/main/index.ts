@@ -13,13 +13,17 @@ import { applicationExportDirectory } from './platform-paths';
 import { configureLinuxSecretStorage } from './secure-storage';
 import { runtimeUpdateTarget } from '../core/updater/service';
 import { prepareLinuxUpdate } from './linux-update-installer';
+import { businessBootstrapContext } from './business-bootstrap-context';
+import { StartupBusinessUpdates } from './startup-business-updates';
 
 configureLinuxSecretStorage(app.commandLine);
 
 let mainWindow: BrowserWindow | null = null;
 let shutdownComplete = false;
 let shutdownPromise: Promise<void> | undefined;
-let updates: AutomaticUpdateController | undefined;
+let updates: AutomaticUpdateController | StartupBusinessUpdates | undefined;
+const businessBootstrap = businessBootstrapContext();
+const businessVersion = businessBootstrap?.version ?? app.getVersion();
 const hrssDashboard = new HrssDashboardWindow();
 const legacyWindowsRuntime = process.platform === 'win32' && Number(process.versions.electron?.split('.')[0]) === 22;
 const kirin990Runtime = process.platform === 'linux' && process.arch === 'arm64'
@@ -33,7 +37,7 @@ const profilePath = profileArgument ? resolve(profileArgument) : join(app.getPat
 mkdirSync(profilePath, { recursive: true });
 app.setPath('userData', profilePath);
 if (process.platform === 'win32') app.setAppUserModelId('cn.zzkj.datafusion.desktop');
-const primaryInstance = app.requestSingleInstanceLock();
+const primaryInstance = businessBootstrap?.primaryInstance ?? app.requestSingleInstanceLock();
 
 function quitSafely(): void {
   if (shutdownPromise) return;
@@ -46,6 +50,7 @@ function quitSafely(): void {
 }
 
 function createMainWindow(): void {
+  let businessPageFailed = false;
   mainWindow = new BrowserWindow({
     width: 1440,
     height: 900,
@@ -71,7 +76,10 @@ function createMainWindow(): void {
     if (currentUrl && url !== currentUrl) event.preventDefault();
   });
 
-  mainWindow.once('ready-to-show', () => mainWindow?.show());
+  mainWindow.once('ready-to-show', () => { if (!businessPageFailed) { mainWindow?.show(); businessBootstrap?.ready(); } });
+  mainWindow.webContents.once('did-fail-load', (_event, code, _description, _url, isMainFrame) => {
+    if (isMainFrame && code !== -3 && businessBootstrap) { businessPageFailed = true; mainWindow?.hide(); businessBootstrap.failed('BUSINESS_PAGE_LOAD_FAILED'); }
+  });
   mainWindow.on('close', (event) => {
     if (!shutdownComplete && updates?.snapshot().status === 'installing') { event.preventDefault(); return; }
     if (!shutdownComplete) { event.preventDefault(); quitSafely(); }
@@ -104,17 +112,33 @@ app.on('second-instance', () => {
 
 void app.whenReady().then(async () => {
   const userDataPath = app.getPath('userData');
-  operationalLog.initialize(userDataPath, app.getVersion());
+  operationalLog.initialize(userDataPath, businessVersion);
   operationalLog.installConsoleCapture();
   const exportDirectory = applicationExportDirectory({ platform: process.platform, packaged: app.isPackaged,
     executablePath: app.getPath('exe'), appPath: app.getAppPath(), documentsPath: app.getPath('documents') });
-  await appRuntime.initialize(userDataPath, !app.isPackaged, app.getVersion(), exportDirectory);
+  await appRuntime.initialize(userDataPath, !app.isPackaged, businessVersion, exportDirectory);
   const installDirectory = dirname(app.getPath('exe'));
   const updateTarget = runtimeUpdateTarget(process.platform, process.arch);
   const installMode = app.isPackaged && process.platform === 'linux' && updateTarget ? 'system' : app.isPackaged && process.platform === 'win32'
     && ['Uninstall DataFusion.exe', 'Uninstall 数据融合助手.exe'].some(name => existsSync(join(installDirectory, name))) ? 'installed' : 'manual';
   const previousInstall = process.platform === 'win32' ? await readUpdateInstallResult(userDataPath) : null;
-  updates = new AutomaticUpdateController({
+  updates = businessBootstrap ? new StartupBusinessUpdates({
+    context: businessBootstrap,
+    busy: () => appRuntime.updateBusy(),
+    changed: state => { if (mainWindow && !mainWindow.isDestroyed()) mainWindow.webContents.send(IPC_CHANNELS.updatesChanged, state); },
+    restart: async () => {
+      appRuntime.beginUpdateInstallation();
+      let saving = false;
+      try {
+        await updates?.stop(); saving = true; await appRuntime.shutdown();
+        app.relaunch(); shutdownComplete = true; app.quit();
+      } catch (error) {
+        appRuntime.cancelUpdateInstallation();
+        if (saving) { app.relaunch(); shutdownComplete = true; app.quit(); }
+        throw error;
+      }
+    },
+  }) : new AutomaticUpdateController({
     version: app.getVersion(), installMode, target: updateTarget,
     ...(!updateTarget ? { disabledReason: '当前系统或芯片架构暂不支持在线更新' } : {}),
     ...(legacyWindowsRuntime ? { disabledReason: 'Win7 兼容测试版暂未开放在线更新，请使用通用安装包升级' } : {}),
@@ -169,7 +193,8 @@ void app.whenReady().then(async () => {
   });
 }).catch((error: unknown) => {
   console.error('应用初始化失败', error);
-  app.quit();
+  if (businessBootstrap) businessBootstrap.failed('BUSINESS_START_FAILED');
+  else app.quit();
 });
 
 app.on('window-all-closed', () => {

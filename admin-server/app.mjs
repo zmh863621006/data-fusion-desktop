@@ -6,6 +6,7 @@ import { retireRememberedLogins } from './remember-login.mjs';
 import { prepareLicenseScope } from './license-scope.mjs';
 import { createEnterpriseStore, aliyunProvider } from './enterprises.mjs';
 import { createUpdateReleases } from './update-releases.mjs';
+import { createBusinessReleases } from './business-releases.mjs';
 import { releaseTarget, RELEASE_VERSION_PATTERN } from './update-filenames.mjs';
 import { establishmentImporterFromEnv } from './establishment-oss-import.mjs';
 import { createReadStream, existsSync, mkdirSync, readFileSync, statSync } from 'node:fs';
@@ -264,9 +265,17 @@ const updateReleases = createUpdateReleases(database, {
   ...(options.updateMaxBytes ? { maxBytes: options.updateMaxBytes } : {}),
   ...(options.uploadTimeoutMs ? { uploadTimeoutMs: options.uploadTimeoutMs } : {}),
 });
+const businessReleases = createBusinessReleases(database, {
+  directory: options.businessReleaseDirectory ?? process.env.ADMIN_BUSINESS_UPDATE_DIRECTORY ?? (dataPath === ':memory:' ? undefined : join(dirname(dataPath), 'business-releases')),
+  publicOrigin: options.updatePublicOrigin ?? process.env.ADMIN_UPDATE_PUBLIC_ORIGIN ?? publicOrigin,
+  privateKey, transaction, audit, authorize: currentUser,
+  ...(options.businessOssStorage ? { ossStorage: options.businessOssStorage } : {}),
+  ...(options.uploadTimeoutMs ? { uploadTimeoutMs: options.uploadTimeoutMs } : {}),
+});
 async function api(request, response, url) {
   if (request.method === 'GET' && url.pathname === '/api/health') return json(response,200,{status:'ok'});
   if (url.pathname.startsWith('/api/releases/') && await updateReleases.serve(request, response, url)) return;
+  if (url.pathname.startsWith('/api/business-releases/') && await businessReleases.serve(request, response, url)) return;
   if (request.method === 'GET' && url.pathname === '/api/admin/captcha') return json(response, 200, security.captcha(request, response));
   if (url.pathname === '/api/admin/enterprises' || url.pathname.startsWith('/api/admin/enterprises/')) {
     const user = requireAdmin(request, response); if (!user) return;
@@ -568,6 +577,26 @@ async function api(request, response, url) {
     audit(user, 'license.revoked', 'license', licenseMatch[1]);
     return json(response, 200, { ok: true });
   }
+  if (request.method === 'GET' && url.pathname === '/api/admin/business-releases') {
+    const user = requireAdmin(request, response); if (!user) return;
+    return json(response, 200, businessReleases.list());
+  }
+  if (request.method === 'POST' && url.pathname === '/api/admin/business-releases/upload') {
+    const user = requireAdmin(request, response); if (!user) return;
+    if (user.role !== 'admin') return json(response, 403, { error: '仅超级管理员可上传业务更新包' });
+    security.limit(`business-update-upload:${user.id}`, 12, 60 * 60_000);
+    return json(response, 201, await businessReleases.upload(request, response, url, user));
+  }
+  const businessUpdateMatch = /^\/api\/admin\/business-releases\/([a-f0-9-]{36})$/.exec(url.pathname);
+  if (request.method === 'PATCH' && businessUpdateMatch) {
+    request.setTimeout(180_000);
+    const user = requireAdmin(request, response); if (!user) return;
+    if (user.role !== 'admin') return json(response, 403, { error: '仅超级管理员可变更业务更新发布状态' });
+    const body = await readJson(request);
+    if (typeof body.enabled !== 'boolean') return json(response, 400, { error: '请指定发布或下线操作' });
+    await confirmSensitive(request, user, body.confirmPassword);
+    return json(response, 200, await businessReleases.publish(businessUpdateMatch[1], body.enabled, request, user));
+  }
   if (request.method === 'POST' && url.pathname === '/api/admin/updates/upload') {
     const user = requireAdmin(request, response); if (!user) return;
     if (user.role !== 'admin') return json(response,403,{error:'仅超级管理员可上传安装包'});
@@ -655,12 +684,12 @@ const server = createServer(async (request, response) => {
   if (secureCookie) response.setHeader('strict-transport-security','max-age=31536000');
   try {
     const url = new URL(request.url ?? '/', `http://${request.headers.host ?? 'localhost'}`);
-    request.setTimeout(url.pathname === '/api/admin/updates/upload' ? 60_000 : 30_000);
+    request.setTimeout(['/api/admin/updates/upload', '/api/admin/business-releases/upload'].includes(url.pathname) ? 60_000 : 30_000);
     if (managementIps.size && (url.pathname.startsWith('/api/admin/') || !url.pathname.startsWith('/api/')) && !managementIps.has(security.ip(request))) return json(response,403,{error:'当前来源地址不在管理入口白名单内'});
     if (url.pathname.startsWith('/api/admin/') && request.headers['sec-fetch-site'] === 'cross-site') return json(response,403,{error:'请求来源不允许'});
     if (url.pathname.startsWith('/api/admin/') && !['GET','HEAD'].includes(request.method)) {
       if (request.headers.origin && request.headers.origin !== (publicOrigin ?? `${secureCookie ? 'https:' : 'http:'}//${request.headers.host}`)) return json(response, 403, { error: '请求来源不允许' });
-      const installerUpload = request.method === 'POST' && url.pathname === '/api/admin/updates/upload';
+      const installerUpload = request.method === 'POST' && ['/api/admin/updates/upload', '/api/admin/business-releases/upload'].includes(url.pathname);
       const expectedType = installerUpload ? 'application/octet-stream' : 'application/json';
       if (String(request.headers['content-type'] ?? '').toLowerCase().split(';')[0].trim() !== expectedType) return json(response, 415, { error: `仅接受 ${expectedType}` });
     }
@@ -684,8 +713,8 @@ server.requestTimeout = 10 * 60_000; server.headersTimeout = 15_000; server.keep
 const establishmentImporter = establishmentImporterFromEnv(database);
 server.on('listening', () => establishmentImporter?.start());
 server.on('close', () => {
-  enterprises.close(); const updateClose = updateReleases.close();
-  if (establishmentImporter || updateClose) Promise.all([establishmentImporter?.close(), updateClose]).finally(() => database.close());
+  enterprises.close(); const updateClose = updateReleases.close(), businessClose = businessReleases.close();
+  if (establishmentImporter || updateClose || businessClose) Promise.all([establishmentImporter?.close(), updateClose, businessClose]).finally(() => database.close());
   else database.close();
 });
 return server;

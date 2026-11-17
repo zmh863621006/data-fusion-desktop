@@ -5,6 +5,7 @@ import { basename, dirname, extname, join, resolve, sep } from 'node:path';
 import { app, BrowserWindow } from 'electron';
 import { createHash } from 'node:crypto';
 import type { UpdateRecord } from '../admin-server/web/src/types';
+import type { BusinessRelease } from '../admin-server/web/src/business-releases';
 
 // An offline browser regression of the real admin production build. The only
 // server is a local fixture; no real server, credentials, database or profile is used.
@@ -56,6 +57,13 @@ let conflictScopeOnce = false;
 const releaseWrites: Array<{ id: string; enabled: boolean }> = [];
 const releaseNotes = '本地虚构上传备注：测试 + 校验 & 发布';
 let releaseUploadCalls = 0;
+const businessRows: BusinessRelease[] = [
+  { id: 'business-win44', target: { platform: 'win32', arch: 'x64', variant: 'standard', electronMajor: 44 } },
+  { id: 'business-win22', target: { platform: 'win32', arch: 'x64', variant: 'standard', electronMajor: 22 } },
+  { id: 'business-kirin990', target: { platform: 'linux', arch: 'arm64', variant: 'kirin990', electronMajor: 44 } },
+].map(value => ({ ...value, version: '1.1.0', fileName: 'business-1.1.0.asar', bytes: 1024, sha256: 'a'.repeat(64), notes: '合成业务更新验收', enabled: false,
+  status: 'draft', createdAt: now, publishedAt: 0, metadata: { minShellVersion: '1.1.0', backend: { origin: 'https://backend.example.invalid', revision: 2 } },
+  url: 'https://updates.example.invalid/business-1.1.0.asar', feedUrl: 'https://updates.example.invalid/latest.json' } as BusinessRelease));
 const root = resolve('admin-server/public');
 const server = createServer(async (req, res) => {
   const url = new URL(req.url ?? '/', origin || 'http://127.0.0.1');
@@ -63,6 +71,9 @@ const server = createServer(async (req, res) => {
   if (url.pathname.startsWith('/api/')) {
     requests.push(`${req.method} ${url.pathname}`);
     if (url.pathname === '/api/admin/bootstrap') return json(authenticated ? 200 : 401, authenticated ? bootstrap : { error: 'fixture login required' });
+    if (url.pathname === '/api/admin/business-releases' && req.method === 'GET') {
+      assert(authenticated); return json(200, { rows: businessRows, configured: true, feedBase: 'https://updates.example.invalid/business/v1/' });
+    }
     if (url.pathname === '/api/admin/session/restore') throw new Error('Retired remembered-login endpoint must not be requested');
     if (url.pathname === '/api/admin/captcha') return json(200, { id: 'fixture-captcha', expiresAt: now + 86400000,
       image: `data:image/svg+xml;base64,${Buffer.from('<svg xmlns="http://www.w3.org/2000/svg" width="140" height="44"><rect width="140" height="44" fill="#fafafc"/><text x="25" y="31" fill="#007aff" font-size="26">A7B9C</text></svg>').toString('base64')}` });
@@ -262,6 +273,23 @@ async function verifyReleasePublishing() {
   await until(() => dom(`![...document.querySelectorAll('.ant-modal-content')].some(node=>node.getBoundingClientRect().width>0)`), 'unpublish dialog closed');
   assert.deepEqual(releaseWrites, [{ id: 'fixture-uploaded-update', enabled: true }, { id: 'fixture-uploaded-update', enabled: false }]); checks++;
 }
+async function verifyBusinessUpdates() {
+  await route('updates'); await clickText('业务更新包', '.release-kind-picker .ant-segmented-item-label');
+  const rows = () => dom<string[]>(`[...document.querySelectorAll('.ant-table-tbody tr[data-row-key]')].map(node=>node.getAttribute('data-row-key')).filter(id=>id?.startsWith('business-'))`);
+  await until(async () => (await rows()).join() === 'business-win44', 'modern business channel'); checks++;
+  assert.equal(await dom(`document.body.innerText.includes('确认存在新版后')`), true); checks++;
+  await clickText('Windows 7 · Electron 22', '.release-target-picker .ant-segmented-item-label');
+  await until(async () => (await rows()).join() === 'business-win22', 'legacy business channel'); checks++;
+  await clickText('信创', '.release-target-picker .ant-segmented-item-label');
+  await clickText('海思 990 · ARM64 专用', '.release-target-picker .ant-segmented-item-label');
+  await until(async () => (await rows()).join() === 'business-kirin990', 'Kirin990 business channel'); checks++;
+  for (const width of [1440, 600]) {
+    main!.setContentSize(width, 1000); await verifyBounds(`business-channel-${width}`); await screenshot(`business-channel-${width}`);
+    await modal('详情', `business-detail-${width}`); await modal('上传业务包', `business-upload-${width}`);
+  }
+  main!.setContentSize(1440, 1000); await clickText('基础安装包', '.release-kind-picker .ant-segmented-item-label');
+  await until(() => dom(`document.body.innerText.includes('上传安装包、核对服务器摘要')`), 'legacy installer page restored'); checks++;
+}
 async function drawer(openText: string, label: string) {
   await clickText(openText);
   await until(() => dom(`Boolean(document.querySelector('.ant-drawer-open'))`), label);
@@ -384,7 +412,7 @@ async function run() {
     for (const label of ['后台账号', '我的登录会话', '登录安全日志']) { await clickText(label, '.security-tabs [role="tab"]'); await verifyBounds(`security-${label}-${width}`); }
     await modal('修改我的密码', `password-change-${width}`); await modal('新增账号', `account-create-${width}`);
   }
-  main.setContentSize(1440, 1000);await verifyScopeEditing();await verifyReleaseTargets();await verifyReleasePublishing();await route('overview');
+  main.setContentSize(1440, 1000);await verifyScopeEditing();await verifyReleaseTargets();await verifyReleasePublishing();await verifyBusinessUpdates();await route('overview');
   await dom(`document.querySelector('.ant-pro-sider-collapsed-button')?.click()`); await settle();
   assert.equal(await dom(`Boolean(document.querySelector('.ant-layout-sider-collapsed'))`), true); checks++;
   await verifyBounds('sidebar-collapsed'); await screenshot('sidebar-collapsed');

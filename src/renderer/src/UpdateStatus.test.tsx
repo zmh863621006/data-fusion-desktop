@@ -37,6 +37,15 @@ describe('automatic update UI states', () => {
     expect(html).not.toContain('开发或免安装模式');
     expect(renderToStaticMarkup(<UpdateBanner state={state} onOpen={() => {}} />)).toContain('系统安装器确认安装');
   });
+  it('distinguishes startup business updates from a native installer and displays both versions', () => {
+    const state = { ...initial, kind: 'business' as const, installMode: 'startup' as const, status: 'ready' as const,
+      currentVersion: '1.1.0', shellVersion: '1.1.0', version: '1.1.1' };
+    const html = render(state);
+    expect(html).toContain('基础环境 1.1.0'); expect(html).toContain('启动前完成业务更新');
+    expect(html).toContain('重启并更新 1.1.1'); expect(html).not.toContain('打开系统安装器');
+    expect(html).not.toContain('开发或免安装模式');
+    expect(renderToStaticMarkup(<UpdateBanner state={state} onOpen={() => {}} />)).toContain('保存工作后可重启更新');
+  });
   it('retains retryable errors and a previous install failure without hiding the current app', () => {
     const html = render({ ...initial, status: 'error', message: '网络失败，当前版本仍可使用', lastInstallError: '<script>示例错误</script>' });
     expect(html).toContain('role="alert"'); expect(html).toContain('网络失败'); expect(html).toContain('上次更新未完成'); expect(html).toContain('原版本和业务数据仍然保留');

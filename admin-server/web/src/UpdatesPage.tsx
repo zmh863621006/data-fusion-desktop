@@ -7,6 +7,7 @@ import { adminTableSearch } from './presentation';
 import { RELEASE_STATUS_LABELS, RELEASE_VERSION_PATTERN, WINDOWS_RELEASE_TARGET, releaseFileError, releaseFileSize, releaseStatus,
   releaseInstallerName, releaseTargetLabel, releasesForTarget, type ReleaseArch, type ReleasePlatform, type ReleaseVariant, type ReleaseTarget, type UploadedRelease, type UploadReleaseValues } from './releases';
 import type { BootstrapData, UpdateRecord } from './types';
+import { BusinessUpdatesPage } from './BusinessUpdatesPage';
 
 const contains = (value: unknown, query: unknown) => !query || String(value ?? '').toLowerCase().includes(String(query).trim().toLowerCase());
 const dateTime = (value?: number) => value ? new Date(value).toLocaleString('zh-CN', { hour12: false }) : '—';
@@ -40,6 +41,12 @@ export function ReleaseDetails({ release }: { release: Pick<UpdateRecord, 'versi
 }
 
 export function UpdatesPage({ data, reload }: { data: BootstrapData; reload: () => Promise<void> }) {
+  const [kind, setKind] = useState<'base' | 'business'>('base');
+  return <><div className="release-kind-picker"><Segmented<'base' | 'business'> aria-label="更新包类型" value={kind} onChange={setKind}
+    options={[{ label: '基础安装包', value: 'base' }, { label: '业务更新包', value: 'business' }]} /></div>
+    {kind === 'business' ? <BusinessUpdatesPage data={data} /> : <BaseUpdatesPage data={data} reload={reload} />}</>;
+}
+function BaseUpdatesPage({ data, reload }: { data: BootstrapData; reload: () => Promise<void> }) {
   const canManage = data.user?.role === 'admin';
   const { message } = App.useApp();
   const [open, setOpen] = useState(false), [uploading, setUploading] = useState(false);

@@ -47,6 +47,22 @@ http {
             proxy_send_timeout 600s;
             proxy_pass http://data-fusion-admin:8787;
         }
+        location = /api/admin/business-releases/upload {
+            include /etc/nginx/management-allow.conf;
+            limit_req zone=df_api burst=5 nodelay;
+            client_max_body_size 256m;
+            client_body_timeout 60s;
+            proxy_request_buffering off;
+            proxy_read_timeout 600s;
+            proxy_send_timeout 600s;
+            proxy_pass http://data-fusion-admin:8787;
+        }
+        location /api/admin/business-releases/ {
+            include /etc/nginx/management-allow.conf;
+            limit_req zone=df_api burst=5 nodelay;
+            proxy_read_timeout 180s;
+            proxy_pass http://data-fusion-admin:8787;
+        }
         location /api/releases/ {
             limit_req zone=df_api burst=60 nodelay;
             proxy_buffering off;

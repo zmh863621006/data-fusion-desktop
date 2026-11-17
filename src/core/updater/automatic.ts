@@ -4,7 +4,10 @@ export interface AutomaticUpdateState {
   status: 'idle' | 'checking' | 'up-to-date' | 'available' | 'downloading' | 'ready' | 'installing' | 'error' | 'disabled';
   currentVersion: string; version?: string; notes?: string; message: string;
   checkedAt?: number; progress?: DownloadProgress; automatic: boolean;
-  installMode: 'installed' | 'system' | 'manual';
+  installMode: 'installed' | 'system' | 'manual' | 'startup';
+  kind?: 'business';
+  shellVersion?: string;
+  offline?: boolean;
   lastInstallError?: string;
 }
 export interface AutomaticUpdateDependencies {

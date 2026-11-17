@@ -1081,8 +1081,9 @@ function SettingsPage({ license, onOpenDiagnostics }: { license: LicenseStatus; 
     setUpdateMessage('正在校验更新清单…');
     setCheckingUpdate(true);
     try {
-      const result = await window.desktopApi.updates.check() as { configured: boolean; app?: { version: string }; message?: string };
+      const result = await window.desktopApi.updates.check() as { configured: boolean; app?: { version: string }; businessVersion?: string; message?: string };
       if (!result.configured) setUpdateMessage(result.message ?? '未配置更新服务');
+      else if (result.businessVersion) setUpdateMessage(result.message ?? '业务更新检查已完成');
       else if (!result.app) setUpdateMessage('当前已是最新版本');
       else setUpdateMessage('');
     } catch (error) { setUpdateMessage(error instanceof Error ? error.message : '更新检查失败'); }
@@ -1091,7 +1092,10 @@ function SettingsPage({ license, onOpenDiagnostics }: { license: LicenseStatus; 
   const installUpdate = async () => {
     if (updateState?.status !== 'ready') return;
     const systemInstaller = updateState.installMode === 'system';
-    if (!window.confirm(systemInstaller
+    const businessUpdate = updateState.installMode === 'startup';
+    if (!window.confirm(businessUpdate
+      ? `确定重新启动并应用业务版本 ${updateState.version} 吗？应用将保存登录会话和业务数据，随后重新启动进入新版本。`
+      : systemInstaller
       ? `确定打开系统安装器安装 ${updateState.version} 吗？请先保存正在编辑的数据。应用会保存登录会话并退出，保留授权和业务记录；请按系统提示完成安装后重新打开应用。`
       : `确定重启并更新至 ${updateState.version} 吗？请先保存正在编辑的数据。应用会保存登录会话，保留授权和业务记录；正在运行的业务任务不会被强制终止。`)) return;
     setUpdateMessage(systemInstaller ? '正在保存会话，准备打开系统安装器…' : '正在保存会话，准备重启更新…');
@@ -1104,7 +1108,7 @@ function SettingsPage({ license, onOpenDiagnostics }: { license: LicenseStatus; 
     <PageHeader eyebrow="" title="设置" description="调整使用偏好，检查应用更新。" />
     {message && <div className="message page-message" role="status">{message}</div>}
     <div className="settings-grid">
-      <section className="panel settings-card runtime-settings"><h3>使用偏好</h3>{settings && <div className="settings-form">{access.hasSystems && <><label><span>默认每页数量</span><input type="number" value={Number(settings.defaultPageSize)} onChange={(e) => setSettings({ ...settings, defaultPageSize: Number(e.target.value) })}/></label><label><span>任务并发数</span><input type="number" value={Number(settings.taskConcurrency)} onChange={(e) => setSettings({ ...settings, taskConcurrency: Number(e.target.value) })}/></label></>}<label className="check-row"><input type="checkbox" checked={Boolean(settings.autoCheckUpdates)} onChange={(e) => setSettings({ ...settings, autoCheckUpdates: e.target.checked })}/><span>自动检查并下载更新</span></label><button className="primary" onClick={save}>保存设置</button></div>}</section>
+      <section className="panel settings-card runtime-settings"><h3>使用偏好</h3>{settings && <div className="settings-form">{access.hasSystems && <><label><span>默认每页数量</span><input type="number" value={Number(settings.defaultPageSize)} onChange={(e) => setSettings({ ...settings, defaultPageSize: Number(e.target.value) })}/></label><label><span>任务并发数</span><input type="number" value={Number(settings.taskConcurrency)} onChange={(e) => setSettings({ ...settings, taskConcurrency: Number(e.target.value) })}/></label></>}{updateState?.kind === 'business' ? <p className="muted">启动时检查业务更新；确认存在新版本后，更新完成才能进入应用。无法联网且尚未确认新版时，可使用已校验的本地版本。</p> : <label className="check-row"><input type="checkbox" checked={Boolean(settings.autoCheckUpdates)} onChange={(e) => setSettings({ ...settings, autoCheckUpdates: e.target.checked })}/><span>自动检查并下载更新</span></label>}<button className="primary" onClick={save}>保存设置</button></div>}</section>
       <UpdateStatus state={updateState} checking={checkingUpdate} message={updateMessage} onCheck={() => void checkUpdates()} onInstall={() => void installUpdate()} />
     </div>
     <section className="panel audit-card"><div className="panel-head"><h3>最近操作记录</h3><span className="muted">仅保存在本机</span></div><div className="audit-list">{audit.filter(event => !event.systemId || access.canOpenSystem(event.systemId)).slice(0, 20).map((event) => <div key={event.id}><span>{event.type}</span><strong>{event.systemId ? shortSystemName(event.systemId) : '平台'}</strong><time>{new Date(event.createdAt).toLocaleString()}</time></div>)}{!audit.some(event => !event.systemId || access.canOpenSystem(event.systemId)) && <div className="empty">暂无操作记录</div>}</div></section>

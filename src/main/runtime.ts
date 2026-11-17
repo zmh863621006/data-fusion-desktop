@@ -46,6 +46,7 @@ import toolCatalog from '../core/tools/catalog.json';
 import type { ComponentSummary } from '../core/plugins/components';
 import { installSourceCertificateTrust } from './source-certificate-trust';
 import { HRSS_SOURCE_CERTIFICATE_TRUST } from '../core/config/source-certificate-pins';
+import { businessBootstrapContext } from './business-bootstrap-context';
 
 const PRODUCT_PUBLIC_KEY = `-----BEGIN PUBLIC KEY-----
 MIIBojANBgkqhkiG9w0BAQEFAAOCAY8AMIIBigKCAYEAn2Th5TQoO3juKQte8Ai+
@@ -162,7 +163,7 @@ export class AppRuntime {
     await this.platformStore.recoverInterruptedTasks();
     this.tasks = new TaskEngine(this.platformStore);
 
-    const backend = backendConfiguration(process.env);
+    const backend = backendConfiguration(process.env, businessBootstrapContext()?.backend);
     this.license = new LocalLicenseService({
       storagePath: join(userDataPath, 'license.json'),
       publicKeyPem: releaseTrustedKey(PRODUCT_PUBLIC_KEY, process.env.DATA_FUSION_LICENSE_PUBLIC_KEY, allowDevelopmentLicense),
@@ -250,7 +251,7 @@ export class AppRuntime {
   }
 
   async backendStatus() {
-    const origin = new URL(backendConfiguration(process.env).activationUrl).origin;
+    const origin = new URL(backendConfiguration(process.env, businessBootstrapContext()?.backend).activationUrl).origin;
     try {
       const response = await fetch(`${origin}/api/health`, { signal: AbortSignal.timeout(5000) });
       const body = await response.json() as { status?: string };

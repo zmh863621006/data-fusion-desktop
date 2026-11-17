@@ -202,6 +202,9 @@ button, a, input, textarea, select { -webkit-tap-highlight-color: transparent; }
 /* Release publishing is deliberately two-stage: upload/verify, then explicit publication. */
 .release-guidance { margin-bottom: 18px; }
 .release-target-picker { display: flex; flex-wrap: wrap; align-items: center; gap: 12px; margin-bottom: 18px; }
+.release-kind-picker { padding: 16px 0 12px; }
+.release-kind-picker .ant-segmented { padding: 4px; border-radius: 10px; background: #ededf0; }
+.release-kind-picker .ant-segmented-item-label { min-height: 44px; padding: 10px 20px; line-height: 24px; }
 .release-target-picker .ant-segmented { padding: 4px; border-radius: 10px; background: #ededf0; }
 .release-target-picker .ant-segmented-item-label { min-height: 44px; padding: 10px 18px; line-height: 24px; }
 .release-target-picker .ant-segmented-item-selected { border-radius: 7px; }

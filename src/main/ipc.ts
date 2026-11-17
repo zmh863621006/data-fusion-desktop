@@ -9,7 +9,7 @@ import { operationalLog } from './operational-log';
 import type { OperationalLogLevel, OperationalLogQuery } from '../core/diagnostics/types';
 import type { ConfirmExport } from '../core/double-publicity/validation';
 import { assertFeatureLicensed } from '../core/license/gate';
-import type { AutomaticUpdateController } from '../core/updater/automatic';
+import type { AutomaticUpdateState } from '../core/updater/automatic';
 import { publicationPlatform, sourceTabOwner } from '../core/publication/platforms';
 import { hrssReturnDateDetails } from '../core/hrss/date-filters';
 import { parseGovernmentExportTarget } from '../core/export/government-target';
@@ -24,7 +24,13 @@ function requireSystem(systemId: string) {
 
 export function registerIpcHandlers(getTrustedWebContentsId: () => number | undefined, options: {
   exportOwner?: () => BrowserWindow | null;
-  updates?: AutomaticUpdateController;
+  updates?: {
+    snapshot(): AutomaticUpdateState;
+    check(): Promise<unknown>;
+    download(): Promise<void>;
+    install(): Promise<void>;
+    requestCheckSoon(): void;
+  };
   businessOperation?: <T>(operation: () => Promise<T>) => Promise<T>;
   hrssDashboard?: { contentsId(): number | undefined; open(): void; close(): void };
 } = {}): void {
