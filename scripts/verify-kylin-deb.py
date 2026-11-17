@@ -178,7 +178,7 @@ def verify(package, stage, arch, version, compatibility=None):
                 raise ValueError('Private compatibility file changed')
             if entry.get('kind') == 'library':
                 elf_names.add('opt/data-fusion/resources/compat/kirin990/' + name)
-    seen, files, asar_hash = set(), set(), None
+    seen, files, asar_hash, payload_bytes = set(), set(), None, 0
     with tarfile.open(fileobj=io.BytesIO(ar['data.tar.xz']), mode='r|xz',
                       encoding='utf-8', errors='surrogateescape') as archive:
         for index, member in enumerate(archive):
@@ -199,6 +199,7 @@ def verify(package, stage, arch, version, compatibility=None):
             if not source.is_file() or member.size != source.stat().st_size:
                 raise ValueError('Payload size mismatch')
             files.add(name)
+            payload_bytes += member.size
             sha, md5, prefix = hashlib.sha256(), hashlib.md5(), b''
             payload = archive.extractfile(member)
             for block in iter(lambda: payload.read(1024 * 1024), b''):
@@ -215,10 +216,16 @@ def verify(package, stage, arch, version, compatibility=None):
                 asar_hash = source_sha
     if seen != set(expected) or files != set(md5sums) or not asar_hash:
         raise ValueError('Payload inventory is incomplete')
+    installed_kib = (payload_bytes + 1023) // 1024
+    # Older valid packages omit this optional Debian control field.
+    declared_size = fields.get('Installed-Size')
+    if declared_size is not None and declared_size.strip() != str(installed_kib):
+        raise ValueError('Installed-Size does not match the actual payload')
     return {'passed': True, 'file': str(package.resolve()), 'arch': arch, 'bytes': package.stat().st_size,
             'sha256': digest_file(package)[0], 'asarSha256': asar_hash, 'entries': len(seen),
             'allPayloadBytesMatched': True, 'permissionsVerified': True, 'rootOwnershipVerified': True,
             'gnuTarVerified': True, 'paxHeadersAbsent': True,
+            'installedSizeKiB': installed_kib, 'installedSizeDeclared': declared_size is not None,
             'compatibility': compatibility, 'targetExecuted': False}
 
 

@@ -186,6 +186,17 @@ def build(stage, arch, version, destination, compatibility=None):
         raise ValueError('Control package/version/architecture does not match the build target')
     modes, elf_names = compatibility_modes(stage, arch, compatibility)
     entries = inventory(stage)
+    # Installed-Size is consumed by desktop package managers as well as APT.
+    # Compute it after all private compatibility resources have been staged.
+    installed_kib = (sum(entry[2].st_size for entry in entries if not entry[3]) + 1023) // 1024
+    lines = [line for line in control.decode('utf-8').splitlines()
+             if not line.lower().startswith('installed-size:')]
+    while lines and not lines[-1]:
+        lines.pop()
+    position = next((index for index, line in enumerate(lines) if line.lower().startswith('description:')), len(lines))
+    lines.insert(position, 'Installed-Size: %d' % installed_kib)
+    control = ('\n'.join(lines) + '\n').encode('utf-8')
+    control_path.write_bytes(control)
     names = {entry[1] for entry in entries}
     for required in list(modes) + ['opt/data-fusion/resources/app.asar']:
         if required not in names:
@@ -242,7 +253,8 @@ def build(stage, arch, version, destination, compatibility=None):
             partial.unlink()
     return {'file': str(destination), 'stage': str(stage), 'version': version, 'arch': arch,
             'bytes': destination.stat().st_size, 'sha256': file_hash(destination), 'dataEntries': len(entries),
-            'asarSha256': file_hash(stage / 'opt/data-fusion/resources/app.asar'), 'compatibility': compatibility, 'targetExecuted': False}
+            'asarSha256': file_hash(stage / 'opt/data-fusion/resources/app.asar'), 'installedSizeKiB': installed_kib,
+            'compatibility': compatibility, 'targetExecuted': False}
 
 
 if __name__ == '__main__':

@@ -71,6 +71,55 @@ class PortableDebTests(unittest.TestCase):
                 self.assertEqual(archive.getmembers()[0].name, '.')
                 self.assertTrue(archive.getmembers()[0].isdir())
 
+    def test_installed_size_is_derived_after_staging_and_included_before_description(self):
+        control = self.stage / 'DEBIAN/control'
+        control.write_text(control.read_text(encoding='utf-8') + 'Installed-Size: 0\nDescription: example\n example detail\n', encoding='utf-8')
+        extra = self.stage / 'opt/data-fusion/resources/private-extra'
+        extra.write_bytes(b'x' * 2049)
+        result = builder.build(self.stage, 'x64', '1.2.3', self.output)
+        expected = (sum(path.stat().st_size for path in self.stage.rglob('*')
+                        if path.is_file() and 'DEBIAN' not in path.relative_to(self.stage).parts) + 1023) // 1024
+        self.assertEqual(result['installedSizeKiB'], expected)
+        fields = control.read_text(encoding='utf-8')
+        self.assertEqual(fields.count('Installed-Size:'), 1)
+        self.assertIn('Installed-Size: %d\nDescription:' % expected, fields)
+        self.assertEqual(verifier.verify(self.output, self.stage, 'x64', '1.2.3')['installedSizeKiB'], expected)
+
+    def replace_control(self, content):
+        """Recreate only control metadata to test legacy and malformed archives."""
+        members = verifier.ar_contents(self.output)
+        control_path = self.stage / 'DEBIAN/control'
+        control_path.write_bytes(content)
+        with tarfile.open(fileobj=io.BytesIO(members['control.tar.xz']), mode='r:xz') as archive:
+            md5sums = archive.extractfile('./md5sums').read()
+        raw = io.BytesIO()
+        with tarfile.open(fileobj=raw, mode='w', format=tarfile.GNU_FORMAT) as archive:
+            archive.addfile(builder.tar_info('', mode=0o755, directory=True))
+            for name, payload in [('control', content), ('md5sums', md5sums)]:
+                archive.addfile(builder.tar_info(name, len(payload)), io.BytesIO(payload))
+        members['control.tar.xz'] = lzma.compress(raw.getvalue())
+        with self.output.open('wb') as output:
+            output.write(b'!<arch>\n')
+            for name, payload in members.items():
+                builder.ar_member(output, name, io.BytesIO(payload), len(payload))
+
+    def test_verifier_accepts_legacy_package_without_optional_installed_size(self):
+        builder.build(self.stage, 'x64', '1.2.3', self.output)
+        content = (self.stage / 'DEBIAN/control').read_bytes()
+        self.replace_control(b'\n'.join(line for line in content.splitlines()
+                                      if not line.startswith(b'Installed-Size:')) + b'\n')
+        result = verifier.verify(self.output, self.stage, 'x64', '1.2.3')
+        self.assertTrue(result['allPayloadBytesMatched'])
+        self.assertFalse(result['installedSizeDeclared'])
+
+    def test_verifier_rejects_wrong_installed_size(self):
+        builder.build(self.stage, 'x64', '1.2.3', self.output)
+        content = (self.stage / 'DEBIAN/control').read_bytes()
+        self.replace_control(b'\n'.join(b'Installed-Size: 0' if line.startswith(b'Installed-Size:') else line
+                                      for line in content.splitlines()) + b'\n')
+        with self.assertRaisesRegex(ValueError, 'Installed-Size'):
+            verifier.verify(self.output, self.stage, 'x64', '1.2.3')
+
     def test_chinese_and_long_utf8_names_use_compatible_gnu_records(self):
         name = '中文许可' * 10 + '.txt'
         content = '企业名称：测试企业\n许可内容：准予许可。'.encode('utf-8')
