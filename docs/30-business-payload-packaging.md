@@ -32,6 +32,14 @@ electron-builder即使发现暂存package.json的dependencies为空，也可能�
 
 配置仍保留对应官方Electron自带d3dcompiler_47.dll，构建后逐字节核对来源并生成graphics-runtime.json。Windows完整安装器继续使用旧后台接受的正式文件名和原NSIS安全安装逻辑；Win7生成内部组件名，可与现代组件一起接入通用外层安装器。构建脚本不自动安装、发布或改动现有用户目录。
 
+现代和Win7目录包验证后，可用 `--prepackaged` 分别生成NSIS组件，再生成中文通用安装器：
+
+```powershell
+node scripts/build-business-shell-universal.mjs --version 1.1.0 --modern '现代NSIS组件完整路径' --legacy 'Win7组件完整路径' --output-root .tmp/business-pilot-20261117/windows
+```
+
+通用安装器保留原操作系统选择规则，使用现代或Win7对应的原生导出保护程序，检查Win7组件内的CLR2配置。它不附带Windows系统补丁、不添加前置安装器，也不强制重启系统。输出 `universal-manifest.json` 记录组件哈希与未签名状态。
+
 ## 麒麟基础包
 
 Linux暂存时必须选择对应Linux业务目标；可通过 `--electron-dist` 或 `DATA_FUSION_LINUX_ELECTRON_DIST` 指向已经验证的对应架构官方Electron分发目录。
@@ -45,8 +53,31 @@ node scripts/stage-business-shell-deb.mjs --shell-stage '生成的stage.json完�
 
 DEB沿用已验证的便携GNU tar/XZ构建器和独立逐字节校验器。kirin990目标另调用现有私有图形兼容stager，不替换系统库；标准与专用DEB使用原后台认可的中文包名。
 
+固定壳DEB暂存器直接复用原Python构建函数并显式传入候选版本和输出目录。原Python CLI读取根package.json的旧行为保持不变，因此不会为生成候选包改动正式版本号或旧发布目录。
+
 ## 构建试验边界
 
 `node --test scripts/business-package.test.mjs`覆盖生产依赖图、完整主进程/前端/模板、敏感文件排除、Win7输出选择、原生文件拒绝、不可覆盖版本、基础公钥与builtin钉住、链接拒绝，以及打包后Linux架构/固定壳依赖回溯等八项检查。
 
-2026-11-17的现代Windows构建试验使用旧out，实际业务ASAR为32472946字节、3034个文件，已由新运行时原始ASAR解析器读取通过。CLI实际打包的固定基础app.asar为49628字节、精确六文件；固定源逐字节一致，两项ASAR fuses保持开启，官方图形组件匹配。证据在 `.tmp/business-shell-minimal-probe-20261117/`。这些是打包结构和完整性试验，不是最终源码、真实业务或目标OS运行验收；最终交付不能沿用这些摘要。
+## 2026-11-17候选包验证
+
+最终源码构建后生成了1.1.0候选业务包与基础包，根package.json保持1.0.25。候选产物全部位于 `.tmp/business-pilot-20261117/`，本构建流程没有上传OSS、发布自动更新、安装应用或启动虚拟机。此前使用旧out的结构试验已被本轮候选构建替代。
+
+业务包位于 `business/<目标>/business-1.1.0.asar`，旁边的 `payload.json` 记录完整哈希。五个目标分别为Windows x64/Electron44、Windows x64/Electron22、Linux x64/Electron44、Linux ARM64/Electron44及海思990 ARM64/Electron44。现代业务包约32.5MB，已编译的Win7业务包约4.0MB。
+
+候选基础包如下；路径均相对于本轮候选目录：
+
+| 用途 | 产物 |
+| --- | --- |
+| Windows通用安装器 | `windows/数据融合助手-兼容通用安装包-1.1.0-x64.exe` |
+| Windows现代组件 | `shell/win32-x64-standard-electron-44/数据融合助手-安装包-1.1.0-x64.exe` |
+| Windows兼容内部组件 | `shell/win32-x64-standard-electron-22/DataFusion-Win7-Component-1.1.0-x64.exe` |
+| 麒麟x64 | `shell/linux-x64-standard-electron-44/数据融合助手-麒麟版-1.1.0-x64.deb` |
+| 麒麟ARM64 | `shell/linux-arm64-standard-electron-44/数据融合助手-麒麟版-1.1.0-arm64.deb` |
+| 麒麟海思990 | `shell/linux-arm64-kirin990-electron-44/数据融合助手-麒麟海思990版-1.1.0-arm64.deb` |
+
+`packaging-verification.json`记录五路最终目录包检查：基础app.asar约54KB、精确六文件，四个启动器源文件与最终冻结源码逐字节一致，builtin与对应业务包原始字节一致。五路OnlyLoadAppFromAsar保持开启，现代Windows嵌入式ASAR完整性验证开启；Windows官方图形DLL一致，Linux原生ELF架构正确。Linux各 `shell-deb.json` 另记录DEB全部文件字节、权限、root所有者、GNU tar及无PAX扩展的独立验证。
+
+主线程使用最终两个Windows目录包完成真实业务界面与预加载IPC冒烟：7个系统、8个组件、18项政务事项和18项人社业务统计可见，SQLite、设置、加密账号、授权与会话文件、导出文件在两次启动后保留，基础包字节不变。结果位于 `.tmp/business-app-packaged-dEPkpT/result.json`（Electron44）和 `.tmp/business-app-packaged-5tO49P/result.json`（Electron22）。通用外层执行 `/S /CHECKOS` 验证选择modern/x64且无系统前置安装器，没有实际安装。
+
+这些运行验证在当前Windows主机完成，Electron22运行通过不能等同于Win7操作系统实机验收。Linux三路在本轮完成打包与独立静态验证，没有进行麒麟目标系统安装或海思硬件测试。正式发布前应按目标环境继续验证；构建结果本身不修改现有用户数据。
