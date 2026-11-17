@@ -206,7 +206,7 @@ button, a, input, textarea, select { -webkit-tap-highlight-color: transparent; }
 .release-target-picker .ant-segmented-item-label { min-height: 44px; padding: 10px 18px; line-height: 24px; }
 .release-target-picker .ant-segmented-item-selected { border-radius: 7px; }
 .release-architecture-notice { margin-bottom: 18px; }
-@media (max-width: 480px) { .release-chip-vendors { display: none; } }
+@media (max-width: 800px) { .release-chip-vendors { display: none; } }
 .release-file-meta { display: block; margin-top: 4px; color: var(--admin-secondary); font-size: 12px; }
 .release-upload-modal .ant-alert { margin-bottom: 22px; }
 .release-upload-form { margin-top: 20px; }

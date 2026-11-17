@@ -35,6 +35,7 @@ const bootstrap = {
       { id: 'fixture-same-windows', platform: 'win32', arch: 'x64', installer: 'nsis', fileName: '数据融合助手-安装包-1.0.2-x64.exe', notes: 'Windows 同版本测试记录' },
       { id: 'fixture-same-linux-x64', platform: 'linux', arch: 'x64', installer: 'deb', fileName: '数据融合助手-麒麟版-1.0.2-x64.deb', notes: '麒麟 x86_64 同版本测试记录' },
       { id: 'fixture-same-linux-arm64', platform: 'linux', arch: 'arm64', installer: 'deb', fileName: '数据融合助手-麒麟版-1.0.2-arm64.deb', notes: '麒麟 ARM64 同版本测试记录' },
+      { id: 'fixture-same-kirin990', platform: 'linux', arch: 'arm64', variant: 'kirin990', installer: 'deb', fileName: '数据融合助手-麒麟海思990版-1.0.2-arm64.deb', notes: '海思 990 专用同版本测试记录' },
     ].map(target => ({ ...target, target_type: 'app', version: '1.0.2', url: 'https://blocked.invalid/' + target.fileName,
       sha256: '0'.repeat(64), bytes: 4096, published_at: 0, enabled: 0, status: 'draft', managed: true })),
   ] as UpdateRecord[],
@@ -203,6 +204,13 @@ async function verifyReleaseTargets() {
   await until(async () => (await rowIds()).join() === 'fixture-same-linux-arm64', 'only Kylin ARM64 rows'); checks++;
   assert.equal(await dom(`document.querySelector('.release-architecture-notice').innerText.includes('目标电脑实测')`), true); checks++;
   await captureTarget('linux-arm64');
+  await clickText('海思 990 · ARM64 专用', '.release-target-picker .ant-segmented-item-label');
+  await until(async () => (await rowIds()).join() === 'fixture-same-kirin990', 'only Kirin990 rows'); checks++;
+  assert.equal(await dom(`document.querySelector('.release-guidance').innerText.includes('需手动下载')`), true); checks++;
+  assert.equal(await dom(`document.querySelector('.release-architecture-notice').innerText.includes('原因待查')`), true); checks++;
+  await captureTarget('kirin990');
+  await clickText('ARM64 · 飞腾 / 鲲鹏', '.release-target-picker .ant-segmented-item-label');
+  await until(async () => (await rowIds()).join() === 'fixture-same-linux-arm64', 'standard ARM64 restored'); checks++;
   await clickText('发布新版本');
   await until(() => dom(`Boolean(document.querySelector('.release-upload-modal input#version'))`), 'ARM64 upload form');
   assert.equal(await dom(`document.querySelector('.release-native-file').accept`), '.deb'); checks++;
@@ -388,7 +396,7 @@ async function run() {
   assert.equal(requests.some(value => value.includes('/api/admin/session/restore')), false); checks++;
   assert.equal(await dom(`Object.keys(localStorage).length + Object.keys(sessionStorage).length`), 0, 'The app never persists account passwords in browser storage'); checks++;
   await writeFile(join(directory, 'result.json'), JSON.stringify({ passed: checks, sizes: [1440,1180,600], pages, blockedRequests, pageErrors, requests, scopeWrites,
-    releaseTargets: ['win32/x64', 'linux/x64', 'linux/arm64'], releaseUploadCalls, frozenTargetVerified: true, arm64DraftRemainsUnpublished: true }, null, 2));
+    releaseTargets: ['win32/x64', 'linux/x64', 'linux/arm64', 'linux/arm64/kirin990'], releaseUploadCalls, frozenTargetVerified: true, arm64DraftRemainsUnpublished: true }, null, 2));
   console.log(`PASS: ${checks} admin UI checks; screenshots: ${directory}`);
 }
 // Keep ownership of shutdown until cleanup has finished, including failing runs.

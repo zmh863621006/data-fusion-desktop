@@ -56,4 +56,18 @@ describe('managed release presentation and local preflight', () => {
     expect(releaseFileError(arm, '1.0.4', target)).toContain('1.0.4');
     expect(releaseFileError(file, '1.0.3', { platform: 'win32', arch: 'arm64' })).toContain('无效');
   });
+  it('separates Kirin990 releases and requires the dedicated installer name', () => {
+    const standard = { ...row, id: 'standard', platform: 'linux', arch: 'arm64' } as UpdateRecord;
+    const special = { ...standard, id: 'kirin990', variant: 'kirin990' } as UpdateRecord;
+    const target = { platform: 'linux', arch: 'arm64', variant: 'kirin990' } as const;
+    expect(releasesForTarget([standard, special], target).map(value => value.id)).toEqual(['kirin990']);
+    expect(releasesForTarget([standard, special], { platform: 'linux', arch: 'arm64' }).map(value => value.id)).toEqual(['standard']);
+    expect(releaseTargetLabel(special)).toContain('海思 990');
+    const dedicated = { ...file, name: '数据融合助手-麒麟海思990版-1.0.3-arm64.deb' };
+    expect(releaseFileError(dedicated, '1.0.3', target)).toBe('');
+    expect(releaseFileError(dedicated, '1.0.3', standard)).toContain('匹配当前平台与架构');
+    expect(releaseFileError({ ...file, name: '数据融合助手-麒麟版-1.0.3-arm64.deb' }, '1.0.3', target)).toContain('海思990');
+    expect(releaseFileError(dedicated, '1.0.3', { ...target, arch: 'x64' })).toContain('无效');
+    expect(releaseFileError(dedicated, '1.0.3', { ...target, platform: 'win32' })).toContain('无效');
+  });
 });

@@ -103,9 +103,13 @@ describe('admin interface regression', () => {
     expect(windows).toContain('aria-label="发布平台"'); expect(windows).not.toContain('aria-label="麒麟芯片架构"');
     const linux = render(<ReleaseTargetPicker target={{ platform: 'linux', arch: 'arm64' }} disabled onPlatformChange={onPlatformChange} onArchitectureChange={onArchitectureChange} />);
     expect(linux).toContain('aria-label="麒麟芯片架构"'); expect(linux).toContain('x86_64'); expect(linux).toContain('ARM64');
+    expect(linux).toContain('海思 990');
     expect(linux).toContain('ant-segmented-disabled');
     const details = render(<ReleaseDetails release={{ version: '1.0.3', platform: 'linux', arch: 'arm64', installer: 'deb',
       fileName: '数据融合助手-麒麟版-1.0.3-arm64.deb', bytes: 1024, sha256: 'a'.repeat(64), url: 'https://updates.test/package.deb' }} />);
     expect(details).toContain('信创 · 麒麟 V10 · ARM64'); expect(details).toContain('DEB'); expect(details).not.toContain('Windows');
+    const special = render(<ReleaseDetails release={{ version: '1.0.25', platform: 'linux', arch: 'arm64', variant: 'kirin990', installer: 'deb',
+      fileName: '数据融合助手-麒麟海思990版-1.0.25-arm64.deb', bytes: 89844608, sha256: 'a'.repeat(64), url: 'https://updates.test/kirin990.deb' }} />);
+    expect(special).toContain('海思 990'); expect(special).toContain('海思990版');
   });
 });

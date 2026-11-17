@@ -31,6 +31,14 @@ function tar(entries) {
   }
   return Buffer.concat([...blocks, Buffer.alloc(1024)]);
 }
+function packDeb(members) {
+  const blocks = [Buffer.from('!<arch>\n')];
+  for (const [name, bytes] of members) {
+    const header = (name + '/').padEnd(16) + '0'.padEnd(12) + '0'.padEnd(6) + '0'.padEnd(6) + '100644'.padEnd(8) + String(bytes.length).padEnd(10) + '`\n';
+    assert.equal(header.length, 60); blocks.push(Buffer.from(header), bytes, ...(bytes.length % 2 ? [Buffer.from('\n')] : []));
+  }
+  return Buffer.concat(blocks);
+}
 function deb(version = '1.0.3', arch = 'x64', { elfArch = arch, packageName = 'data-fusion-desktop', executable = true } = {}) {
   const elf = Buffer.alloc(64); elf.write('\x7fELF'); elf[4] = 2; elf[5] = 1; elf.writeUInt16LE(elfArch === 'x64' ? 62 : 183, 18);
   const members = [
@@ -38,12 +46,25 @@ function deb(version = '1.0.3', arch = 'x64', { elfArch = arch, packageName = 'd
     ['control.tar.gz', gzipSync(tar([['./control', `Package: ${packageName}\nVersion: ${version}\nArchitecture: ${arch === 'x64' ? 'amd64' : 'arm64'}\n`], ['./postinst', '#!/bin/sh\nexit 99\n']]))],
     ['data.tar.gz', gzipSync(tar([[executable ? './opt/data-fusion/data-fusion' : './opt/data-fusion/other-file', elf]]))],
   ];
-  const blocks = [Buffer.from('!<arch>\n')];
-  for (const [name, bytes] of members) {
-    const header = (name + '/').padEnd(16) + '0'.padEnd(12) + '0'.padEnd(6) + '0'.padEnd(6) + '100644'.padEnd(8) + String(bytes.length).padEnd(10) + '`\n';
-    assert.equal(header.length, 60); blocks.push(Buffer.from(header), bytes, ...(bytes.length % 2 ? [Buffer.from('\n')] : []));
-  }
-  return Buffer.concat(blocks);
+  return packDeb(members);
+}
+const reviewedLauncher = Buffer.from((await readFile(new URL('../../resources/kirin990-launcher.sh', import.meta.url), 'utf8')).replaceAll('\r\n', '\n'));
+const reviewedSource = JSON.parse(await readFile(new URL('../../resources/kirin990-compat/sources.json', import.meta.url), 'utf8'));
+const privateContents = await Promise.all(reviewedSource.files.map(async entry => [entry.path,
+  await readFile(new URL('../../resources/kirin990-compat/arm64/' + entry.path, import.meta.url))]));
+function kirinDeb(version = '1.0.3', mutate = () => {}) {
+  const native = Buffer.alloc(64); native.write('\x7fELF'); native[4] = 2; native[5] = 1; native.writeUInt16LE(183, 18);
+  const payload = new Map([['data-fusion', reviewedLauncher], ['data-fusion.bin', native],
+    ...privateContents.map(([path, bytes]) => ['resources/compat/kirin990/' + path, bytes])]);
+  const provenance = { schema: 1, variant: 'kirin990-arm64', architecture: 'arm64', nativeExecutable: 'data-fusion.bin',
+    launcherSha256: createHash('sha256').update(reviewedLauncher).digest('hex'), nativeSha256: createHash('sha256').update(native).digest('hex'),
+    rendererSandbox: true, systemLibrariesModified: false, graphicsMode: 'software-x11',
+    files: reviewedSource.files.map(entry => ({ ...entry, bytes: payload.get('resources/compat/kirin990/' + entry.path).length })) };
+  const controls = [['./control', `Package: data-fusion-desktop\nVersion: ${version}\nArchitecture: arm64\n`]];
+  mutate(payload, provenance, controls);
+  payload.set('resources/compat/kirin990/provenance.json', Buffer.from(JSON.stringify(provenance)));
+  return packDeb([['debian-binary', Buffer.from('2.0\n')], ['control.tar.gz', gzipSync(tar(controls))],
+    ['data.tar.gz', gzipSync(tar([...payload].map(([name, contents]) => ['./opt/data-fusion/' + name, contents])))]]);
 }
 async function until(work, message = 'fixture condition') {
   const end = Date.now() + 5000;
@@ -381,4 +402,113 @@ test('legacy global-version artifact migration preserves rows and old OSS keys w
   assert.equal(db.prepare('SELECT count(*) n FROM update_artifacts').get().n, 3);
   assert.equal(db.prepare('SELECT * FROM retained_business').get().value, 'unmodified');
   assert.throws(() => db.prepare('INSERT INTO updates(id,target_type,version,url,sha256,published_at,enabled,platform,arch) VALUES(?,?,?,?,?,?,?,?,?)').run('duplicate', 'app', '1.0.3', '', '', 0, 0, 'linux', 'x64'));
+});
+
+test('Kirin990 is an independent published channel and ordinary/legacy clients never receive its bytes', async t => {
+  const f = await fixture(t), identity = await f.client();
+  const standard = await f.upload('1.0.3', deb('1.0.3', 'arm64'), { query: { platform: 'linux', arch: 'arm64', filename: '数据融合助手-麒麟版-1.0.3-arm64.deb' } });
+  const query = { platform: 'linux', arch: 'arm64', variant: 'kirin990', filename: '数据融合助手-麒麟海思990版-1.0.3-arm64.deb' };
+  const specialized = await f.upload('1.0.3', kirinDeb(), { query });
+  assert.equal(standard.status, 201); assert.equal(specialized.status, 201, JSON.stringify(specialized.body));
+  assert.equal(specialized.body.variant, 'kirin990'); assert.equal(standard.body.variant, 'standard');
+  assert.notEqual(specialized.body.id, standard.body.id); assert.notEqual(specialized.body.sha256, standard.body.sha256);
+  assert.equal((await f.upload('1.0.3', kirinDeb(), { query })).status, 409);
+  for (const row of [standard.body, specialized.body]) {
+    assert.equal((await fetch(f.base + new URL(row.url).pathname)).status, 404);
+    assert.equal((await f.api(`/api/admin/updates/${row.id}`, { enabled: true, confirmPassword: password }, 'PATCH')).status, 200);
+  }
+  for (const target of [{ platform: 'linux', arch: 'arm64' }, { platform: 'linux', arch: 'arm64', variant: 'standard' }]) {
+    const app = (await f.manifest({ ...identity, ...target })).app;
+    assert.equal(app.id, standard.body.id); assert.equal(app.variant, undefined);
+  }
+  assert.equal((await f.manifest(identity)).app, undefined);
+  assert.equal((await f.manifest({ ...identity, platform: 'linux', arch: 'x64' })).app, undefined);
+  const app = (await f.manifest({ ...identity, platform: 'linux', arch: 'arm64', variant: 'kirin990' })).app;
+  assert.equal(app.id, specialized.body.id); assert.equal(app.variant, 'kirin990');
+  const download = await fetch(f.base + new URL(app.url).pathname);
+  assert.equal(download.status, 200); assert.deepEqual(Buffer.from(await download.arrayBuffer()), kirinDeb());
+  const head = await fetch(f.base + new URL(app.url).pathname, { method: 'HEAD' });
+  assert.equal(head.status, 200); assert.match(head.headers.get('content-disposition'), /filename\*=UTF-8/);
+  const range = await fetch(f.base + new URL(app.url).pathname, { headers: { range: 'bytes=0-7' } });
+  assert.equal(range.status, 206); assert.equal(Buffer.from(await range.arrayBuffer()).toString(), '!<arch>\n');
+  assert.equal((await f.api(`/api/admin/updates/${app.id}`, { enabled: false, confirmPassword: password }, 'PATCH')).status, 200);
+  assert.equal((await f.manifest({ ...identity, platform: 'linux', arch: 'arm64', variant: 'kirin990' })).app, undefined);
+  assert.equal((await f.manifest({ ...identity, platform: 'linux', arch: 'arm64' })).app.id, standard.body.id);
+});
+
+test('Kirin990 publishing fails closed on a changed launcher, native identity, private library or omitted license', async t => {
+  const f = await fixture(t), query = { platform: 'linux', arch: 'arm64', variant: 'kirin990', filename: '数据融合助手-麒麟海思990版-1.0.3-arm64.deb' };
+  const changes = [
+    payload => payload.set('data-fusion', Buffer.from('#!/bin/sh\nexit 0\n')),
+    (_, provenance) => { provenance.nativeSha256 = '0'.repeat(64); },
+    payload => payload.set('data-fusion.bin', Buffer.alloc(64)),
+    payload => payload.delete('resources/compat/kirin990/COPYRIGHT.libgbm1'),
+    (payload, provenance) => {
+      const changed = Buffer.from('changed and self-declared'); payload.set('resources/compat/kirin990/libgbm.so.1', changed);
+      const entry = provenance.files.find(file => file.path === 'libgbm.so.1'); entry.bytes = changed.length; entry.sha256 = createHash('sha256').update(changed).digest('hex');
+    },
+    (_, provenance) => { provenance.rendererSandbox = false; },
+    (_, provenance) => { provenance.toJSON = () => null; },
+    (_, __, controls) => controls.push(['./postinst', '#!/bin/sh\nexit 0\n']),
+  ];
+  for (const change of changes) assert.equal((await f.upload('1.0.3', kirinDeb('1.0.3', change), { query })).status, 400);
+  assert.equal((await f.upload('1.0.3', deb('1.0.3', 'arm64'), { query })).status, 400);
+  assert.equal((await f.upload('1.0.3', kirinDeb(), { query: { platform: 'linux', arch: 'arm64', filename: '数据融合助手-麒麟版-1.0.3-arm64.deb' } })).status, 400);
+  assert.equal((await f.api('/api/admin/bootstrap')).body.updates.length, 0); assert.deepEqual(await readdir(f.releaseDirectory), []);
+});
+
+test('Kirin990 target and filename cannot be disguised as Windows, x64, unknown variants or generic ARM64', async t => {
+  const f = await fixture(t), identity = await f.client();
+  for (const target of [
+    { platform: 'win32', arch: 'x64', variant: 'kirin990' }, { platform: 'linux', arch: 'x64', variant: 'kirin990' },
+    { platform: 'linux', arch: 'arm64', variant: 'other' }, { platform: 'linux', arch: 'arm64', variant: '' },
+  ]) {
+    const uploaded = await f.upload('1.0.3', kirinDeb(), { query: { ...target, filename: '数据融合助手-麒麟海思990版-1.0.3-arm64.deb' } });
+    assert.equal(uploaded.status, 400);
+    assert.equal((await f.api('/api/updates/manifest', { ...identity, ...target }, 'POST', '')).status, 400);
+  }
+});
+
+test('existing per-architecture release schema migrates both variant constraints atomically and is restart-safe', async t => {
+  const db = new DatabaseSync(':memory:'); t.after(() => db.close());
+  db.exec(`PRAGMA foreign_keys=ON;
+    CREATE TABLE updates(id TEXT PRIMARY KEY,target_type TEXT,version TEXT,url TEXT,sha256 TEXT,notes TEXT,published_at INTEGER,enabled INTEGER,platform TEXT DEFAULT 'win32',arch TEXT DEFAULT 'x64');
+    CREATE UNIQUE INDEX updates_app_target_version ON updates(platform,arch,version) WHERE target_type='app';
+    CREATE TABLE update_artifacts(update_id TEXT PRIMARY KEY REFERENCES updates(id),version TEXT,platform TEXT,arch TEXT,storage_name TEXT UNIQUE,file_name TEXT,bytes INTEGER,sha256 TEXT,state TEXT,created_at INTEGER,published_once INTEGER,oss_key TEXT,UNIQUE(platform,arch,version));
+    CREATE TABLE retained_business(value TEXT); INSERT INTO retained_business VALUES('unchanged');`);
+  db.prepare('INSERT INTO updates VALUES(?,?,?,?,?,?,?,?,?,?)').run('standard', 'app', '1.0.25', 'https://test.invalid/old.deb', 'a'.repeat(64), 'old notes', 123, 1, 'linux', 'arm64');
+  db.prepare('INSERT INTO update_artifacts VALUES(?,?,?,?,?,?,?,?,?,?,?,?)').run('standard', '1.0.25', 'linux', 'arm64', 'old.deb', 'old.deb', 123, 'a'.repeat(64), 'ready', 123, 1, 'old/key');
+  const prior = db.prepare('SELECT * FROM update_artifacts').get();
+  const options = { publicOrigin: 'https://updates.example.invalid', transaction: work => work(), audit: () => {}, authorize: () => ({ role: 'admin' }) };
+  const releases = createUpdateReleases(db, options); await releases.close();
+  const migrated = db.prepare('SELECT * FROM update_artifacts').get();
+  const { variant, ...original } = migrated; assert.equal(variant, 'standard'); assert.deepEqual(original, { ...prior });
+  assert.equal(db.prepare('SELECT variant FROM updates').get().variant, 'standard');
+  db.prepare('INSERT INTO updates(id,target_type,version,url,sha256,published_at,enabled,platform,arch,variant) VALUES(?,?,?,?,?,?,?,?,?,?)')
+    .run('special', 'app', '1.0.25', 'https://test.invalid/special.deb', 'b'.repeat(64), 124, 0, 'linux', 'arm64', 'kirin990');
+  db.prepare('INSERT INTO update_artifacts(update_id,version,platform,arch,variant,storage_name,file_name,bytes,sha256,state,created_at,published_once) VALUES(?,?,?,?,?,?,?,?,?,?,?,?)')
+    .run('special', '1.0.25', 'linux', 'arm64', 'kirin990', 'special.deb', 'special.deb', 42, 'b'.repeat(64), 'ready', 124, 0);
+  const second = createUpdateReleases(db, options); await second.close();
+  assert.equal(db.prepare('SELECT count(*) n FROM update_artifacts').get().n, 2);
+  assert.equal(db.prepare('SELECT * FROM retained_business').get().value, 'unchanged');
+  assert.deepEqual(db.prepare('PRAGMA foreign_key_check').all(), []);
+  assert.throws(() => db.prepare('INSERT INTO updates(id,target_type,version,url,sha256,published_at,enabled,platform,arch,variant) VALUES(?,?,?,?,?,?,?,?,?,?)')
+    .run('duplicate', 'app', '1.0.25', '', '', 0, 0, 'linux', 'arm64', 'kirin990'));
+});
+
+test('a failed release-channel schema migration rolls back new columns and keeps existing records and constraints', t => {
+  const db = new DatabaseSync(':memory:'); t.after(() => db.close());
+  db.exec(`CREATE TABLE updates(id TEXT PRIMARY KEY,target_type TEXT,version TEXT,platform TEXT,arch TEXT);
+    CREATE UNIQUE INDEX updates_app_target_version ON updates(platform,arch,version) WHERE target_type='app';
+    INSERT INTO updates VALUES('old','app','1.0.25','linux','arm64');
+    CREATE TABLE update_artifacts(update_id TEXT PRIMARY KEY,version TEXT UNIQUE,storage_name TEXT UNIQUE,file_name TEXT,bytes INTEGER,sha256 TEXT,state TEXT,created_at INTEGER,published_once INTEGER,oss_key TEXT);
+    INSERT INTO update_artifacts VALUES('old','1.0.25','old.deb','old.deb',1,'a','ready',1,1,'old/key');
+    CREATE TABLE update_artifacts_v2(retained TEXT); INSERT INTO update_artifacts_v2 VALUES('do not overwrite');`);
+  const before = db.prepare('SELECT * FROM update_artifacts').get();
+  assert.throws(() => createUpdateReleases(db, {}));
+  assert.deepEqual(db.prepare('SELECT * FROM update_artifacts').get(), before);
+  assert.equal(db.prepare('PRAGMA table_info(updates)').all().some(row => row.name === 'variant'), false);
+  assert.equal(db.prepare('PRAGMA table_info(update_artifacts)').all().some(row => row.name === 'variant'), false);
+  assert.equal(db.prepare('SELECT * FROM update_artifacts_v2').get().retained, 'do not overwrite');
+  assert.equal(db.prepare('PRAGMA index_list(updates)').all().some(row => row.name === 'updates_app_target_version'), true);
 });

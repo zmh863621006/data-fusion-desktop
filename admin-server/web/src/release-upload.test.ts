@@ -112,4 +112,14 @@ describe('binary managed-release upload API', () => {
     await expect(adminApi.uploadRelease(linuxFile, { version: '1.0.3', platform: 'linux', arch: 'arm64' })).rejects.toThrow('匹配当前平台与架构');
     expect(FakeXHR.instances).toHaveLength(0);
   });
+  it.each([undefined, 'standard', 'kirin990'])('verifies the Kirin990 acknowledgment variant: %s', async variant => {
+    const dedicated = { name: '数据融合助手-麒麟海思990版-1.0.3-arm64.deb', size: 200 } as File;
+    const uploading = adminApi.uploadRelease(dedicated, { version: '1.0.3', platform: 'linux', arch: 'arm64', variant: 'kirin990' });
+    const xhr = FakeXHR.instances[0];
+    expect(new URL(xhr.url, 'https://updates.test').searchParams.get('variant')).toBe('kirin990');
+    const acknowledgment = { ...result, fileName: dedicated.name, bytes: dedicated.size, platform: 'linux', arch: 'arm64', installer: 'deb', variant };
+    xhr.respond(201, acknowledgment);
+    if (variant === 'kirin990') await expect(uploading).resolves.toEqual(acknowledgment);
+    else await expect(uploading).rejects.toMatchObject({ status: 502 });
+  });
 });

@@ -51,6 +51,7 @@ export function uploadRelease(file: File, values: UploadReleaseValues, options: 
       } else resolve(result!);
     };
     const query = new URLSearchParams({ version: values.version, filename: file.name, platform: target.platform, arch: target.arch });
+    if (target.variant === 'kirin990') query.set('variant', target.variant);
     xhr.open('POST', `/api/admin/updates/upload?${query}`);
     xhr.withCredentials = true;
     xhr.timeout = 10 * 60_000;
@@ -73,7 +74,8 @@ export function uploadRelease(file: File, values: UploadReleaseValues, options: 
         finish(new ApiError('服务器返回的版本、摘要或文件大小不一致，未执行发布，请刷新列表核对', 502)); return;
       }
       const hasTarget = values.platform !== undefined || values.arch !== undefined || body.platform !== undefined || body.arch !== undefined || body.installer !== undefined;
-      if (hasTarget && (body.platform !== target.platform || body.arch !== target.arch || body.installer !== (target.platform === 'linux' ? 'deb' : 'nsis'))) {
+      if (hasTarget && (body.platform !== target.platform || body.arch !== target.arch || body.installer !== (target.platform === 'linux' ? 'deb' : 'nsis')
+        || (body.variant ?? 'standard') !== target.variant)) {
         finish(new ApiError('服务器返回的发布平台、架构或安装格式不一致，未执行发布，请刷新列表核对', 502)); return;
       }
       options.onProgress?.(100);

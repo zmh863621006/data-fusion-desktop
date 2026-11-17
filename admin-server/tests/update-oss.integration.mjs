@@ -191,3 +191,25 @@ test('new platform namespaces isolate equal versions and allow signed Linux down
   }
   assert.equal(new Set(observed).size, 3);
 });
+
+test('Kirin990 OSS objects use a separate immutable namespace and never alias standard ARM64 or legacy keys', async t => {
+  const f = await localFile(t), target = { platform: 'linux', arch: 'arm64', variant: 'kirin990', fileName: '数据融合助手-麒麟海思990版-1.0.6-arm64.deb' };
+  const expected = `${config.prefix}linux/arm64/kirin990/1.0.6/${target.fileName}`;
+  let exists = false;
+  const storage = createOssUpdateStorage(config, { fetcher: async (url, options) => {
+    assert.equal(decodeURIComponent(new URL(url).pathname), '/' + expected);
+    if (options.method === 'HEAD') return exists ? f.head() : new Response(null, { status: 404 });
+    assert.equal(options.method, 'PUT'); assert.equal(options.headers['x-oss-forbid-overwrite'], 'true');
+    for await (const chunk of options.body) assert(chunk.length > 0);
+    exists = true; return new Response(null, { status: 200 });
+  } });
+  const key = await storage.ensureUploaded({ ...f.entry, ...target }); assert.equal(key, expected);
+  assert.equal(decodeURIComponent(new URL(storage.downloadUrl(key)).pathname), '/' + expected);
+  for (const invalid of [
+    `${config.prefix}linux/arm64/1.0.6/${target.fileName}`,
+    `${config.prefix}linux/x64/kirin990/1.0.6/${target.fileName}`,
+    `${config.prefix}linux/arm64/other/1.0.6/${target.fileName}`,
+    `${config.prefix}linux/arm64/kirin990/1.0.6/数据融合助手-麒麟版-1.0.6-arm64.deb`,
+  ]) assert.throws(() => storage.downloadUrl(invalid));
+  await assert.rejects(storage.ensureUploaded({ ...f.entry, ...target, variant: 'standard' }), /路径无效/);
+});

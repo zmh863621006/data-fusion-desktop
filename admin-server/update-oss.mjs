@@ -31,7 +31,9 @@ export function createOssUpdateStorage(config, { fetcher = fetch, now = Date.now
     if (typeof key !== 'string' || !key.startsWith(config.prefix)) return false;
     const parts = key.slice(config.prefix.length).split('/');
     if (parts.length === 2) return isInstallerName(parts[1], parts[0]);
-    return parts.length === 4 && releaseTarget(parts[0], parts[1]) && isInstallerName(parts[3], parts[2], parts[0], parts[1]);
+    if (parts.length === 4) return Boolean(releaseTarget(parts[0], parts[1]) && isInstallerName(parts[3], parts[2], parts[0], parts[1]));
+    return parts.length === 5 && parts[2] === 'kirin990' && releaseTarget(parts[0], parts[1], parts[2])
+      && isInstallerName(parts[4], parts[3], parts[0], parts[1], parts[2]);
   };
   function signedHeaders(method, key, extra = {}) {
     const timestamp = stamp(now());
@@ -55,12 +57,12 @@ export function createOssUpdateStorage(config, { fetcher = fetch, now = Date.now
   }
   return {
     async ensureUploaded(entry) {
-      const target = releaseTarget(entry.platform, entry.arch);
+      const target = releaseTarget(entry.platform, entry.arch, entry.variant);
       if (!target) throw new Error('OSS 更新平台或架构无效');
       const key = entry.platform === undefined && entry.arch === undefined
         ? `${config.prefix}${entry.version}/${entry.fileName}`
-        : `${config.prefix}${target.platform}/${target.arch}/${entry.version}/${entry.fileName}`;
-      if (!validKey(key) || !isInstallerName(entry.fileName, entry.version, target.platform, target.arch)) throw new Error('OSS 更新对象路径无效');
+        : `${config.prefix}${target.platform}/${target.arch}/${target.variant === 'kirin990' ? 'kirin990/' : ''}${entry.version}/${entry.fileName}`;
+      if (!validKey(key) || !isInstallerName(entry.fileName, entry.version, target.platform, target.arch, target.variant)) throw new Error('OSS 更新对象路径无效');
       const md5 = createHash('md5'), sha = createHash('sha256'); let bytes = 0;
       for await (const part of createReadStream(entry.path)) { bytes += part.length; md5.update(part); sha.update(part); }
       const digest = md5.digest();

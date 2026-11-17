@@ -579,11 +579,11 @@ async function api(request, response, url) {
     if (user.role !== 'admin') return json(response,403,{error:'仅超级管理员可发布版本'});
     await confirmSensitive(request,user,body.confirmPassword);
     let downloadUrl; try { downloadUrl = new URL(body.url); } catch { /* rejected below */ }
-    const target = releaseTarget(body.platform, body.arch);
+    const target = releaseTarget(body.platform, body.arch, body.variant);
     if (target?.platform === 'linux') return json(response, 400, { error: '麒麟版本必须上传完整 DEB 安装包，不能使用外链发布' });
     if (!target || body.installer !== undefined && body.installer !== target.installer || !RELEASE_VERSION_PATTERN.test(String(body.version)) || downloadUrl?.protocol !== 'https:' || downloadUrl.username || downloadUrl.password || downloadUrl.hash || !/^[a-f0-9]{64}$/.test(String(body.sha256))) return json(response, 400, { error: '平台、架构、版本、HTTPS 下载地址或 SHA256 无效' });
-    if (database.prepare("SELECT id FROM updates WHERE target_type='app' AND platform=? AND arch=? AND version=?").get(target.platform, target.arch, body.version)) return json(response,409,{error:'该平台及架构的版本已存在，请使用新的版本号'});
-    const id = randomUUID(); database.prepare('INSERT INTO updates(id,target_type,system_id,version,url,sha256,notes,published_at,platform,arch) VALUES(?,?,?,?,?,?,?,?,?,?)').run(id, 'app', null, body.version, body.url, body.sha256, String(body.notes ?? '').slice(0, 1000), Date.now(), target.platform, target.arch);
+    if (database.prepare("SELECT id FROM updates WHERE target_type='app' AND platform=? AND arch=? AND variant=? AND version=?").get(target.platform, target.arch, target.variant ?? 'standard', body.version)) return json(response,409,{error:'该平台及架构的版本已存在，请使用新的版本号'});
+    const id = randomUUID(); database.prepare('INSERT INTO updates(id,target_type,system_id,version,url,sha256,notes,published_at,platform,arch,variant) VALUES(?,?,?,?,?,?,?,?,?,?,?)').run(id, 'app', null, body.version, body.url, body.sha256, String(body.notes ?? '').slice(0, 1000), Date.now(), target.platform, target.arch, target.variant ?? 'standard');
     audit(user, 'update.created', 'update', id, { version: body.version, ...target });
     return json(response, 201, { ok: true });
   }
@@ -597,7 +597,7 @@ async function api(request, response, url) {
     const enabled = typeof body.enabled === 'boolean' ? Number(body.enabled) : existing.enabled;
     if (!await updateReleases.publish(existing.id, Boolean(enabled), request, user)) database.prepare('UPDATE updates SET enabled=? WHERE id=?').run(enabled, existing.id);
     audit(user, 'update.updated', 'update', existing.id, { enabled: Boolean(enabled), version: existing.version,
-      platform: existing.platform, arch: existing.arch });
+      platform: existing.platform, arch: existing.arch, variant: existing.variant });
     return json(response, 200, { ok: true });
   }
   if (request.method === 'POST' && url.pathname === '/api/activate') {
@@ -631,11 +631,11 @@ async function api(request, response, url) {
   if (request.method === 'POST' && url.pathname === '/api/updates/manifest') {
     const body = await readJson(request); verifyClientProof(body);
     const { licenseId,deviceId } = body;
-    const target = releaseTarget(body.platform, body.arch);
+    const target = releaseTarget(body.platform, body.arch, body.variant);
     if (!target) return json(response, 400, { error: '更新平台或芯片架构无效' });
     const valid = database.prepare(`SELECT l.id FROM licenses l JOIN devices d ON d.license_id=l.id JOIN customers c ON c.id=l.customer_id WHERE l.id=? AND d.device_id=? AND c.enabled=1 AND l.mode='online' AND l.allow_auto_update=1 AND l.status='active' AND d.status='active' AND l.expires_at>?`).get(licenseId, deviceId, Date.now());
     if (!valid) return json(response, 403, { error: '当前设备没有自动更新权限' });
-    const appUpdate = database.prepare("SELECT id,version,url,sha256,notes,platform,arch FROM updates WHERE target_type='app' AND platform=? AND arch=? AND enabled=1 ORDER BY published_at DESC").all(target.platform, target.arch)
+    const appUpdate = database.prepare("SELECT id,version,url,sha256,notes,platform,arch,variant FROM updates WHERE target_type='app' AND platform=? AND arch=? AND variant=? AND enabled=1 ORDER BY published_at DESC").all(target.platform, target.arch, target.variant ?? 'standard')
       .map(updateReleases.manifest).filter(Boolean)
       .filter((item) => /^\d+\.\d+\.\d+$/.test(item.version)).sort((a,b) => {
         const left = a.version.split('.').map(Number), right = b.version.split('.').map(Number);

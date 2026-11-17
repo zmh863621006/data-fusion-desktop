@@ -9,16 +9,33 @@ import { RELEASE_VERSION_PATTERN as VERSION, installerName, installerVersion, is
 const MAX_BYTES = 500 * 1024 * 1024;
 const NSIS_MARKER = Buffer.from('efbeadde4e756c6c736f6674496e7374', 'hex');
 const fail = (message, status = 400) => { throw Object.assign(new Error(message), { status }); };
+// Pinned to the reviewed process-local launcher and official upstream private
+// libraries/notices in resources/kirin990-compat/sources.json. A manifest inside
+// an uploaded archive is not itself a trusted source of allowed library bytes.
+const KIRIN990_LAUNCHER_SHA256 = '1f7bad2121ccd2707d3d68f8c1696d0cae9e440b18168882bf0070b3a1d00d57';
+const KIRIN990_FILES = {
+  'libgbm.so.1': '0c40e83443b61bd1eb33367f02255ff289f07d22086ae6ea9d7f231f541473c7',
+  'COPYRIGHT.libgbm1': '30c36421275bf40e318d5d3e8662db6e332f97f047fa963bdb44e28ef9112232',
+  'libdrm.so.2': '3172504008446d5fad455e317c79c458eacf6e800a76e459ead72212bca0eb2d',
+  'COPYRIGHT.libdrm2': '512c9a57fd8b449aa157351da9df07bf8e19f767e496a72205a4020268ddb2e0',
+  'libexpat.so.1': 'ded87e196b89bbbb3194a022485348d3fd3195d091a3c326eea52ea5eac755df',
+  'COPYRIGHT.libexpat1': '15721756f0bdfd8fb83d3ae9fd9f76ceb3285b0ecacb0532a547e9e2f324c35c',
+  'libwayland-server.so.0': 'a2562454cef3d0fb4a3974a31663054420ff34016ce70f6c50c33a3b3563008a',
+  'COPYRIGHT.libwayland-server0': '3a943debedeac62002ce65da7a9b647875612c3d45840f0b001ae27fb76522a6',
+  'libffi.so.6': '4fca2d72d71008423fdc880c853ab4e8753946322960c265db199323aeb72e25',
+  'COPYRIGHT.libffi6': '7258c8acc378030d8dbe1fcdf394e915769fa31dcbaf3d2991d9a79891f3bcdc',
+};
 
 // Read archive members as data only. tar never extracts files or runs package
 // scripts, and both its elapsed time and output are bounded.
-async function readTarMember(path, member, args, outputLimit, captureLimit = outputLimit, entryName) {
+async function readTarMember(path, member, args, outputLimit, captureLimit = outputLimit, entryName, summarize = false) {
   return new Promise((resolveResult, reject) => {
     const compressionFlag = { gz: '-z', xz: '-J', bz2: '-j', zst: '--zstd' }[member.compression];
     const child = spawn('tar', [...args, ...(compressionFlag ? [compressionFlag] : []), '-f', '-', ...(entryName === undefined ? [] : ['--', entryName])],
       { windowsHide: true, stdio: ['pipe', 'pipe', 'pipe'] });
     const source = createReadStream(path, { start: member.offset, end: member.offset + member.size - 1 });
     let bytes = 0, captured = 0, parts = [], failed = false, spawnError, errorText = '';
+    const digest = summarize ? createHash('sha256') : null;
     const timer = setTimeout(() => { failed = true; child.kill(); }, 60_000);
     timer.unref?.();
     child.on('error', error => { spawnError = error; });
@@ -28,6 +45,7 @@ async function readTarMember(path, member, args, outputLimit, captureLimit = out
     child.stdout.on('data', chunk => {
       bytes += chunk.length;
       if (bytes > outputLimit) { failed = true; child.kill(); return; }
+      digest?.update(chunk);
       if (captured < captureLimit) { const part = chunk.subarray(0, captureLimit - captured); parts.push(part); captured += part.length; }
     });
     child.on('close', code => {
@@ -36,14 +54,15 @@ async function readTarMember(path, member, args, outputLimit, captureLimit = out
       if (code !== 0 && /(?:unable to run program|Cannot exec|cannot run).*\b(?:xz|zstd)\b/i.test(errorText))
         return reject(Object.assign(new Error('发布服务器缺少对应压缩支持，请配置 xz/zstd 或使用 gzip 压缩的 DEB'), { status: 503 }));
       if (code !== 0 || failed || spawnError) return reject(Object.assign(new Error('DEB 压缩内容无效、过大或无法校验'), { status: 400 }));
-      resolveResult(Buffer.concat(parts, captured));
+      const prefix = Buffer.concat(parts, captured);
+      resolveResult(summarize ? { prefix, sha256: digest.digest('hex'), bytes } : prefix);
     });
     source.pipe(child.stdin);
   });
 }
 
-export async function validateDebPackage(path, version, arch, length) {
-  if (!VERSION.test(version) || !releaseTarget('linux', arch)) fail('DEB 发布版本或架构无效');
+export async function validateDebPackage(path, version, arch, length, variant = 'standard') {
+  if (!VERSION.test(version) || !releaseTarget('linux', arch, variant)) fail('DEB 发布版本或架构无效');
   length ??= (await lstat(path)).size;
   if (!Number.isSafeInteger(length) || length > MAX_BYTES) fail('DEB 大小无效');
   const file = await open(path, 'r'), members = new Map();
@@ -87,9 +106,45 @@ export async function validateDebPackage(path, version, arch, length) {
   const names = (await readTarMember(path, dataArchive, ['-t'], 8 * 1024 * 1024)).toString('utf8').trim().split(/\r?\n/);
   const executables = names.filter(name => /^opt\/(?:data-fusion|数据融合助手)\/data-fusion$/.test(name.replace(/^\.\//, '')));
   if (executables.length !== 1) fail('DEB 缺少唯一数据融合助手程序');
+  const isElf = elf => elf.length >= 20 && elf.toString('hex', 0, 4) === '7f454c46' && elf[4] === 2 && elf[5] === 1
+    && elf.readUInt16LE(18) === (arch === 'x64' ? 62 : 183);
+  if (variant === 'kirin990') {
+    if (controlNames.some(name => !['', '.', 'control', 'md5sums'].includes(name.replace(/^\.\//, '').replace(/\/$/, ''))))
+      fail('海思990专用包不允许安装维护脚本');
+    const launcher = await readTarMember(path, dataArchive, ['-xO'], 64 * 1024, 64 * 1024, executables[0]);
+    if (createHash('sha256').update(launcher).digest('hex') !== KIRIN990_LAUNCHER_SHA256) fail('海思990启动器与已审阅版本不一致');
+    const base = executables[0].slice(0, -'data-fusion'.length);
+    const one = relative => {
+      const exact = base + relative;
+      if (names.filter(name => name.replace(/^\.\//, '') === exact.replace(/^\.\//, '')).length !== 1) fail('海思990专用载荷缺少唯一文件：' + relative);
+      return exact;
+    };
+    let provenance;
+    try { provenance = JSON.parse((await readTarMember(path, dataArchive, ['-xO'], 64 * 1024, 64 * 1024,
+      one('resources/compat/kirin990/provenance.json'))).toString('utf8')); }
+    catch (error) { if (error.status) throw error; fail('海思990兼容来源信息无效'); }
+    if (!provenance || typeof provenance !== 'object' || Array.isArray(provenance)
+      || provenance.schema !== 1 || provenance.variant !== 'kirin990-arm64' || provenance.architecture !== 'arm64'
+      || provenance.nativeExecutable !== 'data-fusion.bin' || provenance.launcherSha256 !== KIRIN990_LAUNCHER_SHA256
+      || provenance.rendererSandbox !== true || provenance.systemLibrariesModified !== false || provenance.graphicsMode !== 'software-x11'
+      || !/^[a-f0-9]{64}$/.test(provenance.nativeSha256) || !Array.isArray(provenance.files)
+      || provenance.files.length !== Object.keys(KIRIN990_FILES).length) fail('海思990兼容元数据与专用渠道不一致');
+    const native = await readTarMember(path, dataArchive, ['-xO'], 512 * 1024 * 1024, 64, one('data-fusion.bin'), true);
+    if (!isElf(native.prefix) || native.sha256 !== provenance.nativeSha256) fail('海思990原生程序架构或摘要不符');
+    const seen = new Set();
+    for (const entry of provenance.files) {
+      const expected = KIRIN990_FILES[entry?.path];
+      if (!expected || seen.has(entry.path) || entry.sha256 !== expected
+        || entry.kind !== (entry.path.startsWith('COPYRIGHT.') ? 'license' : 'library')) fail('海思990私有组件清单不符');
+      seen.add(entry.path);
+      const contents = await readTarMember(path, dataArchive, ['-xO'], 2 * 1024 * 1024, 2 * 1024 * 1024, one('resources/compat/kirin990/' + entry.path));
+      if (contents.length !== entry.bytes || createHash('sha256').update(contents).digest('hex') !== expected
+        || entry.kind === 'library' && !isElf(contents)) fail('海思990私有组件字节或架构不符');
+    }
+    return;
+  }
   const elf = await readTarMember(path, dataArchive, ['-xO'], 512 * 1024 * 1024, 64, executables[0]);
-  if (elf.length < 20 || elf.toString('hex', 0, 4) !== '7f454c46' || elf[4] !== 2 || elf[5] !== 1
-    || elf.readUInt16LE(18) !== (arch === 'x64' ? 62 : 183)) fail('DEB 程序不是对应架构的64位 ELF 文件');
+  if (!isElf(elf)) fail('DEB 程序不是对应架构的64位 ELF 文件');
 }
 export function updatePublicOrigin(value) {
   if (!value) return null;
@@ -104,33 +159,38 @@ export function createUpdateReleases(db, { directory, publicOrigin, transaction,
   const origin = updatePublicOrigin(publicOrigin);
   const root = directory ? resolve(directory) : null;
   if (!Number.isSafeInteger(maxBytes) || maxBytes < 1024 || maxBytes > MAX_BYTES) throw new Error('Invalid installer size limit');
-  for (const [name, definition] of [['platform', "TEXT NOT NULL DEFAULT 'win32'"], ['arch', "TEXT NOT NULL DEFAULT 'x64'"]]) {
-    if (!db.prepare('PRAGMA table_info(updates)').all().some(column => column.name === name)) db.exec(`ALTER TABLE updates ADD COLUMN ${name} ${definition}`);
-  }
   const artifactSchema = `CREATE TABLE IF NOT EXISTS update_artifacts(
     update_id TEXT PRIMARY KEY REFERENCES updates(id) ON DELETE RESTRICT,
-    version TEXT NOT NULL,platform TEXT NOT NULL DEFAULT 'win32',arch TEXT NOT NULL DEFAULT 'x64',storage_name TEXT NOT NULL UNIQUE,file_name TEXT NOT NULL,
+    version TEXT NOT NULL,platform TEXT NOT NULL DEFAULT 'win32',arch TEXT NOT NULL DEFAULT 'x64',variant TEXT NOT NULL DEFAULT 'standard',storage_name TEXT NOT NULL UNIQUE,file_name TEXT NOT NULL,
     bytes INTEGER NOT NULL DEFAULT 0,sha256 TEXT NOT NULL DEFAULT '',state TEXT NOT NULL,
     created_at INTEGER NOT NULL,published_once INTEGER NOT NULL DEFAULT 0,oss_key TEXT,
-    UNIQUE(platform,arch,version)
+    UNIQUE(platform,arch,variant,version)
   )`;
-  db.exec(artifactSchema);
-  if (!db.prepare('PRAGMA table_info(update_artifacts)').all().some(column => column.name === 'oss_key')) db.exec('ALTER TABLE update_artifacts ADD COLUMN oss_key TEXT');
-  for (const name of ['platform', 'arch']) if (!db.prepare('PRAGMA table_info(update_artifacts)').all().some(column => column.name === name))
-    db.exec(`ALTER TABLE update_artifacts ADD COLUMN ${name} TEXT NOT NULL DEFAULT '${name === 'platform' ? 'win32' : 'x64'}'`);
-  const oldUniqueVersion = db.prepare('PRAGMA index_list(update_artifacts)').all().some(index => index.unique &&
-    JSON.stringify(db.prepare(`PRAGMA index_info("${index.name.replaceAll('"', '""')}")`).all().map(column => column.name)) === '["version"]');
-  if (oldUniqueVersion) {
-    db.exec('BEGIN IMMEDIATE');
-    try {
-      db.exec('ALTER TABLE update_artifacts RENAME TO update_artifacts_v1');
+  // Migrate all release-channel columns and uniqueness together. Legacy records
+  // stay in the standard channel; their artifact paths, hashes and IDs survive.
+  db.exec('BEGIN IMMEDIATE');
+  try {
+    for (const table of ['updates', 'update_artifacts']) {
+      if (table === 'update_artifacts') db.exec(artifactSchema);
+      for (const [name, value] of [['platform', 'win32'], ['arch', 'x64'], ['variant', 'standard']]) {
+        if (!db.prepare(`PRAGMA table_info(${table})`).all().some(column => column.name === name))
+          db.exec(`ALTER TABLE ${table} ADD COLUMN ${name} TEXT NOT NULL DEFAULT '${value}'`);
+      }
+    }
+    if (!db.prepare('PRAGMA table_info(update_artifacts)').all().some(column => column.name === 'oss_key')) db.exec('ALTER TABLE update_artifacts ADD COLUMN oss_key TEXT');
+    const oldUniqueVersion = db.prepare('PRAGMA index_list(update_artifacts)').all().some(index => {
+      const columns = JSON.stringify(db.prepare(`PRAGMA index_info("${index.name.replaceAll('"', '""')}")`).all().map(column => column.name));
+      return index.unique && ['["version"]', '["platform","arch","version"]'].includes(columns);
+    });
+    if (oldUniqueVersion) {
+      db.exec('ALTER TABLE update_artifacts RENAME TO update_artifacts_v2');
       db.exec(artifactSchema);
-      db.exec(`INSERT INTO update_artifacts(update_id,version,platform,arch,storage_name,file_name,bytes,sha256,state,created_at,published_once,oss_key)
-        SELECT update_id,version,platform,arch,storage_name,file_name,bytes,sha256,state,created_at,published_once,oss_key FROM update_artifacts_v1`);
-      db.exec('DROP TABLE update_artifacts_v1; COMMIT');
-    } catch (error) { db.exec('ROLLBACK'); throw error; }
-  }
-  db.exec("CREATE UNIQUE INDEX IF NOT EXISTS updates_app_target_version ON updates(platform,arch,version) WHERE target_type='app'");
+      db.exec(`INSERT INTO update_artifacts(update_id,version,platform,arch,variant,storage_name,file_name,bytes,sha256,state,created_at,published_once,oss_key)
+        SELECT update_id,version,platform,arch,variant,storage_name,file_name,bytes,sha256,state,created_at,published_once,oss_key FROM update_artifacts_v2`);
+      db.exec('DROP TABLE update_artifacts_v2');
+    }
+    db.exec("DROP INDEX IF EXISTS updates_app_target_version; CREATE UNIQUE INDEX IF NOT EXISTS updates_app_target_variant_version ON updates(platform,arch,variant,version) WHERE target_type='app'; COMMIT");
+  } catch (error) { db.exec('ROLLBACK'); throw error; }
   const mirror = ossStorage ?? ossUpdateStorageFromFile(root ? join(dirname(root), 'update-oss.secure.json') : undefined);
   const uploading = new Set();
   const publishing = new Set(), uploadCompletions = new Set();
@@ -148,7 +208,7 @@ export function createUpdateReleases(db, { directory, publicOrigin, transaction,
     : origin ? `${origin}/api/releases/${entry.update_id}/${encodeURIComponent(entry.file_name ?? installerName(version))}` : null;
   const describe = row => {
     const entry = artifact(row.id);
-    const target = releaseTarget(row.platform ?? 'win32', row.arch ?? 'x64');
+    const target = releaseTarget(row.platform ?? 'win32', row.arch ?? 'x64', row.variant);
     return entry ? { ...row, ...target, url: row.enabled ? urlFor(entry) ?? row.url : row.url, bytes: entry.bytes, fileName: entry.file_name, managed: true,
       status: entry.state === 'uploading' ? 'uploading' : row.enabled ? 'published' : entry.published_once ? 'disabled' : 'draft' }
       : { ...row, ...target, managed: false, status: row.enabled ? 'published' : 'disabled' };
@@ -178,9 +238,9 @@ export function createUpdateReleases(db, { directory, publicOrigin, transaction,
     if (closed) fail('发布服务正在关闭，请稍后重试', 503);
     if (uploading.size >= 2) fail('已有安装包正在上传，请稍后重试', 429);
     const version = url.searchParams.get('version') ?? '', name = url.searchParams.get('filename') ?? '';
-    const target = releaseTarget(url.searchParams.get('platform') ?? undefined, url.searchParams.get('arch') ?? undefined);
+    const target = releaseTarget(url.searchParams.get('platform') ?? undefined, url.searchParams.get('arch') ?? undefined, url.searchParams.get('variant') ?? undefined);
     if (!target) fail('发布平台或芯片架构无效');
-    const uploadKey = `${target.platform}:${target.arch}:${version}`;
+    const uploadKey = `${target.platform}:${target.arch}:${target.variant ?? 'standard'}:${version}`;
     let notes = url.searchParams.get('notes') ?? '';
     const encodedNotes = request.headers['x-release-notes-base64'];
     if (encodedNotes !== undefined) {
@@ -188,13 +248,13 @@ export function createUpdateReleases(db, { directory, publicOrigin, transaction,
       try { notes = new TextDecoder('utf-8', { fatal: true }).decode(Buffer.from(encodedNotes, 'base64')); }
       catch { fail('更新说明必须为有效UTF-8'); }
     }
-    if (!VERSION.test(version) || !isInstallerName(name, version, target.platform, target.arch) || notes.length > 1000) fail('版本号、安装包名称或更新说明无效');
+    if (!VERSION.test(version) || !isInstallerName(name, version, target.platform, target.arch, target.variant) || notes.length > 1000) fail('版本号、安装包名称或更新说明无效');
     const expected = request.headers['x-content-sha256'];
     if (expected !== undefined && !/^[a-f0-9]{64}$/.test(expected)) fail('客户端SHA256格式无效');
     const declared = request.headers['content-length'];
     if (declared !== undefined && (!/^\d+$/.test(declared) || !Number.isSafeInteger(Number(declared)) || Number(declared) < 64)) fail('安装包长度无效');
     if (Number(declared) > maxBytes) fail('安装包超过500MB安全限制', 413);
-    const existing = db.prepare("SELECT * FROM updates WHERE target_type='app' AND platform=? AND arch=? AND version=?").get(target.platform, target.arch, version);
+    const existing = db.prepare("SELECT * FROM updates WHERE target_type='app' AND platform=? AND arch=? AND variant=? AND version=?").get(target.platform, target.arch, target.variant ?? 'standard', version);
     const interrupted = existing && artifact(existing.id);
     // A process crash can leave an uncommitted upload reservation. Only a later authenticated retry
     // may recover it, after the full upload deadline + 2min; ready/ever-published files are never replaced.
@@ -227,11 +287,11 @@ export function createUpdateReleases(db, { directory, publicOrigin, transaction,
           db.prepare('DELETE FROM updates WHERE id=?').run(existing.id);
           audit(user, 'update.interrupted_upload_recovered', 'update', existing.id, { version, ...target });
         }
-        if (db.prepare("SELECT id FROM updates WHERE target_type='app' AND platform=? AND arch=? AND version=?").get(target.platform, target.arch, version)) fail('该平台及架构的版本已存在，请使用新的版本号', 409);
-        db.prepare('INSERT INTO updates(id,target_type,system_id,version,url,sha256,notes,published_at,enabled,platform,arch) VALUES(?,?,?,?,?,?,?,?,0,?,?)')
-          .run(id, 'app', null, version, urlFor(entry), '', notes, now(), target.platform, target.arch);
-        db.prepare('INSERT INTO update_artifacts(update_id,version,storage_name,file_name,state,created_at,platform,arch) VALUES(?,?,?,?,?,?,?,?)')
-          .run(id, version, entry.storage_name, name, 'uploading', now(), target.platform, target.arch);
+        if (db.prepare("SELECT id FROM updates WHERE target_type='app' AND platform=? AND arch=? AND variant=? AND version=?").get(target.platform, target.arch, target.variant ?? 'standard', version)) fail('该平台及架构的版本已存在，请使用新的版本号', 409);
+        db.prepare('INSERT INTO updates(id,target_type,system_id,version,url,sha256,notes,published_at,enabled,platform,arch,variant) VALUES(?,?,?,?,?,?,?,?,0,?,?,?)')
+          .run(id, 'app', null, version, urlFor(entry), '', notes, now(), target.platform, target.arch, target.variant ?? 'standard');
+        db.prepare('INSERT INTO update_artifacts(update_id,version,storage_name,file_name,state,created_at,platform,arch,variant) VALUES(?,?,?,?,?,?,?,?,?)')
+          .run(id, version, entry.storage_name, name, 'uploading', now(), target.platform, target.arch, target.variant ?? 'standard');
       }); reserved = true;
       file = await open(temporary, 'wx', 0o600);
       for await (const chunk of request) {
@@ -248,7 +308,7 @@ export function createUpdateReleases(db, { directory, publicOrigin, transaction,
       }
       if (declared !== undefined && Number(declared) !== length) fail('安装包上传不完整，请重试');
       if (target.platform === 'win32') validatePE(prefix, hasNsis);
-      else await validateDebPackage(temporary, version, target.arch, length);
+      else await validateDebPackage(temporary, version, target.arch, length, target.variant);
       const sha256 = hash.digest('hex');
       if (expected && expected !== sha256) fail('安装包SHA256校验失败，未保留上传文件');
       const current = authorize(request);
@@ -287,7 +347,7 @@ export function createUpdateReleases(db, { directory, publicOrigin, transaction,
         if (!origin) fail('更新公开地址尚未配置', 503);
         await verifyStored(entry);
         if (mirror) ossKey = await mirror.ensureUploaded({ path: await regularFile(entry), version: entry.version,
-          fileName: entry.file_name, bytes: entry.bytes, sha256: entry.sha256, platform: entry.platform, arch: entry.arch });
+          fileName: entry.file_name, bytes: entry.bytes, sha256: entry.sha256, platform: entry.platform, arch: entry.arch, variant: entry.variant });
       }
       if (closed) fail('发布服务正在关闭，请稍后重试', 503);
       if (request && user) {
@@ -346,7 +406,7 @@ export function createUpdateReleases(db, { directory, publicOrigin, transaction,
     upload, publish, describe, serve,
     manifest(row) {
       const entry = artifact(row.id);
-      const target = releaseTarget(row.platform ?? 'win32', row.arch ?? 'x64');
+      const target = releaseTarget(row.platform ?? 'win32', row.arch ?? 'x64', row.variant);
       if (!target) return null;
       if (!entry) {
         if (target.platform === 'linux') return null;
@@ -354,7 +414,7 @@ export function createUpdateReleases(db, { directory, publicOrigin, transaction,
         // optional MSI/manual-update behavior. Linux requires managed bytes.
         const { id, version, url, sha256, notes } = row; return { id, version, url, sha256, notes };
       }
-      if (entry.platform !== target.platform || entry.arch !== target.arch) return null;
+      if (entry.platform !== target.platform || entry.arch !== target.arch || entry.variant !== (target.variant ?? 'standard')) return null;
       if (entry.state !== 'ready' || !origin) return null;
       return { id: row.id, version: row.version, url: urlFor(entry), sha256: entry.sha256, notes: row.notes, bytes: entry.bytes, fileName: entry.file_name,
         ...target };

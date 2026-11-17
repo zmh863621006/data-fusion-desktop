@@ -19,7 +19,7 @@ export type UpdateRecord = {
   notes?: string; published_at: number; enabled: number;
   bytes?: number | null; fileName?: string; managed?: boolean;
   status?: 'uploading' | 'draft' | 'published' | 'disabled';
-  platform?: 'win32' | 'linux'; arch?: 'x64' | 'arm64'; installer?: 'nsis' | 'deb';
+  platform?: 'win32' | 'linux'; arch?: 'x64' | 'arm64'; variant?: 'standard' | 'kirin990'; installer?: 'nsis' | 'deb';
 };
 export type AuditRecord = { id: string; user_id: string; username: string; action: string; target_type?: string; target_id?: string; metadata_json?: string; created_at: number };
 export type BootstrapData = {
