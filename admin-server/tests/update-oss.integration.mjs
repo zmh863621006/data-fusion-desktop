@@ -213,3 +213,35 @@ test('Kirin990 OSS objects use a separate immutable namespace and never alias st
   ]) assert.throws(() => storage.downloadUrl(invalid));
   await assert.rejects(storage.ensureUploaded({ ...f.entry, ...target, variant: 'standard' }), /路径无效/);
 });
+
+test('a fully read DEB body switches socket timeout before validation, including rejected archives', async t => {
+  const f = await releaseFixture(t, null), bytes = Buffer.alloc(4096), events = [];
+  const request = Readable.from([bytes]); request.headers = { 'content-length': String(bytes.length) };
+  request.on('end', () => events.push('body-end'));
+  request.setTimeout = value => { events.push(value); };
+  const url = new URL('https://backend.example.invalid/api/admin/updates/upload?' + new URLSearchParams({
+    version: '1.0.7', platform: 'linux', arch: 'arm64', filename: '数据融合助手-麒麟版-1.0.7-arm64.deb',
+  }));
+  await assert.rejects(f.releases.upload(request, {}, url, f.user), { status: 400 });
+  assert.deepEqual(events, [60_000, 'body-end', 600_000]);
+  assert.equal(f.db.prepare('SELECT COUNT(*) n FROM updates').get().n, 1);
+  assert.equal(f.db.prepare('SELECT COUNT(*) n FROM update_artifacts').get().n, 1);
+  assert.deepEqual(await readFile(f.storagePath), f.bytes);
+});
+
+test('an incomplete upload keeps the 60s idle timeout and never enters the post-body timeout phase', async t => {
+  const f = await releaseFixture(t, null), timeouts = [];
+  let started, reads = 0;
+  const reading = new Promise(resolve => { started = resolve; });
+  const request = new Readable({ read() { if (!reads++) { this.push(Buffer.alloc(512)); started(); } } });
+  request.headers = { 'content-length': '4096' }; request.setTimeout = value => { timeouts.push(value); };
+  const url = new URL('https://backend.example.invalid/api/admin/updates/upload?version=1.0.7&filename=DataFusion-Setup-1.0.7-x64.exe');
+  const pending = f.releases.upload(request, {}, url, f.user);
+  const rejected = assert.rejects(pending, /fixture cancelled/);
+  await reading; assert.deepEqual(timeouts, [60_000]);
+  request.destroy(new Error('fixture cancelled')); await rejected;
+  assert.deepEqual(timeouts, [60_000]);
+  assert.equal(f.db.prepare('SELECT COUNT(*) n FROM updates').get().n, 1);
+  assert.equal(f.db.prepare('SELECT COUNT(*) n FROM update_artifacts').get().n, 1);
+  assert.deepEqual(await readFile(f.storagePath), f.bytes);
+});

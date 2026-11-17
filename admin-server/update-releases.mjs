@@ -306,6 +306,10 @@ export function createUpdateReleases(db, { directory, publicOrigin, transaction,
         }
         await file.writeFile(chunk);
       }
+      // The 60s idle limit protects an incomplete HTTP upload. Once its body is
+      // complete, DEB validation (including repeated XZ scans) and OSS mirroring
+      // may run without socket traffic. Keep the original total deadline above.
+      request.setTimeout(uploadTimeoutMs);
       if (declared !== undefined && Number(declared) !== length) fail('安装包上传不完整，请重试');
       if (target.platform === 'win32') validatePE(prefix, hasNsis);
       else await validateDebPackage(temporary, version, target.arch, length, target.variant);
@@ -315,7 +319,6 @@ export function createUpdateReleases(db, { directory, publicOrigin, transaction,
       if (!current || current.id !== user.id || current.role !== 'admin' || current.passwordChangeRequired) fail('账号状态已变更，请重新登录后上传', 403);
       await file.sync(); await file.close(); file = null;
       await chmod(temporary, 0o400); await rename(temporary, path); moved = true;
-      if (mirror) request.setTimeout(uploadTimeoutMs);
       const ossKey = mirror ? await mirror.ensureUploaded({ path, version, fileName: name, bytes: length, sha256, ...target }) : null;
       if (closed) fail('发布服务正在关闭，上传已取消', 503);
       const latest = authorize(request);
