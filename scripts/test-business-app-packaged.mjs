@@ -9,6 +9,7 @@ import { DatabaseSync } from 'node:sqlite';
 // Run the actual packaged renderer, preload, IPC and SQLite in an isolated profile.
 // A short-lived offline QA grant is signed locally; no activation or business API is used.
 const args = process.argv.slice(2);
+const expectOnline = args.includes('--expect-online');
 const option = name => args[args.indexOf(name) + 1];
 assert(args.includes('--app') && args.includes('--signing-key'), 'Use --app <DataFusion.exe> --signing-key <local private key>');
 const executable = resolve(option('--app')), project = resolve(import.meta.dirname, '..');
@@ -82,6 +83,7 @@ async function run(round) {
     await until(() => evaluate('Boolean(window.desktopApi && document.querySelector(".app-shell"))'), 'renderer and actual preload', 20_000);
     const status = await evaluate('window.desktopApi.license.status()'); assert.equal(status.state, 'active'); assert.equal(status.grant.licenseId, grant.licenseId);
     const updates = await evaluate('window.desktopApi.updates.state()'); assert.equal(updates.kind, 'business'); assert.equal(updates.installMode, 'startup'); assert.equal(updates.currentVersion, '1.1.0');
+    if (expectOnline) assert.equal(updates.offline, false, 'Packaged app must have accepted the live OSS manifest');
     const systems = await evaluate('window.desktopApi.systems.list()'); assert.equal(systems.length, 7);
     assert.equal((await evaluate('window.desktopApi.matters.list("government-info")')).length, 18);
     assert.equal((await evaluate('window.desktopApi.components.list()')).length, 8);

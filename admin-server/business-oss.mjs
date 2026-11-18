@@ -24,7 +24,13 @@ export function createBusinessOssStorage(config, { fetcher = fetch, now = Date.n
   function publicUrl(key) { if (!validKey(key)) throw Error('OSS 业务对象路径无效'); return publicBase + encodedPath(key); }
   async function request(method, key, extra = {}, body, query = '') {
     if (!validKey(key)) throw Error('OSS 业务对象路径无效');
-    const timestamp = stamp(now()), headers = { 'x-oss-date': timestamp, 'x-oss-content-sha256': 'UNSIGNED-PAYLOAD', ...extra };
+    const timestamp = stamp(now()), headers = {
+      'x-oss-date': timestamp,
+      'x-oss-content-sha256': 'UNSIGNED-PAYLOAD',
+      // OSS can omit ETag when it automatically gzips a JSON response.
+      'accept-encoding': 'identity',
+      ...extra,
+    };
     if (config.securityToken) headers['x-oss-security-token'] = config.securityToken;
     const included = Object.fromEntries(Object.entries(headers).filter(([name]) => name.startsWith('x-oss-') || ['content-md5', 'content-type'].includes(name)));
     const signature = updateOssSignature({ secret: config.accessKeySecret, region, timestamp, method, resource: `/${config.bucket}/${encodedPath(key)}`, query, headers: included });

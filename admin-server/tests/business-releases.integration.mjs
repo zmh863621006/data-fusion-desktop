@@ -22,7 +22,10 @@ function mockOss() {
     const parsed = new URL(url), key = decodeURIComponent(parsed.pathname).slice(1), item = objects.get(key); calls.push({ key, method: options.method, acl: options.headers['x-oss-object-acl'], forbidOverwrite: options.headers['x-oss-forbid-overwrite'] });
     assert(parsed.hostname === config.bucket + '.' + config.endpoint); assert.match(options.headers.authorization, /^OSS4-HMAC-SHA256 /);
     if (options.method === 'HEAD') return item ? new Response(null, { status: 200, headers: { etag: item.etag, 'content-length': String(item.body.length), 'x-oss-meta-sha256': item.sha256 } }) : new Response(null, { status: 404 });
-    if (options.method === 'GET') return item ? new Response(item.body, { headers: { etag: item.etag } }) : new Response(null, { status: 404 });
+    if (options.method === 'GET') {
+      const headers = options.headers['accept-encoding'] === 'identity' ? { etag: item?.etag } : {};
+      return item ? new Response(item.body, { headers }) : new Response(null, { status: 404 });
+    }
     assert.equal(options.method, 'PUT');
     if (parsed.search === '?acl') { assert(item); item.acl = options.headers['x-oss-object-acl']; return new Response(null); }
     if (pauseLatest && key.endsWith('/latest.json')) await pauseLatest();
