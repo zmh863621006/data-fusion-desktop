@@ -64,7 +64,7 @@ server {
         proxy_send_timeout 600s;
         proxy_pass http://127.0.0.1:8787;
     }
-    location /api/admin/business-releases/ {
+    location /api/admin/business-releases {
         allow 127.0.0.1;
         # allow 203.0.113.10;
         deny all;
