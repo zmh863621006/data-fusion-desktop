@@ -1,5 +1,6 @@
 import { X509Certificate } from 'node:crypto';
 import { dialog, session, type Request as CertificateVerificationRequest } from 'electron';
+import { publicSourceCertificateVerifier } from './source-public-certificate';
 
 export interface SourceCertificateVault {
   get(key: string): Promise<string | null>;
@@ -36,6 +37,40 @@ const REJECT_CERTIFICATE = -2;
 const AUTHORITY_INVALID = -202;
 const authorityErrors = new Set(['CERT_AUTHORITY_INVALID', 'ERR_CERT_AUTHORITY_INVALID', 'net::ERR_CERT_AUTHORITY_INVALID']);
 
+function installAuthorityVerifier(partition: string, verify: (request: CertificateVerificationRequest) => Promise<number>): void {
+  session.fromPartition(partition).setCertificateVerifyProc((request, callback) => {
+    if (request.errorCode !== AUTHORITY_INVALID || !authorityErrors.has(request.verificationResult)) {
+      callback(USE_CHROMIUM_RESULT);
+      return;
+    }
+    void verify(request).then(callback, () => callback(USE_CHROMIUM_RESULT));
+  });
+}
+
+/** Only named source sessions receive the fallback. Exact-origin navigation rules still apply. */
+export async function installSourceCertificateVerifiers(
+  sources: Iterable<{ partition: string; origins: Iterable<string> }>,
+  pinnedSource: SourceCertificateTrustOptions,
+): Promise<void> {
+  const partitions = new Map<string, Set<string>>();
+  for (const { partition, origins } of sources) {
+    if (!partition.trim() || partition !== partition.trim()) continue;
+    for (const origin of origins) {
+      if (!origin.startsWith('https://')) continue;
+      const existing = partitions.get(partition) ?? new Set<string>();
+      existing.add(origin);
+      partitions.set(partition, existing);
+    }
+  }
+  for (const [partition, origins] of partitions) {
+    if (partition === pinnedSource.partition) continue;
+    const verify = publicSourceCertificateVerifier(origins);
+    installAuthorityVerifier(partition, async (request) =>
+      await verify(request.hostname, request.certificate.data) ? 0 : USE_CHROMIUM_RESULT);
+  }
+  await installSourceCertificateTrust(pinnedSource, partitions.get(pinnedSource.partition));
+}
+
 function normalizedPin(value: unknown): string | null {
   if (typeof value !== 'string') return null;
   const compact = value.replace(/:/g, '').toUpperCase();
@@ -68,7 +103,7 @@ async function defaultPrompt(certificate: SourceCertificateSummary): Promise<boo
  * All ordinary TLS decisions remain Chromium's. A pin is never inferred from a
  * probe, a displayed fingerprint, an issuer name or an existing browser cookie.
  */
-export async function installSourceCertificateTrust(options: SourceCertificateTrustOptions): Promise<void> {
+export async function installSourceCertificateTrust(options: SourceCertificateTrustOptions, publicOrigins: Iterable<string> = []): Promise<void> {
   const url = new URL(options.origin);
   if (url.protocol !== 'https:' || url.origin !== options.origin || !url.hostname
     || !options.partition.trim() || options.partition !== options.partition.trim()) {
@@ -125,14 +160,11 @@ export async function installSourceCertificateTrust(options: SourceCertificateTr
     return decision;
   }
 
-  // Electron's verification callback exposes hostname, not a port; source navigation
-  // and requests must continue to enforce their existing exact-origin allowlists.
-  session.fromPartition(options.partition).setCertificateVerifyProc((request, callback) => {
-    if (request.hostname.toLowerCase() !== hostname || request.errorCode !== AUTHORITY_INVALID
-      || !authorityErrors.has(request.verificationResult)) {
-      callback(USE_CHROMIUM_RESULT);
-      return;
-    }
-    void verify(request).then(approved => callback(approved ? 0 : REJECT_CERTIFICATE), () => callback(REJECT_CERTIFICATE));
+  const verifyPublic = publicSourceCertificateVerifier(publicOrigins);
+  installAuthorityVerifier(options.partition, async (request) => {
+    // Keep the reviewed pin available even if the widely trusted path is unavailable.
+    if (request.hostname.toLowerCase() === hostname && await verify(request)) return 0;
+    if (await verifyPublic(request.hostname, request.certificate.data)) return 0;
+    return request.hostname.toLowerCase() === hostname ? REJECT_CERTIFICATE : USE_CHROMIUM_RESULT;
   });
 }

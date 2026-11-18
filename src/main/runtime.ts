@@ -1,5 +1,6 @@
 import { PractitionerNumbers } from '../core/config/practitioner-numbers';
-import { DefaultPluginRegistry } from '../core/plugins/types';
+import { DefaultPluginRegistry, sourceOrigins } from '../core/plugins/types';
+import { publicationPlatformsForSystem } from '../core/publication/platforms';
 import { marketAccessPlugin } from '../plugins/market-access';
 import { configureGovernmentInfoSessionPersistence, governmentInfoPlugin } from '../plugins/government-info';
 import { configurePractitionerCredentials, transportPractitionerPlugin } from '../plugins/transport-practitioner';
@@ -44,7 +45,7 @@ import { HealthPublicityService } from '../core/tools/health-publicity/service';
 import { assertToolLicensed } from '../core/license/gate';
 import toolCatalog from '../core/tools/catalog.json';
 import type { ComponentSummary } from '../core/plugins/components';
-import { installSourceCertificateTrust } from './source-certificate-trust';
+import { installSourceCertificateVerifiers } from './source-certificate-trust';
 import { HRSS_SOURCE_CERTIFICATE_TRUST } from '../core/config/source-certificate-pins';
 import { businessBootstrapContext } from './business-bootstrap-context';
 
@@ -178,8 +179,6 @@ export class AppRuntime {
     this.credentialStore = new SecureCredentialStore(join(userDataPath, 'credentials.secure.json'));
     const sessionStore = new SecureSessionStore(join(userDataPath, 'sessions.secure.json'));
     this.sessionStore = sessionStore;
-    await installSourceCertificateTrust({ ...HRSS_SOURCE_CERTIFICATE_TRUST, vault: sessionStore })
-      .catch(() => console.warn('人社原站证书配置暂未恢复，将使用系统证书校验'));
     configureGovernmentInfoSessionPersistence({
       load: () => sessionStore.get('government-info.lid'),
       save: (lid) => sessionStore.set('government-info.lid', lid),
@@ -201,7 +200,14 @@ export class AppRuntime {
     this.plugins.register(onlineCarPermitPlugin);
     this.plugins.register(createGuangdongHrssPlugin());
     this.plugins.register(createShenzhenHazardousPlugin());
-    for (const plugin of this.plugins.list()) await plugin.initialize();
+    const plugins = this.plugins.list();
+    const sources = plugins.flatMap(({ id, loginPage }) => [
+      ...(loginPage ? [{ partition: loginPage.partition, origins: sourceOrigins(loginPage) }] : []),
+      ...publicationPlatformsForSystem(id).map(({ partition, allowedOrigin }) => ({ partition, origins: [allowedOrigin] })),
+    ]);
+    await installSourceCertificateVerifiers(sources, { ...HRSS_SOURCE_CERTIFICATE_TRUST, vault: sessionStore })
+      .catch(() => console.warn('原系统公共证书复验配置未能完整加载，将继续使用内置浏览器的证书校验'));
+    for (const plugin of plugins) await plugin.initialize();
     this.sessionRecovery = new SessionRecoveryService(sessionStore);
     for (const plugin of this.plugins.list()) await this.sessionRecovery.register(plugin);
     loginTabController.configurePersistence({

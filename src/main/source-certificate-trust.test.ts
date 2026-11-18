@@ -1,4 +1,6 @@
 import { X509Certificate } from 'node:crypto';
+import { EventEmitter } from 'node:events';
+import { connect, rootCertificates } from 'node:tls';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import type { Request as CertificateVerificationRequest } from 'electron';
 
@@ -6,7 +8,8 @@ type VerifyProc = (request: CertificateVerificationRequest, callback: (result: n
 const electron = vi.hoisted(() => ({ procedures: new Map<string, VerifyProc>(),
   fromPartition: vi.fn(), showMessageBox: vi.fn() }));
 vi.mock('electron', () => ({ session: { fromPartition: electron.fromPartition }, dialog: { showMessageBox: electron.showMessageBox } }));
-import { installSourceCertificateTrust, type SourceCertificateTrustOptions } from './source-certificate-trust';
+vi.mock('node:tls', async (actual) => ({ ...await actual<typeof import('node:tls')>(), connect: vi.fn() }));
+import { installSourceCertificateTrust, installSourceCertificateVerifiers, type SourceCertificateTrustOptions } from './source-certificate-trust';
 import { HRSS_SOURCE_CERTIFICATE_TRUST } from '../core/config/source-certificate-pins';
 
 // Public, local synthetic certificates only; their disposable private keys were never saved.
@@ -201,5 +204,92 @@ describe('reviewed built-in certificate trust for new clients', () => {
   it('ships automatic trust only for the explicitly approved HRSS origin and partition', () => {
     expect(HRSS_SOURCE_CERTIFICATE_TRUST).toEqual({ partition: 'persist:guangdong-hrss', origin: 'https://hrss.gdgov.cn', unknownCertificate: 'reject',
       trustedFingerprints: ['99:A4:5E:36:EF:E5:CE:EA:37:77:76:CB:D3:AE:1E:3C:67:40:3E:A3:98:26:0B:D6:73:20:B7:BD:08:13:AF:6F'] });
+  });
+});
+
+describe('public CA fallback for source partitions', () => {
+  const other = 'persist:another-source';
+  const pinned = 'persist:pinned-source';
+
+  function peer(certificate = CERT_A, authorized = true) {
+    const socket = Object.assign(new EventEmitter(), {
+      authorized,
+      getPeerCertificate: () => ({ raw: new X509Certificate(certificate).raw }),
+      destroy: vi.fn(),
+    });
+    vi.mocked(connect).mockReturnValue(socket as unknown as ReturnType<typeof connect>);
+    return socket;
+  }
+
+  function install(origins = [ORIGIN]) {
+    return installSourceCertificateVerifiers([
+      { partition: PARTITION, origins },
+      { partition: other, origins: ['https://other.test'] },
+      { partition: pinned, origins: [ORIGIN] },
+      { partition: 'persist:http-source', origins: ['http://hrss.test'] },
+    ], options({ partition: pinned, unknownCertificate: 'reject', trustedFingerprints: [pinA] }));
+  }
+
+  it('requires a trusted TLS handshake with the same leaf and combines concurrent probes', async () => {
+    await install(['https://hrss.test:8443']);
+    const socket = peer();
+    const first = verify(), second = verify();
+    expect(connect).toHaveBeenCalledExactlyOnceWith({ host: 'hrss.test', port: 8443, servername: 'hrss.test',
+      ca: [...rootCertificates], rejectUnauthorized: true, minVersion: 'TLSv1.2' });
+    socket.emit('secureConnect');
+    expect(await Promise.all([first, second])).toEqual([0, 0]);
+    expect(socket.destroy).toHaveBeenCalledOnce();
+  });
+
+  it('delegates if the chain fails or the independently verified leaf is different', async () => {
+    await install();
+    const changedLeaf = peer(CERT_B);
+    const mismatch = verify();
+    changedLeaf.emit('secureConnect');
+    expect(await mismatch).toBe(-3);
+    const untrusted = peer(CERT_A, false);
+    const rejected = verify();
+    untrusted.emit('error', new Error('Untrusted CA'));
+    expect(await rejected).toBe(-3);
+  });
+
+  it('skips unconfigured hosts, mismatched SAN, HTTP-only partitions and other Chromium errors', async () => {
+    await install();
+    expect(electron.procedures.has('persist:http-source')).toBe(false);
+    expect(await verify(request(), other)).toBe(-3);
+    expect(await verify(request({ hostname: 'other.test' }), other)).toBe(-3);
+    for (const errorCode of [0, -200, -201, -206]) expect(await verify(request({ errorCode }))).toBe(-3);
+    expect(await verify(request({ verificationResult: 'CERT_REVOKED' }))).toBe(-3);
+    expect(connect).not.toHaveBeenCalled();
+  });
+
+  it('does not guess which port to probe when the configured hostname is ambiguous', async () => {
+    await install([ORIGIN, 'https://hrss.test:8443']);
+    expect(await verify()).toBe(-3);
+    expect(connect).not.toHaveBeenCalled();
+  });
+
+  it('returns control to Chromium if the probe times out', async () => {
+    vi.useFakeTimers();
+    try {
+      await install();
+      const socket = peer();
+      const timedOut = verify();
+      await vi.advanceTimersByTimeAsync(4_000);
+      expect(await timedOut).toBe(-3);
+      expect(socket.destroy).toHaveBeenCalledOnce();
+    } finally { vi.useRealTimers(); }
+  });
+
+  it('keeps the reviewed pin while allowing independently validated certificate rotation', async () => {
+    await install();
+    expect(await verify(request(), pinned)).toBe(0);
+    expect(connect).not.toHaveBeenCalled();
+    const rotated = peer(CERT_B);
+    const result = verify(request({ certificate: { data: CERT_B } as CertificateVerificationRequest['certificate'] }), pinned);
+    await Promise.resolve();
+    rotated.emit('secureConnect');
+    expect(await result).toBe(0);
+    expect(electron.showMessageBox).not.toHaveBeenCalled();
   });
 });
