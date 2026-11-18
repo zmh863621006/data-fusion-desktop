@@ -19,10 +19,10 @@
 当前构建默认固定入口为：
 
 ```text
-https://shenzhen-sjrh.oss-cn-shenzhen.aliyuncs.com/data-fusion/updates/windows-x64/business/v1/
+https://shenzhen-sjrh-desktop-updates.oss-cn-shenzhen.aliyuncs.com/data-fusion/updates/business/v1/
 ```
 
-`windows-x64` 是既有 OSS 配置前缀的一部分；其下的业务通道仍按实际系统、架构和 Electron 大版本独立区分，不表示所有载荷都是 Windows 包。每个通道结构如下：
+业务更新使用独立的深圳区域 OSS Bucket，通道按实际系统、架构和 Electron 大版本区分。每个通道结构如下：
 
 ```text
 <固定入口>/<platform>/<arch>/<variant>/electron-<major>/latest.json
@@ -41,7 +41,7 @@ https://shenzhen-sjrh.oss-cn-shenzhen.aliyuncs.com/data-fusion/updates/windows-x
 
 后台“版本更新”分为“基础安装包”和“业务更新包”。业务包上传时读取实际 ASAR 内的元数据，检查产品、版本、目标、最低基础版本、后台配置、包结构及 SHA256。校验成功只创建私有草稿，OSS 上的 ASAR 对象为 `private`，不会进入公开清单。上传超限、内容无效或账号状态变更不会形成可发布的完整草稿。
 
-超级管理员核对详情并输入当前密码发布后，后台将对应 ASAR 设为 `public-read`，再以条件写入方式更新该通道的 `latest.json`。公开清单为 RSA-SHA256 签名信封，签名内容包括业务版本、最低基础版本、精确目标、固定载荷 URL、字节数、SHA256、后台源地址与修订号。客户端使用基础包内的产品公钥验签，并校验实际 ASAR 与内部 `business.json`；HTTPS 下载成功本身不等于校验通过。
+超级管理员核对详情并输入当前密码发布后，后台将对应 ASAR 设为 `public-read`，再写入并回读校验该通道的 `latest.json`。公开清单为 RSA-SHA256 签名信封，签名内容包括业务版本、最低基础版本、精确目标、固定载荷 URL、字节数、SHA256、后台源地址与修订号。客户端使用基础包内的产品公钥验签，并校验实际 ASAR 与内部 `business.json`。
 
 已发布清单与载荷使用固定公开 HTTPS 地址，不依赖后台 IP、设备登录或有时效的 OSS 查询签名参数。OSS 中公开的是应用程序文件和签名更新元数据，不应包含授权密钥、账号密码、Cookie、企业台账、业务数据库、导出文件或服务端私钥。启动检查可以在客户端激活前进行；实际业务菜单、查询、导出和后台企业补全仍按原授权规则执行。旧授权中的 `allow_auto_update` 继续控制旧完整安装包接口，不控制新的公开静态业务发现入口。
 
@@ -55,16 +55,16 @@ ASAR 版本对象采用不可覆盖写入及长期不可变缓存；`latest.json
 | --- | --- |
 | 本地业务包目录 | 默认 `ADMIN_DB_PATH` 同级的 `business-releases/`；`ADMIN_DB_PATH=/data/admin.sqlite` 时为 `/data/business-releases/`。 |
 | 可选目录覆盖 | `ADMIN_BUSINESS_UPDATE_DIRECTORY` 只覆盖业务包本地存储目录，不是公开下载地址；现有 `.env.example` 未要求填写。 |
-| OSS 配置文件 | 从业务包目录的上一级读取 `update-oss.secure.json`，与原完整安装包使用相同文件名及格式。默认布局下可直接复用现有配置；若目录覆盖到不同父目录，必须保证该父目录有正确的受保护配置文件。 |
+| OSS 配置文件 | 从业务包目录的上一级优先读取 `business-oss.secure.json`。缺少该文件时读取同目录的 `update-oss.secure.json`，两份配置格式相同。 |
 | OSS 配置字段 | 复用 `endpoint`、`bucket`、`prefix`、`accessKeyId`、`accessKeySecret` 和可选 `securityToken`；业务命名空间固定追加 `business/v1/`。 |
 | 签名私钥 | 复用 `ADMIN_LICENSE_PRIVATE_KEY` 指向的现有产品 RSA 私钥。必须与基础包钉住的产品公钥匹配，不生成新的临时生产密钥。 |
 | `ADMIN_UPDATE_PUBLIC_ORIGIN` | 仍供后台返回的兼容下载代理源地址使用，默认继承 `ADMIN_PUBLIC_ORIGIN`；不决定 OSS 静态发现入口。 |
 | 桌面固定发现入口 | 基础包生成 `shell.json` 时写入；默认值见上文，可在构建基础包时通过 `stage-business-shell.mjs --feed-base` 指定。 |
 | `DATA_FUSION_UPDATE_URL` | 保留为旧完整安装包清单接口配置，不能用它改写固定启动器的 OSS 发现入口。 |
 
-服务端默认路径在宿主机为 `/var/lib/data-fusion/update-oss.secure.json`，使用现有数据挂载的容器中为 `/data/update-oss.secure.json`。文件保留原服务账号和 0600 权限，不放进 Git、静态站点、安装包或日志。配置在服务启动时加载，修改配置后需按正常发布流程重启后台。
+生产业务配置使用宿主机 `/var/lib/data-fusion/business-oss.secure.json`，容器内为 `/data/business-oss.secure.json`。原 `update-oss.secure.json` 继续服务完整安装包。配置文件限服务账号读取，权限为 0600。服务启动时加载配置。
 
-“复用配置格式”不等于原 RAM 权限已经满足新操作。正式接通前应核对该身份可访问原 `prefix` 下新增的 `business/v1/` 对象，具有需要的对象读写、HEAD 校验及 `PutObjectACL` 权限；若策略只允许原安装包路径，需补充新前缀。还需确认 Bucket 的阻止公共访问策略允许只公开已发布对象。无需开放整个 Bucket，也无需增加允许公开列举目录的权限。本轮本地测试未在线核实生产 RAM 或 Bucket 策略。
+独立更新 Bucket 的默认 ACL 为 `private`。2026-11-18 已在单独的测试对象上验证私有上传、匿名拒绝、禁止覆盖、公开读取与下载校验。发布身份需要业务前缀内的对象读写、HEAD 校验和 `PutObjectACL` 权限。公开读取仅通过已发布对象的 ACL 提供，旧安装包 Bucket 保留其公开访问保护。
 
 固定启动器的 `feedBase` 必须与后台根据实际 `endpoint/bucket/prefix` 生成的 `feedBase` 一致。后台 API 的 `configured=true` 仅说明加载到了 OSS 配置，不代表线上访问权限、公开下载、TLS 或网络已经验证。未配置 OSS 时可以保存本地业务草稿，但不能发布；这与旧完整安装包可以使用本地分发的行为不同。
 
@@ -72,7 +72,7 @@ ASAR 版本对象采用不可覆盖写入及长期不可变缓存；`latest.json
 
 ## 启动强制更新与离线规则
 
-启动器先验证当前本地版本，再读取本通道清单，业务界面此时尚未运行。主要行为如下：
+启动器同时核验本地版本和读取 OSS 清单，清单请求最多等待 3 秒。没有更新时直接进入应用，下载新版或启动失败时才显示提示窗口。
 
 | 情况 | 行为 |
 | --- | --- |
@@ -111,7 +111,7 @@ pending 是启动更新状态，不是“记住登录”。不能通过运维脚
 
 ## 版本发布与紧急回退
 
-每个通道的 `version` 使用三段递增版本号，例如 `1.1.0`、`1.1.1`，不使用预发布后缀。同通道同版本不可重新上传不同内容，也不能发布低于历史发布上限的版本。重新点击发布只能用于核对同一不可变产物或协调中断的发布状态，不能替换字节。`latest.json` 的 ETag 条件写入和服务端通道租约共同避免并发旧发布覆盖新发布。
+每个通道的 `version` 使用三段递增版本号，例如 `1.1.0`、`1.1.1`。同通道同版本不可重新上传不同内容，也不能发布低于历史发布上限的版本。所有发布进程必须共用同一个管理数据库和通道租约。首次写清单使用 OSS 的 `x-oss-forbid-overwrite`，后续写入先核对 ETag，写入后回读签名内容。OSS 的 PutObject 不支持基于 ETag 的原子条件覆盖，因此同一通道应仅由此后台写入。
 
 建议的正式发布顺序：
 

@@ -19,7 +19,7 @@ const publicKey = keys.publicKey.export({ type: 'spki', format: 'pem' }).toStrin
 const digest = bytes => createHash('sha256').update(bytes).digest('hex');
 const backend = { origin: 'https://fixture-backend.example.test', revision: 1 };
 const feedPath = '/business/v1/win32/x64/standard/electron-' + target.electronMajor + '/latest.json';
-let mode = 'new', downloads = 0, app;
+let mode = 'new', downloads = 0, app, slowPayload = false;
 const payloads = new Map();
 const server = createServer((request, response) => {
   if (mode === 'offline') { response.writeHead(503); response.end(); return; }
@@ -27,13 +27,20 @@ const server = createServer((request, response) => {
     const entry = payloads.get(mode === 'pending' ? '1.1.2' : '1.1.1');
     const payload = Buffer.from(JSON.stringify(entry.manifest));
     response.writeHead(200, { 'content-type': 'application/json' });
-    response.end(JSON.stringify({ algorithm: 'RSA-SHA256', payload: payload.toString('base64url'), signature: sign('RSA-SHA256', payload, keys.privateKey).toString('base64url') })); return;
+    const envelope = JSON.stringify({ algorithm: 'RSA-SHA256', payload: payload.toString('base64url'), signature: sign('RSA-SHA256', payload, keys.privateKey).toString('base64url') });
+    if (mode === 'current' || mode === 'slow-manifest') {
+      const timer = setTimeout(() => response.end(envelope), mode === 'current' ? 750 : 12_000);
+      response.on('close', () => clearTimeout(timer));
+    } else response.end(envelope);
+    return;
   }
   const entry = [...payloads.values()].find(item => new URL(item.manifest.url).pathname === request.url);
   if (!entry) { response.writeHead(404); response.end(); return; }
   downloads++;
   const bytes = mode === 'pending' ? Buffer.alloc(entry.bytes.length) : entry.bytes;
-  response.writeHead(200, { 'content-length': bytes.length }); response.end(bytes);
+  response.writeHead(200, { 'content-length': bytes.length });
+  if (slowPayload) { const timer = setTimeout(() => response.end(bytes), 3500); response.on('close', () => clearTimeout(timer)); }
+  else response.end(bytes);
 });
 await new Promise(resolve => server.listen(0, '127.0.0.1', resolve));
 const origin = 'http://127.0.0.1:' + server.address().port;
@@ -70,17 +77,25 @@ async function until(work, ms = 20000) {
   while (Date.now() < deadline) { const result = await work(); if (result) return result; await sleep(100); }
   throw Error('Native startup condition timed out');
 }
-async function start(profileDirectory, blocked = false) {
+async function start(profileDirectory, blocked = false, captureStartup = false, silent = false) {
+  slowPayload = captureStartup;
   const probe = createServer(); await new Promise(resolve => probe.listen(0, '127.0.0.1', resolve));
   const port = probe.address().port; await new Promise(resolve => probe.close(resolve));
   let stderr = '';
   const environment = { ...process.env, DATA_FUSION_STARTUP_TEST: '1' }; delete environment.ELECTRON_RUN_AS_NODE;
   const child = spawn(join(app, 'DataFusion.exe'), ['--user-data-dir=' + profileDirectory, '--remote-debugging-port=' + port], { env: environment, windowsHide: true, stdio: ['ignore', 'ignore', 'pipe'] });
   child.stderr.on('data', bytes => { stderr = (stderr + bytes.toString()).slice(-8000); });
+  const closed = new Promise((resolve, reject) => { child.once('error', reject); child.once('exit', resolve); });
   const deadline = setTimeout(() => child.kill(), 45000);
   try {
-    if (!blocked) {
-      const code = await new Promise((resolve, reject) => { child.once('error', reject); child.once('exit', resolve); });
+    if (!blocked && !captureStartup) {
+      if (silent) await until(async () => {
+        if (child.exitCode !== null) return true;
+        const pages = await fetch('http://127.0.0.1:' + port + '/json/list').then(response => response.json()).catch(() => []);
+        assert(!pages.some(page => page.url.endsWith('business-startup.html')), 'An ordinary launch must not open the update window');
+        return false;
+      });
+      const code = await closed;
       assert.equal(code, 0, stderr); return JSON.parse(await readFile(join(profileDirectory, 'native-result.json'), 'utf8'));
     }
     const page = await until(async () => {
@@ -91,11 +106,21 @@ async function start(profileDirectory, blocked = false) {
     let sequence = 0; const pending = new Map();
     ws.addEventListener('message', event => { const value = JSON.parse(event.data), entry = pending.get(value.id); if (entry) { pending.delete(value.id); value.error ? entry.reject(Error(value.error.message)) : entry.resolve(value.result); } });
     const cdp = (method, params = {}) => new Promise((resolve, reject) => { const id = ++sequence; pending.set(id, { resolve, reject }); ws.send(JSON.stringify({ id, method, params })); });
+    if (captureStartup) {
+      await until(async () => (await cdp('Runtime.evaluate', { expression: "document.getElementById('message').textContent", returnByValue: true })).result.value === '正在更新…');
+      const presentation = (await cdp('Runtime.evaluate', { expression: "({width:innerWidth,height:innerHeight,detailsHidden:document.getElementById('detail').hidden,actionsHidden:document.getElementById('actions').hidden,versionHidden:!document.getElementById('version'),closeAvailable:!document.getElementById('close').hidden})", returnByValue: true })).result.value;
+      assert.deepEqual(presentation, { width: 380, height: 250, detailsHidden: true, actionsHidden: true, versionHidden: true, closeAvailable: true });
+      const capture = await cdp('Page.captureScreenshot', { format: 'png' }); await writeFile(join(profileDirectory, 'startup.png'), Buffer.from(capture.data, 'base64'));
+      ws.close();
+      const code = await closed;
+      assert.equal(code, 0, stderr); return JSON.parse(await readFile(join(profileDirectory, 'native-result.json'), 'utf8'));
+    }
     await until(async () => (await cdp('Runtime.evaluate', { expression: "document.getElementById('message').textContent", returnByValue: true })).result.value === '暂时无法进入应用');
     assert.equal((await cdp('Runtime.evaluate', { expression: "document.getElementById('retry').hidden", returnByValue: true })).result.value, false);
+    assert.equal((await cdp('Runtime.evaluate', { expression: "document.getElementById('detail').hidden", returnByValue: true })).result.value, false);
     const capture = await cdp('Page.captureScreenshot', { format: 'png' }); await writeFile(join(profileDirectory, 'blocked.png'), Buffer.from(capture.data, 'base64'));
     const result = await readFile(join(profileDirectory, 'native-result.json')).then(() => true, () => false); assert.equal(result, false);
-    ws.close(); child.kill(); await new Promise(resolve => child.once('exit', resolve)); return { blocked: true };
+    ws.close(); child.kill(); await closed; return { blocked: true };
   } finally { clearTimeout(deadline); if (child.exitCode === null) child.kill(); }
 }
 
@@ -122,14 +147,19 @@ try {
   const wire = await getCurrentFuseWire(join(app, 'DataFusion.exe'));
   assert.equal(wire[FuseV1Options.OnlyLoadAppFromAsar], FuseState.ENABLE);
   if (!legacy) assert.equal(wire[FuseV1Options.EnableEmbeddedAsarIntegrityValidation], FuseState.ENABLE);
-  const regular = await profile('regular-profile'); const updated = await start(regular);
+  const regular = await profile('regular-profile'); const updated = await start(regular, false, true);
   assert.equal(updated.version, '1.1.1'); assert.equal(updated.offline, false); assert.equal(downloads, 1);
+  mode = 'current'; const sameVersion = await start(regular, false, false, true);
+  assert.equal(sameVersion.version, '1.1.1'); assert.equal(sameVersion.offline, false); assert.equal(downloads, 1);
+  mode = 'slow-manifest'; const timedOut = await start(regular, false, false, true);
+  assert.equal(timedOut.version, '1.1.1'); assert.equal(timedOut.offline, true); assert.equal(downloads, 1);
   mode = 'offline'; const cached = await start(regular); assert.equal(cached.version, '1.1.1'); assert.equal(cached.offline, true); assert.equal(downloads, 1);
   const fresh = await profile('fresh-offline-profile'); const initial = await start(fresh); assert.equal(initial.version, version); assert.equal(initial.offline, true);
   const mandatory = await profile('mandatory-profile'); mode = 'pending'; await start(mandatory, true);
   mode = 'offline'; await start(mandatory, true);
   assert.equal(digest(await readFile(join(app, 'resources/app.asar'))), originalAsar); assert.equal(digest(await readFile(join(app, 'DataFusion.exe'))), originalExe);
-  const result = { passed: true, electronVersion, target, root, updated, cached, freshOffline: initial, mandatoryUpdateCannotBeBypassedOffline: true,
+  const result = { passed: true, electronVersion, target, root, updated, cached, freshOffline: initial, sameVersionOpenedWithoutUpdateWindow: true,
+    manifestTimeoutOpenedVerifiedCacheWithoutUpdateWindow: true, mandatoryUpdateCannotBeBypassedOffline: true,
     baseAsarUnchanged: true, nativeExecutableUnchanged: true, embeddedAsarIntegrityRetained: !legacy, onlyLoadAppFromAsarRetained: true, realBusinessApiCalls: 0 };
   await writeFile(join(root, 'result.json'), JSON.stringify(result, null, 2)); console.log(JSON.stringify(result));
 } finally { await new Promise(resolve => server.close(resolve)); }

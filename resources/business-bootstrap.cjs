@@ -30,7 +30,11 @@ app.on('before-quit', () => { coldStartAbort.abort(); if (manualAbort) manualAbo
 
 function publish(value) {
   state = { ...state, ...value };
-  if (window && !window.isDestroyed()) window.webContents.send('business-startup:state', state);
+  if (window && !window.isDestroyed()) {
+    const height = state.status === 'blocked' ? 320 : 250;
+    if (window.getContentBounds().height !== height) window.setContentSize(380, height);
+    window.webContents.send('business-startup:state', state);
+  }
 }
 function record(event, value = {}) {
   try {
@@ -51,7 +55,7 @@ function blocked(code) {
 }
 function showWindow() {
   if (window && !window.isDestroyed()) { window.show(); window.focus(); return; }
-  window = new BrowserWindow({ width: 560, height: 420, resizable: false, show: false, autoHideMenuBar: true, backgroundColor: '#f5f5f7',
+  window = new BrowserWindow({ width: 380, height: state.status === 'blocked' ? 320 : 250, frame: false, resizable: false, maximizable: false, show: false, autoHideMenuBar: true, backgroundColor: '#ffffff',
     title: '数据融合助手', webPreferences: { preload: path.join(__dirname, 'business-preload.cjs'), sandbox: true, contextIsolation: true, nodeIntegration: false } });
   window.webContents.setWindowOpenHandler(() => ({ action: 'deny' }));
   window.webContents.on('will-navigate', event => event.preventDefault());
@@ -74,10 +78,11 @@ function onProgress(value) {
   publish({ status: downloading ? 'downloading' : 'preparing', message: downloading ? '正在下载业务更新…' : '正在校验并准备应用…',
     detail: downloading ? '新版本准备完成后将自动进入应用。' : '请稍候，授权、登录信息和业务数据会继续保留。',
     ...(value.version ? { version: value.version } : {}), percent: total > 0 && Number.isFinite(received) ? Math.min(100, Math.floor(received / total * 100)) : undefined });
+  if (downloading && !quitting && !window) showWindow();
 }
 async function prepare() {
   if (shell.schema !== 1 || shell.product !== 'data-fusion-desktop' || Object.keys(target).some(key => target[key] !== shell.target?.[key])) throw Object.assign(Error('BASE_TARGET_MISMATCH'), { code: 'BASE_TARGET_MISMATCH' });
-  const result = await updater.runStartupUpdate({ ...options, onProgress, signal: coldStartAbort.signal, repairCache: true });
+  const result = await updater.runStartupUpdate({ ...options, onProgress, manifestTimeoutMs: 3000, signal: coldStartAbort.signal, repairCache: true });
   if (result.status === 'blocked') return result;
   if (result.root) return result;
   const builtin = { schema: 1, product: shell.product, version: shell.baseBusinessVersion, minShellVersion: shell.builtin.minShellVersion,
@@ -126,5 +131,5 @@ if (!primaryInstance) app.quit();
 else {
   app.on('second-instance', () => { if (window && !window.isDestroyed()) { if (window.isMinimized()) window.restore(); window.show(); window.focus(); } });
   app.on('window-all-closed', () => { if (!businessStarted) app.quit(); });
-  void app.whenReady().then(() => { showWindow(); return start(); }).catch(error => blocked(error.code || 'STARTUP_FAILED'));
+  void app.whenReady().then(start).catch(error => blocked(error.code || 'STARTUP_FAILED'));
 }

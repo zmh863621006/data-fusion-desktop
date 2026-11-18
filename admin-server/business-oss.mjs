@@ -42,6 +42,13 @@ export function createBusinessOssStorage(config, { fetcher = fetch, now = Date.n
     if (response.status !== 200 || Number(response.headers.get('content-length')) !== entry.bytes || response.headers.get('x-oss-meta-sha256') !== entry.sha256
       || response.headers.get('etag')?.replaceAll('"', '').toLowerCase() !== md5) throw Error('OSS 业务包摘要或大小不一致');
   }
+  async function readLatest(target) {
+    const response = await request('GET', lane(target) + 'latest.json');
+    if (response.status === 404) { await response.arrayBuffer(); return null; }
+    if (response.status !== 200) throw Error(`OSS 业务清单读取失败（HTTP ${response.status}）`);
+    const etag = response.headers.get('etag'); if (!etag) throw Error('OSS 业务清单缺少 ETag');
+    return { envelope: await boundedJson(response), etag };
+  }
   return {
     feedBase: publicBase + encodedPath(prefix),
     feedUrl: target => publicUrl(lane(target) + 'latest.json'),
@@ -65,20 +72,21 @@ export function createBusinessOssStorage(config, { fetcher = fetch, now = Date.n
       const result = await request('PUT', keyFor(entry), { 'x-oss-object-acl': enabled ? 'public-read' : 'private', 'content-length': '0' }, undefined, 'acl');
       await result.arrayBuffer(); if (!result.ok) throw Error(`OSS 业务包访问状态变更失败（HTTP ${result.status}）`);
     },
-    async readLatest(target) {
-      const response = await request('GET', lane(target) + 'latest.json');
-      if (response.status === 404) { await response.arrayBuffer(); return null; }
-      if (response.status !== 200) throw Error(`OSS 业务清单读取失败（HTTP ${response.status}）`);
-      const etag = response.headers.get('etag'); if (!etag) throw Error('OSS 业务清单缺少原子更新标记');
-      return { envelope: await boundedJson(response), etag };
-    },
+    readLatest,
     async writeLatest(target, envelope, previousEtag) {
       const body = Buffer.from(JSON.stringify(envelope) + '\n'); if (body.length > 64 * 1024) throw Error('业务清单超过限制');
+      // OSS PutObject does not implement If-Match or If-None-Match. All
+      // publishers use the same channel lease in the management database.
+      const current = await readLatest(target);
+      if ((current?.etag ?? null) !== (previousEtag ?? null)) throw Object.assign(Error('OSS 业务清单已被其他发布变更，请刷新后重试'), { status: 409 });
       const response = await request('PUT', lane(target) + 'latest.json', { 'content-type': 'application/json; charset=utf-8', 'content-length': String(body.length),
         'content-md5': createHash('md5').update(body).digest('base64'), 'x-oss-object-acl': 'public-read', 'cache-control': 'no-cache, max-age=0, must-revalidate',
-        ...(previousEtag ? { 'if-match': previousEtag } : { 'if-none-match': '*' }) }, body);
+        ...(previousEtag ? {} : { 'x-oss-forbid-overwrite': 'true' }) }, body);
       await response.arrayBuffer(); if ([409, 412].includes(response.status)) throw Object.assign(Error('业务清单已被其他发布变更，请刷新后重试'), { status: 409 });
       if (!response.ok) throw Error(`OSS 业务清单发布失败（HTTP ${response.status}）`);
+      const published = (await readLatest(target))?.envelope;
+      if (published?.algorithm !== envelope.algorithm || published.payload !== envelope.payload || published.signature !== envelope.signature)
+        throw Error('OSS 业务清单写入后的回读校验失败');
       return publicUrl(lane(target) + 'latest.json');
     },
   };

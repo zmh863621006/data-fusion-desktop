@@ -6,7 +6,7 @@ import { dirname, isAbsolute, join, relative, resolve, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 export const PROJECT = resolve(dirname(fileURLToPath(import.meta.url)), '..');
-export const DEFAULT_FEED_BASE = 'https://shenzhen-sjrh.oss-cn-shenzhen.aliyuncs.com/data-fusion/updates/windows-x64/business/v1/';
+export const DEFAULT_FEED_BASE = 'https://shenzhen-sjrh-desktop-updates.oss-cn-shenzhen.aliyuncs.com/data-fusion/updates/business/v1/';
 export const VERSION = /^(?:0|[1-9]\d{0,5})\.(?:0|[1-9]\d{0,5})\.(?:0|[1-9]\d{0,5})$/;
 export function inside(file, directory) {
   const rel = relative(directory, file);

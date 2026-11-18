@@ -19,7 +19,7 @@ const metadata = (version = '1.1.0', value = target) => ({ schema: 1, product: '
 function mockOss() {
   const objects = new Map(), calls = []; let pauseLatest;
   const storage = createBusinessOssStorage(config, { fetcher: async (url, options) => {
-    const parsed = new URL(url), key = decodeURIComponent(parsed.pathname).slice(1), item = objects.get(key); calls.push({ key, method: options.method, acl: options.headers['x-oss-object-acl'], conditional: options.headers['if-match'] ?? options.headers['if-none-match'] });
+    const parsed = new URL(url), key = decodeURIComponent(parsed.pathname).slice(1), item = objects.get(key); calls.push({ key, method: options.method, acl: options.headers['x-oss-object-acl'], forbidOverwrite: options.headers['x-oss-forbid-overwrite'] });
     assert(parsed.hostname === config.bucket + '.' + config.endpoint); assert.match(options.headers.authorization, /^OSS4-HMAC-SHA256 /);
     if (options.method === 'HEAD') return item ? new Response(null, { status: 200, headers: { etag: item.etag, 'content-length': String(item.body.length), 'x-oss-meta-sha256': item.sha256 } }) : new Response(null, { status: 404 });
     if (options.method === 'GET') return item ? new Response(item.body, { headers: { etag: item.etag } }) : new Response(null, { status: 404 });
@@ -27,7 +27,7 @@ function mockOss() {
     if (parsed.search === '?acl') { assert(item); item.acl = options.headers['x-oss-object-acl']; return new Response(null); }
     if (pauseLatest && key.endsWith('/latest.json')) await pauseLatest();
     const current = objects.get(key);
-    if (options.headers['if-match'] && current?.etag !== options.headers['if-match'] || options.headers['if-none-match'] === '*' && current) return new Response(null, { status: 412 });
+    if (options.headers['if-match'] || options.headers['if-none-match']) return new Response(null, { status: 400 });
     if (options.headers['x-oss-forbid-overwrite'] === 'true' && current) return new Response(null, { status: 409 });
     let body;
     if (Buffer.isBuffer(options.body)) body = options.body;
@@ -156,6 +156,7 @@ test('channel publication is serialized and persistent version floors reject sta
   f.oss.setPause(async () => { entered(); await waiting; }); const pending = f.publish(first.body.id); await started;
   assert.equal((await f.publish(second.body.id)).status, 409); release(); assert.equal((await pending).status, 200); f.oss.setPause(null);
   assert.equal((await f.publish(second.body.id)).status, 200);
+  assert.deepEqual(f.oss.calls.filter(call => call.method === 'PUT' && call.key.endsWith('/latest.json')).map(call => call.forbidOverwrite), ['true', undefined]);
   const db = new DatabaseSync(f.dataPath);
   try { assert.equal(db.prepare("SELECT max_version FROM business_release_channels WHERE lane='win32/x64/standard/electron-44'").get().max_version, '1.1.1');
     assert.equal(db.prepare('PRAGMA foreign_key_check').all().length, 0); } finally { db.close(); }

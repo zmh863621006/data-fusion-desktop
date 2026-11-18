@@ -9,7 +9,11 @@ const fail = (message, status = 400) => { throw Object.assign(Error(message), { 
 export function createBusinessReleases(db, { directory, publicOrigin, privateKey, transaction, audit = () => {}, authorize,
   ossStorage, maxBytes = BUSINESS_MAX_BYTES, uploadTimeoutMs = 600_000, now = Date.now } = {}) {
   const root = directory ? resolve(directory) : null;
-  const mirror = ossStorage ?? businessOssStorageFromFile(root ? join(dirname(root), 'update-oss.secure.json') : undefined);
+  const configDirectory = root ? dirname(root) : undefined;
+  const mirror = ossStorage ?? (configDirectory && (
+    businessOssStorageFromFile(join(configDirectory, 'business-oss.secure.json'))
+    ?? businessOssStorageFromFile(join(configDirectory, 'update-oss.secure.json'))
+  ));
   const publicKey = createPublicKey(privateKey);
   db.exec(`CREATE TABLE IF NOT EXISTS business_releases(
     id TEXT PRIMARY KEY,version TEXT NOT NULL,platform TEXT NOT NULL,arch TEXT NOT NULL,variant TEXT NOT NULL,electron_major INTEGER NOT NULL,

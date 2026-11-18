@@ -4,9 +4,13 @@ const { ipcRenderer } = require('electron');
 window.addEventListener('DOMContentLoaded', () => {
   const node = id => document.getElementById(id);
   const render = state => {
-    node('message').textContent = state.message || '正在准备应用…';
-    node('detail').textContent = state.detail || '';
-    node('version').textContent = state.version ? '业务版本 ' + state.version : '';
+    const blocked = state.status === 'blocked';
+    document.body.classList.toggle('blocked', blocked);
+    node('message').textContent = blocked ? state.message || '暂时无法进入应用' : state.status === 'downloading' ? '正在更新…' : '正在启动…';
+    node('detail').textContent = blocked ? state.detail || '' : '';
+    node('detail').hidden = !blocked;
+    node('close').hidden = blocked;
+    node('actions').hidden = !blocked;
     const progress = node('progress');
     if (Number.isFinite(state.percent)) progress.value = Math.max(0, Math.min(100, state.percent));
     else progress.removeAttribute('value');
@@ -22,4 +26,6 @@ window.addEventListener('DOMContentLoaded', () => {
     ipcRenderer.invoke('business-startup:retry').catch(() => {}).finally(() => { node('retry').disabled = false; });
   });
   node('quit').addEventListener('click', () => { ipcRenderer.invoke('business-startup:quit').catch(() => {}); });
+  node('close').addEventListener('click', () => { ipcRenderer.invoke('business-startup:quit').catch(() => {}); });
+  window.addEventListener('keydown', event => { if (event.key === 'Escape') ipcRenderer.invoke('business-startup:quit').catch(() => {}); });
 });

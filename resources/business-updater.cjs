@@ -6,7 +6,7 @@ const fs = process.versions.electron ? require('original-fs') : require('node:fs
 const fsp = fs.promises, path = require('node:path'), crypto = require('node:crypto');
 const http = require('node:http'), https = require('node:https');
 const { TextDecoder } = require('node:util');
-const DEFAULT_FEED_BASE = 'https://shenzhen-sjrh.oss-cn-shenzhen.aliyuncs.com/data-fusion/updates/windows-x64/business/v1/';
+const DEFAULT_FEED_BASE = 'https://shenzhen-sjrh-desktop-updates.oss-cn-shenzhen.aliyuncs.com/data-fusion/updates/business/v1/';
 const MAX_ASAR_BYTES = 256 * 1024 * 1024, MAX_HEADER_BYTES = 16 * 1024 * 1024;
 const MAX_MANIFEST_BYTES = 64 * 1024, MAX_FILES = 20000, MAX_EXTRACT_BYTES = 512 * 1024 * 1024;
 const PRODUCT = 'data-fusion-desktop', ENTRY = 'out/main/index.js';
@@ -398,7 +398,9 @@ async function requestBytes(urlValue, options, maximum, consume) {
   });
 }
 async function fetchManifest(options) {
-  const chunks = []; await requestBytes(manifestUrl(options), options, MAX_MANIFEST_BYTES, chunk => chunks.push(chunk));
+  const chunks = [];
+  const requestOptions = { ...options, timeoutMs: options.manifestTimeoutMs ?? options.timeoutMs };
+  await requestBytes(manifestUrl(options), requestOptions, MAX_MANIFEST_BYTES, chunk => chunks.push(chunk));
   const envelope = strictJson(Buffer.concat(chunks)); validateManifest(envelope, options); return envelope;
 }
 async function acquireLock(directory) {
@@ -442,6 +444,9 @@ async function runStartupUpdate(input) {
   try {
     options = normalize(input); await prepareDirectory(options.directory); unlock = await acquireLock(options.directory);
     notAborted(options);
+    // Start the short OSS check while validating the local files so the two
+    // operations do not add to each other's wait on an ordinary launch.
+    const remote = fetchManifest(options).then(envelope => ({ envelope }), error => ({ error }));
     let installed, cacheFailure;
     try { installed = await inspectInstalled(options); }
     catch (error) {
@@ -455,7 +460,11 @@ async function runStartupUpdate(input) {
     const pendingFile = path.join(options.directory, 'pending.json'); let pending = await readJson(pendingFile);
     if (pending && !cacheFailure && compareVersions(validateManifest(pending, options).version, currentVersion) <= 0) { await fsp.unlink(pendingFile); pending = null; }
     progress(options, 'CHECKING', { version: currentVersion }); let latest;
-    try { latest = await fetchManifest(options); }
+    try {
+      const result = await remote;
+      if (result.error) throw result.error;
+      latest = result.envelope;
+    }
     catch (error) {
       if (!['NETWORK_ERROR', 'NETWORK_TIMEOUT', 'PARTIAL_DOWNLOAD', 'SERVICE_UNAVAILABLE'].includes(error.code)) throw error;
       if (!pending && !cacheFailure) return { status: 'offline', version: currentVersion, root: installed?.root, manifest: installed?.manifest, backend, code: error.code };
