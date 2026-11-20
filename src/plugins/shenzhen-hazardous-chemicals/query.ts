@@ -79,8 +79,9 @@ export function mapHazardousRecord(matter: HazardousMatter, done: Row, report: R
 }
 
 export async function queryHazardous(transport: HazardousTransport, matter: HazardousMatter, context: QueryContext): Promise<QueryPage<Row>> {
-  const start = text(context.filters.startDate), end = text(context.filters.endDate);
-  if ((start || end) && (!date(start) || !date(end) || start > end)) throw new AppError('QUERY_INVALID', '请填写完整有效的许可决定日期范围，开始日期不能晚于结束日期');
+  const requestedStart = text(context.filters.startDate), requestedEnd = text(context.filters.endDate);
+  const start = date(requestedStart), end = date(requestedEnd);
+  if ((requestedStart || requestedEnd) && (!start || !end || start > end)) throw new AppError('QUERY_INVALID', '请填写完整有效的许可决定日期范围，开始日期不能晚于结束日期');
   cancelled(context);
   const done = await transport.done(matter, context.signal);
   const completed = new Map<string, Row>();
@@ -101,16 +102,20 @@ export async function queryHazardous(transport: HazardousTransport, matter: Haza
     const group = bySerial.get(serial) ?? []; group.push(report); bySerial.set(serial, group);
   }
   const output: Row[] = [];
+  let undatedExcludedCount = 0;
   for (const [serial, row] of completed) {
     cancelled(context);
     const group = bySerial.get(serial) ?? [], report = equivalent(group);
     const decision = date(report?.permissionDecisionDate);
-    if (start && !decision) throw failure('流程结束记录缺少可核对的许可决定日期，请清空日期范围回流全部记录后核对缺项');
-    if (start && (decision < start || decision > end)) continue;
+    if (start) {
+      if (!decision) { undatedExcludedCount++; continue; }
+      if (decision < start || decision > end) continue;
+    }
     context.onProgress?.({ current: output.length, total: completed.size, message: '正在按流水号关联危化品制证数据' });
     const certificates = await transport.certificates(serial, context.signal);
     output.push(mapHazardousRecord(matter, row, report, certificates));
   }
   cancelled(context);
-  return { rows: output, page: 1, pageSize: Math.max(1, output.length), total: output.length };
+  return { rows: output, page: 1, pageSize: Math.max(1, output.length), total: output.length,
+    ...(undatedExcludedCount > 0 ? { undatedExcludedCount } : {}) };
 }

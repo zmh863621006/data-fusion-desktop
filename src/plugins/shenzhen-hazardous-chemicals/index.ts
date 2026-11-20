@@ -27,7 +27,7 @@ export function createShenzhenHazardousPlugin(options: HazardousClientOptions = 
       description: matter.id === 'hazchem-precursor-filing' ? '回流已办备案列表及可关联制证字段；缺项需人工核对。' : '关联流程结束业务和制证数据；原系统缺项保留提示。',
       executionMode: 'one-click-return' as const, uniqueKey: ['sourceSerial'],
       querySchema: [ { key: 'startDate', label: '许可决定开始日期', type: 'date' as const }, { key: 'endDate', label: '许可决定截止日期', type: 'date' as const } ],
-      dateFilter: { mode: 'applied' as const, message: '按制证导出记录的许可决定日期筛选，留空回流全部流程结束记录。' },
+      dateFilter: { mode: 'applied' as const, message: '按许可决定日期筛选。日期无法确认的记录会在任务结果中提示。留空回流全部流程结束记录。' },
       createDefaultContext: () => ({ page: 1, pageSize: 50_000, filters: {} }),
       query: context => queryHazardous(client, matter, context),
     })),

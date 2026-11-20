@@ -517,12 +517,15 @@ export class AppRuntime {
       matterId,
       summary.changes.map((change) => ({ recordKey: change.key, data: change.current })),
     );
-    context.report({ current: 4, total: 4, message: `回流完成，共 ${summary.total} 条` });
+    const undated = result.undatedExcludedCount;
+    const warning = undated ? `。另有 ${undated} 条许可决定日期无法确认，未纳入本批次。可清空日期回流后核对。` : '';
+    context.report({ current: 4, total: 4, message: `回流完成，共 ${summary.total} 条${warning}` });
     return {
       total: summary.total,
       inserted: summary.inserted,
       updated: summary.updated,
       unchanged: summary.unchanged,
+      ...(undated ? { undatedExcludedCount: undated } : {}),
     };
     };
     if (systemId === 'transport-practitioner') {

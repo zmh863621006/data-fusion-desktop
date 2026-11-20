@@ -26,6 +26,8 @@ export interface QueryPage<T = Record<string, unknown>> {
   page: number;
   pageSize: number;
   total: number;
+  /** Date range was applied, but the source did not provide a usable date for these records. */
+  undatedExcludedCount?: number;
 }
 
 export interface QueryContext {

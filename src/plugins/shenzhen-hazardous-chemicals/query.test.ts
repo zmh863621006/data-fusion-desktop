@@ -22,11 +22,25 @@ describe('危化品流水号关联回流', () => {
     expect(t.certificates).not.toHaveBeenCalled();
     await expect(queryHazardous(t, matter, { ...context, filters: { startDate: '2026-02-30', endDate: '2026-03-01' } })).rejects.toMatchObject({ code: 'QUERY_INVALID' });
   });
-  it('keeps unassociated completed records as incomplete for all-record reflow and refuses an unverifiable date filter', async () => {
-    const t = transport({ report: async () => [], certificates: async () => [] });
+  it('keeps unassociated records in full reflow and returns a warning for a dated batch with zero confirmed matches', async () => {
+    const t = transport({ report: async () => [], certificates: vi.fn(async () => []) });
     const result = await queryHazardous(t, matter, context); expect(result.rows[0]).toMatchObject({ xkXdrMc: '测试企业', xkJdrq: '', xkFrdb: '', xkXkjgdm: HAZCHEM_AUTHORITY_CODE });
     expect(String(result.rows[0].bz)).toContain('尚未关联');
-    await expect(queryHazardous(t, matter, { ...context, filters: { startDate: '2026-11-01', endDate: '2026-11-30' } })).rejects.toThrow('缺少可核对的许可决定日期');
+    expect(result.undatedExcludedCount).toBeUndefined();
+    vi.mocked(t.certificates).mockClear();
+    await expect(queryHazardous(t, matter, { ...context, filters: { startDate: '2026-11-01', endDate: '2026-11-30' } }))
+      .resolves.toMatchObject({ rows: [], total: 0, undatedExcludedCount: 1 });
+    expect(t.certificates).not.toHaveBeenCalled();
+  });
+  it('returns the dated matches even when some completed records have missing or invalid dates', async () => {
+    const t = transport({
+      done: async () => [{ ...done, sblshShort: 'no-report' }, done, { ...done, sblshShort: 'invalid-date' }, { ...done, sblshShort: 'out-of-range' }],
+      report: async () => [report, { ...report, sblshShort: 'invalid-date', permissionDecisionDate: '2026-02-30' },
+        { ...report, sblshShort: 'out-of-range', permissionDecisionDate: '2026-11-09' }],
+    });
+    const result = await queryHazardous(t, matter, { ...context, filters: { startDate: '2026-11-10', endDate: '2026-11-10' } });
+    expect(result).toMatchObject({ total: 1, undatedExcludedCount: 2, rows: [{ sourceSerial: 'fixture-serial' }] });
+    expect(t.certificates).toHaveBeenCalledExactlyOnceWith('fixture-serial', undefined);
   });
   it('blocks conflicting report duplicates instead of selecting an arbitrary revision', async () => {
     await expect(queryHazardous(transport({ report: async () => [report, { ...report, number: 2, licenseContent: '不同范围' }] }), matter, context)).rejects.toThrow('内容不一致');
