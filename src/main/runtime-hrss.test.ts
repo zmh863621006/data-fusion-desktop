@@ -48,10 +48,41 @@ describe('HRSS complete-list transaction and aggregate boundary', () => {
           startDate: '2030-01-01', endDate: '2030-01-31' } };
       await store.save(task);
       await store.replaceTaskOutput(task.id, systemId, matterId, [{ recordKey: 'a', data: { name: '示例人员', applyDate: '2026-11-04' } }]);
+      await database.run(`WITH RECURSIVE nums(n) AS (VALUES(1) UNION ALL SELECT n+1 FROM nums WHERE n<1100)
+        INSERT INTO runtime_tasks(id,type,name,system_id,matter_id,status,progress_json,created_at)
+        SELECT 'new-'||n,'data-return','列表回流',?,CASE WHEN n<=55 THEN ? ELSE 'other-matter' END,
+               'completed','{"current":1}',n+10 FROM nums`, [systemId, matterId]);
+      const page = await runtime.taskPage({ systemId, matterId, completedBatches: true, page: 2, pageSize: 50 });
+      expect(page.total).toBe(56); expect(page.rows).toHaveLength(6);
+      expect(page.rows.at(-1)?.id).toBe(task.id);
+      expect((await runtime.taskPage({ taskId: 'new-1100' })).rows).toEqual([]);
+      expect((await runtime.listTaskOutput(task.id)).total).toBe(1);
       const result = await runtime.exportTaskOutput(task.id);
       expect(basename(result!.path)).toBe('业务台账-失业信息-2026-11-04至2026-11-04.xlsx');
       expect(enterprise).not.toHaveBeenCalled();
+      const grant = (await runtime.currentGrant())!;
+      vi.mocked(runtime.currentGrant).mockResolvedValue({ ...grant, allowedMatters: { [systemId]: [] } });
+      expect(await runtime.taskPage({})).toEqual({ rows: [], total: 0 });
+      await expect(runtime.listTaskOutput(task.id)).rejects.toThrow('LICENSE_MATTER_DENIED');
+      await expect(runtime.exportTaskOutput(task.id)).rejects.toThrow('LICENSE_MATTER_DENIED');
+      vi.mocked(runtime.currentGrant).mockResolvedValue({ ...grant, allowedMatters: undefined });
+      expect((await runtime.taskPage({})).total).toBe(1101);
     } finally { await rm(directory, { recursive: true, force: true }); }
+  });
+
+  it('checks the active task owner and the current matter grant before cancelling', async () => {
+    const active = { id: 'active-task', type: 'data-return', name: '任务', status: 'running' as const, systemId,
+      matterId: 'other-matter', progress: { current: 0 }, createdAt: 1 };
+    const owner = vi.spyOn(runtime.tasks, 'get').mockReturnValue(active);
+    const cancel = vi.spyOn(runtime.tasks, 'cancel').mockReturnValue(true);
+    await expect(runtime.cancelTask(active.id)).rejects.toThrow('LICENSE_MATTER_DENIED');
+    expect(cancel).not.toHaveBeenCalled();
+    owner.mockReturnValue({ ...active, matterId });
+    expect(await runtime.cancelTask(active.id)).toBe(true);
+    expect(cancel).toHaveBeenCalledExactlyOnceWith(active.id);
+    owner.mockReturnValue(undefined);
+    expect(await runtime.cancelTask('missing')).toBe(false);
+    expect(cancel).toHaveBeenCalledTimes(1);
   });
 
   it('stores each business once, updates status, and never enters detail or enterprise pipelines', async () => {

@@ -45,6 +45,7 @@ ipcMain.handle('ui-redesign:invoke', async (_event, method: string, ...args: any
     case 'systems.tabs': case 'systems.activateTab': return { tabs: [], activeSystemId: null };
     case 'matters.list': return args[0] === plugin.id && authorized ? publicMatters() : [];
     case 'tasks.list': return [];
+    case 'tasks.page': return { rows: [], total: 0 };
     case 'records.list': {
       assert.equal(args[0].systemId, plugin.id);
       const first = row(args[0].matterId);

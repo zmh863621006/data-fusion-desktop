@@ -13,6 +13,40 @@ import { SqlitePlatformStore } from '../core/storage/platform-store';
 import { TaskEngine } from '../core/tasks/engine';
 
 describe('certificate reflow runtime integration', () => {
+  it.each(['snapshot-error', 'cancel-during-write'])('rolls back ledger, record history and snapshot on %s', async failure => {
+    const db = new NodeSqliteDriver(':memory:');
+    try {
+      const repository = new SqliteLocalRepository(db);
+      await repository.initialize();
+      const store = new SqlitePlatformStore(db);
+      const engine = new DefaultLocalSyncEngine(repository);
+      const runtime = new AppRuntime();
+      const plugin = createShenzhenHazardousPlugin();
+      const original = { sourceSerial: 'fixture', xkNr: '原许可内容' };
+      const incoming = { ...original, xkNr: '新许可内容' };
+      const matter = { ...plugin.matters[0], query: async () => ({ rows: [incoming], total: 1, page: 1, pageSize: 1 }) };
+      runtime.plugins.register({ ...plugin, matters: [matter], getSessionState: async () => ({ systemId: plugin.id, status: 'authenticated' }),
+        auth: { ...plugin.auth, getSessionForRequest: async () => ({ metadata: {} }) } });
+      Object.assign(runtime, { repository, platformStore: store, syncEngine: engine, requireLicense: async () => {} });
+      runtime.tasks = new TaskEngine(store);
+      await engine.commit(plugin.id, matter.id, await engine.preview(plugin.id, matter.id, matter.uniqueKey, [original]));
+      const key = buildRecordKey(original, matter.uniqueKey);
+      const priorVersions = await repository.listVersions(plugin.id, matter.id, key);
+      const write = store.replaceTaskOutput.bind(store);
+      vi.spyOn(store, 'replaceTaskOutput').mockImplementationOnce(async (...args) => {
+        await write(...args);
+        if (failure === 'snapshot-error') throw new Error('模拟快照写入失败');
+        runtime.tasks.cancel(args[0]);
+      });
+      const task = await runtime.tasks.run('事务测试', ctx => runtime.runOneClickReturn(plugin.id, matter.id, ctx),
+        { type: 'data-return', systemId: plugin.id, matterId: matter.id });
+      expect(task.status).toBe(failure === 'snapshot-error' ? 'failed' : 'cancelled');
+      expect((await repository.find(plugin.id, matter.id, key))?.data).toEqual(original);
+      expect(await repository.listVersions(plugin.id, matter.id, key)).toEqual(priorVersions);
+      expect((await store.listTaskOutput(task.id)).total).toBe(0);
+    } finally { await db.close(); }
+  });
+
   it('uses the same preserved certificate values for the ledger and batch snapshot', async () => {
     const runtime = new AppRuntime();
     const repository = new MemoryLocalRepository();
@@ -27,7 +61,7 @@ describe('certificate reflow runtime integration', () => {
         logout: async () => {}, getSessionForRequest: async () => ({ metadata: {} }) } });
     const replaceTaskOutput = vi.fn(async () => {});
     // Isolated in-memory fixtures: do not read the actual license, session or business database.
-    Object.assign(runtime, { syncEngine: engine, platformStore: { replaceTaskOutput }, requireLicense: vi.fn(async () => {}) });
+    Object.assign(runtime, { syncEngine: engine, platformStore: { transaction: (work: () => Promise<unknown>) => work(), replaceTaskOutput }, requireLicense: vi.fn(async () => {}) });
     await engine.commit('government-info', matter.id, await engine.preview('government-info', matter.id, matter.uniqueKey, [
       supplementCertificateFields(original, { zjbh: '00123', zjmc: '原备案证' }),
     ]));

@@ -1,6 +1,6 @@
 import { AppError } from '../errors/app-error';
 import type { QueryContext } from '../query/types';
-import type { LocalRecordQuery } from '../storage/platform-store';
+import type { LocalRecordQuery, TaskHistoryQuery } from '../storage/platform-store';
 import type { AppSettings } from '../settings/types';
 
 const MAX_FILTER_BYTES = 256 * 1024;
@@ -79,6 +79,18 @@ export function parseLocalRecordQuery(value: unknown): LocalRecordQuery {
     result.pageSize = Number(value.pageSize);
   }
   return result;
+}
+
+export function parseTaskHistoryQuery(value: unknown): TaskHistoryQuery {
+  if (value === undefined) return {};
+  if (!isRecord(value)) throw new AppError('QUERY_INVALID', '任务查询参数无效');
+  const { completedBatches, taskId, ...scope } = value;
+  if ('keyword' in scope || (completedBatches !== undefined && typeof completedBatches !== 'boolean')) {
+    throw new AppError('QUERY_INVALID', '任务查询参数无效');
+  }
+  const parsed = parseLocalRecordQuery(scope);
+  if (parsed.matterId && !parsed.systemId) throw new AppError('QUERY_INVALID', '事项查询缺少系统标识');
+  return { ...parsed, completedBatches, taskId: taskId === undefined ? undefined : parseIdentifier(taskId, '任务标识') };
 }
 
 export function parseSettingsPatch(value: unknown): Partial<AppSettings> {

@@ -40,7 +40,7 @@ describe('reflow enterprise completion and managed export integration', () => {
     runtime.plugins.register({ ...plugin, matters: [{ ...matter, query: context => queryOversizeTransport(source, context) }],
       getSessionState: async () => ({ systemId: plugin.id, status: 'authenticated' }), auth: { ...plugin.auth, getSessionForRequest: async () => ({ metadata: {} }) } });
     Object.assign(runtime, { repository, syncEngine: engine, requireLicense: vi.fn(async () => {}),
-      platformStore: { replaceTaskOutput: async (_task: string, _system: string, _matter: string, rows: Array<{ data: Record<string, unknown> }>) => {
+      platformStore: { transaction: (work: () => Promise<unknown>) => work(), replaceTaskOutput: async (_task: string, _system: string, _matter: string, rows: Array<{ data: Record<string, unknown> }>) => {
         order.push('save'); expect(rows[0].data).toMatchObject({ xkXdrShxym: creditCode, xkFrdb: '代码匹配法人',
           oversizeApplicationEnrichment: { applicationId: 'app-1', status: 'matched' }, enterpriseEnrichment: { enterprise: { source: 'aliyun-code' } } });
       } }, enterpriseService: new EnterpriseEnrichmentService('https://backend.test/api/enterprises/resolve', async () => ({
@@ -71,7 +71,7 @@ describe('reflow enterprise completion and managed export integration', () => {
     const replaceTaskOutput = vi.fn(async (_task: string, _system: string, _matter: string, rows: Array<{ data: Record<string, unknown> }>) => {
       order.push('batch'); expect(rows[0].data).toMatchObject({ xkFrdb: '测试法人', xkXdrShxym: creditCode });
     });
-    Object.assign(runtime, { repository, syncEngine: engine, platformStore: { replaceTaskOutput }, enterpriseService: service, requireLicense: vi.fn(async () => {}) });
+    Object.assign(runtime, { repository, syncEngine: engine, platformStore: { transaction: (work: () => Promise<unknown>) => work(), replaceTaskOutput }, enterpriseService: service, requireLicense: vi.fn(async () => {}) });
     await runtime.runOneClickReturn(plugin.id, matter.id, { taskId: 'fixture-batch', signal: new AbortController().signal, report: vi.fn() });
     expect(order).toEqual(['query', 'enterprise', 'batch']);
     const saved = await repository.find(plugin.id, matter.id, buildRecordKey(canonical, matter.uniqueKey));
@@ -89,7 +89,7 @@ describe('reflow enterprise completion and managed export integration', () => {
     runtime.plugins.register({ ...plugin, matters: [{ ...matter, query: async () => ({ rows: [{ ...canonical }], total: 1, page: 1, pageSize: 1 }) }],
       getSessionState: async () => state, auth: { ...plugin.auth, getSessionForRequest: async () => ({ metadata: {} }) } });
     const replaceTaskOutput = vi.fn();
-    Object.assign(runtime, { repository, syncEngine: engine, platformStore: { replaceTaskOutput }, enterpriseService: service, requireLicense: vi.fn(async () => {}) });
+    Object.assign(runtime, { repository, syncEngine: engine, platformStore: { transaction: (work: () => Promise<unknown>) => work(), replaceTaskOutput }, enterpriseService: service, requireLicense: vi.fn(async () => {}) });
     await runtime.runOneClickReturn(plugin.id, matter.id, { taskId: 'fixture-repeat', signal: new AbortController().signal, report: vi.fn() });
     expect(fetcher).not.toHaveBeenCalled(); expect(authorization).not.toHaveBeenCalled();
     expect((await repository.find(plugin.id, matter.id, buildRecordKey(canonical, matter.uniqueKey)))?.data).toMatchObject(complete);
@@ -103,7 +103,7 @@ describe('reflow enterprise completion and managed export integration', () => {
       createdAt: 1, details: { startDate: '2026-10-01', endDate: '2026-10-19' } };
     Object.assign(runtime, { exportDirectory: new ApplicationExportDirectory(directory),
       currentGrant: vi.fn(async () => ({ allowExport: true })), requireLicense: vi.fn(async () => {}),
-      tasks: { history: async () => [task] }, platformStore: { listTaskOutput: async () => ({
+      platformStore: { getTask: async () => task, listTaskOutput: async () => ({
         total: 1, rows: [{ systemId: task.systemId, matterId: task.matterId, recordKey: 'test', data: canonical }],
       }) },
     });
@@ -139,7 +139,7 @@ describe('reflow enterprise completion and managed export integration', () => {
     const requireLicense = vi.fn(async () => {});
     Object.assign(runtime, { exportDirectory: new ApplicationExportDirectory(directory),
       currentGrant: vi.fn(async () => ({ allowExport: true })), requireLicense,
-      tasks: { history: async () => [task] }, platformStore: { listTaskOutput, listRecords },
+      platformStore: { getTask: async () => task, listTaskOutput, listRecords },
     });
     const label = target === 'guangdong-law' ? '省执法双公示' : '南山双公示';
     const batch = await runtime.exportTaskOutput(task.id, undefined, '原关键字', async () => true, target);

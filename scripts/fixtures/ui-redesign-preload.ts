@@ -12,7 +12,7 @@ contextBridge.exposeInMainWorld('desktopApi', {
   components: group('components', ['list']),
   publications: group('publications', ['open']),
   hrss: group('hrss', ['dashboard', 'openDashboard', 'closeDashboard']),
-  tasks: group('tasks', ['list', 'cancel', 'output', 'exportOutput']),
+  tasks: group('tasks', ['list', 'page', 'cancel', 'output', 'exportOutput']),
   records: group('records', ['list', 'versions', 'update', 'export']),
   exports: group('exports', ['openFolder']),
   settings: group('settings', ['get', 'update']),

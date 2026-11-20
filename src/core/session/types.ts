@@ -16,6 +16,8 @@ export interface SessionState {
 
 /** Main-process only. Never include these hooks or snapshots in IPC metadata. */
 export interface SessionRecovery {
+  /** For systems whose browser cookies alone cannot authenticate a request. */
+  apiCredentials?(): { revision: number; status: 'present' | 'missing' | 'expired' };
   snapshot(): Promise<Record<string, unknown> | null> | Record<string, unknown> | null;
   restore(value: Record<string, unknown>): Promise<void> | void;
   validate(signal: AbortSignal): Promise<{ displayName?: string }>;

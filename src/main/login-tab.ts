@@ -6,6 +6,7 @@ import type { SessionState } from '../core/session/types';
 import { IPC_CHANNELS } from '../core/ipc/channels';
 
 const BROWSER_CHROME_HEIGHT = 104;
+function hashRoute(url: URL): string { return url.hash.split('?')[0].replace(/\/$/, ''); }
 // Early Electron versions expose incomplete experimental View properties. Use
 // the stable BrowserView API there rather than probing a native contentView getter.
 function modernSourceViews(): boolean {
@@ -13,7 +14,7 @@ function modernSourceViews(): boolean {
 }
 export type SourcePage = Pick<BusinessSystemPlugin, 'id' | 'name' | 'loginPage'> & Partial<Pick<BusinessSystemPlugin, 'getSessionState'>>;
 type Tab = { view: WebContentsView | BrowserView; summary: SourceTab; credentials: SystemCredentials | null; allowedOrigin: string; credentialFields?: { account: string; password: string };
-  plugin: SourcePage; persistStorage: boolean; checkingSession?: boolean; onLoginPage?: boolean; sessionRevision: number };
+  plugin: SourcePage; persistStorage: boolean; awaitingStorageRestore?: boolean; checkingSession?: boolean; onLoginPage?: boolean; sessionRevision: number };
 
 interface BrowserStoragePersistence {
   load(systemId: string): Record<string, string>;
@@ -47,7 +48,7 @@ export class LoginTabController {
   }
 
   private async captureStorage(tab: Tab): Promise<void> {
-    if (!tab.persistStorage || !this.persistence || tab.onLoginPage || tab.view.webContents.isDestroyed()) return;
+    if (!tab.persistStorage || !this.persistence || tab.onLoginPage || tab.awaitingStorageRestore || tab.view.webContents.isDestroyed()) return;
     const revision = tab.sessionRevision;
     try {
       if (new URL(tab.view.webContents.getURL()).origin !== tab.allowedOrigin) return;
@@ -63,7 +64,7 @@ export class LoginTabController {
   }
 
   private async checkSession(tab: Tab): Promise<void> {
-    if (!tab.plugin.getSessionState || tab.onLoginPage || tab.checkingSession || this.tabs.get(tab.summary.systemId) !== tab) return;
+    if (!tab.plugin.getSessionState || tab.onLoginPage || tab.awaitingStorageRestore || tab.checkingSession || this.tabs.get(tab.summary.systemId) !== tab) return;
     tab.checkingSession = true;
     const revision = tab.sessionRevision;
     try {
@@ -135,6 +136,7 @@ export class LoginTabController {
     const tab: Tab = { view, credentials, plugin, persistStorage: options.persistStorage !== false, allowedOrigin: loginPage.allowedOrigin, credentialFields: loginPage.credentialFields, sessionRevision: 0, summary: {
       systemId: plugin.id, systemName: plugin.name, displayUrl: this.displayUrl(loginPage.url), loading: true,
     } };
+    tab.awaitingStorageRestore = Boolean(options.url && tab.persistStorage && this.persistence && loginPage.browserAuth?.sessionStorageKeys?.length);
     this.tabs.set(plugin.id, tab);
     if (!this.sessionTimer) {
       // Main-process polling includes background source tabs and is not throttled with a hidden renderer.
@@ -149,17 +151,20 @@ export class LoginTabController {
       tab.summary.displayUrl = this.displayUrl(view.webContents.getURL() || loginPage.url);
       this.publish();
     };
-    const loginPath = new URL(loginPage.url).pathname.replace(/\/$/, '');
+    const configuredLogin = new URL(loginPage.url);
+    const loginPath = configuredLogin.pathname.replace(/\/$/, '');
     const observe = (url: string, successfulMainFrame: boolean) => {
       if (this.tabs.get(plugin.id) !== tab) return;
       if (successfulMainFrame && loginPage.onLoginPageChange && allowed(url)) {
         const page = new URL(url);
-        const visible = page.origin === loginPage.allowedOrigin && page.pathname.replace(/\/$/, '') === loginPath;
+        const visible = page.origin === loginPage.allowedOrigin && page.pathname.replace(/\/$/, '') === loginPath
+          && (!configuredLogin.hash.startsWith('#/') || hashRoute(page) === hashRoute(configuredLogin));
         if (visible !== tab.onLoginPage) {
           tab.onLoginPage = visible;
           tab.sessionRevision++;
           loginPage.onLoginPageChange(visible);
           if (visible) {
+            tab.awaitingStorageRestore = false;
             void this.persistence?.forget?.(plugin.id).catch(() => {
               console.warn('原系统会话快照暂未清除', { systemId: plugin.id });
             });
@@ -223,7 +228,12 @@ export class LoginTabController {
       }
       this.fillCredentials(tab);
       await this.captureStorage(tab);
-    })().catch(() => console.warn('原系统页面会话恢复暂未完成', { systemId: plugin.id })); });
+    })().catch(() => console.warn('原系统页面会话恢复暂未完成', { systemId: plugin.id })).finally(() => {
+      if (tab.awaitingStorageRestore) {
+        tab.awaitingStorageRestore = false;
+        void this.checkSession(tab);
+      }
+    }); });
     if (!options.background) this.activate(plugin.id);
     else this.publish();
     void view.webContents.loadURL(targetUrl).catch((error: unknown) => {
@@ -242,15 +252,19 @@ export class LoginTabController {
   // Populate only the original site's login form. Never submit or replace user-entered values.
   private fillCredentials(tab: Tab, previous: SystemCredentials | null = null): void {
     if (!tab.credentials || tab.view.webContents.isDestroyed()) return;
+    const loginUrl = new URL(tab.plugin.loginPage!.url);
+    const loginRoute = loginUrl.hash.startsWith('#/') && tab.plugin.loginPage!.onLoginPageChange ? hashRoute(loginUrl) : null;
     try {
       const url = new URL(tab.view.webContents.getURL());
       if (url.origin !== tab.allowedOrigin) return;
       if (tab.plugin.loginPage?.credentialPaths && !tab.plugin.loginPage.credentialPaths.includes(url.pathname)) return;
+      if (loginRoute && hashRoute(url) !== loginRoute) return;
     } catch { return; }
     const script = `(() => {
         const expectedOrigin = ${JSON.stringify(tab.allowedOrigin)};
         if (location.origin !== expectedOrigin) return;
         const allowedPaths = ${JSON.stringify(tab.plugin.loginPage?.credentialPaths ?? null)};
+        const loginRoute = ${JSON.stringify(loginRoute)};
         if (allowedPaths && !allowedPaths.includes(location.pathname)) return;
         window.__dataFusionLoginFillCleanup?.();
         const values = ${JSON.stringify(tab.credentials)};
@@ -258,6 +272,7 @@ export class LoginTabController {
         const fields = ${JSON.stringify(tab.credentialFields ?? null)};
         const fill = () => {
           if (location.origin !== expectedOrigin || allowedPaths && !allowedPaths.includes(location.pathname)) return false;
+          if (loginRoute && location.hash.split('?')[0].replace(/\\/$/, '') !== loginRoute) return false;
           const inputs = [...document.querySelectorAll('input')].filter(el => el.getClientRects().length && !el.disabled);
           const password = inputs.find(el => fields ? el.matches(fields.password) : el.type === 'password');
           if (!password) return false;

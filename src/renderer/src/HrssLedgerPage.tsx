@@ -4,10 +4,10 @@ import { ExportNotice, type ExportResult } from './ExportNotice';
 import './HrssLedgerPage.css';
 import { HrssBatchDateNotice } from './HrssDateNotice';
 import { hrssTaskDateLabel } from '../../core/hrss/date-filters';
+import { BatchPageOptions, selectBatchOption, useCompletedBatches } from './useCompletedBatches';
 
 export interface HrssListColumn { key: string; label: string; sensitive?: boolean }
 interface Row { recordKey: string; data: Record<string, unknown>; updatedAt?: number; rowNo?: number }
-interface Batch { id: string; status: string; type: string; systemId?: string; matterId?: string; createdAt: number; finishedAt?: number; details?: Record<string, unknown> }
 const SYSTEM_ID = 'guangdong-hrss';
 
 export function hrssDisplayValue(column: HrssListColumn, value: unknown): string {
@@ -29,21 +29,14 @@ export function HrssLedgerPage({ matterId, matterName, columns, batchId = '', on
   const [pageSize, setPageSize] = useState(20);
   const [rows, setRows] = useState<Row[]>([]);
   const [total, setTotal] = useState(0);
-  const [batches, setBatches] = useState<Batch[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
   const [revision, setRevision] = useState(0);
+  const batchPages = useCompletedBatches(SYSTEM_ID, matterId, batchId, revision, !preview);
+  const { batches } = batchPages;
   const [exportResult, setExportResult] = useState<ExportResult | null>(null);
   const [exporting, setExporting] = useState(false);
   const generation = useRef(0), exportLock = useRef(false);
-
-  useEffect(() => {
-    let disposed = false;
-    void window.desktopApi.tasks.list().then((value: Batch[]) => {
-      if (!disposed) setBatches(value.filter(task => task.type === 'data-return' && task.status === 'completed' && task.systemId === SYSTEM_ID && task.matterId === matterId));
-    }).catch(() => { if (!disposed) setError('回流批次暂时无法读取，请刷新重试'); });
-    return () => { disposed = true; };
-  }, [matterId, revision]);
 
   useEffect(() => {
     const current = ++generation.current;
@@ -78,10 +71,10 @@ export function HrssLedgerPage({ matterId, matterName, columns, batchId = '', on
         : allowExport && <button className="primary" aria-busy={exporting} disabled={exporting || loading || !total} onClick={() => void exportData()}><AppIcon name="download" size={17} />{exporting ? '正在导出…' : batchId ? '导出当前批次' : '导出台账'}</button>}
     </header>
     {!preview && batchId && <HrssBatchDateNotice details={batches.find(task => task.id === batchId)?.details} />}
-    {error && <p className="inline-error" role="alert">{error}<button className="link-button" onClick={() => setRevision(value => value + 1)}>重试</button></p>}
+    {(error || batchPages.error) && <p className="inline-error" role="alert">{error || batchPages.error}<button className="link-button" onClick={() => setRevision(value => value + 1)}>重试</button></p>}
     {exportResult && <ExportNotice result={exportResult} />}
     {!preview && <form className="hrss-ledger-filters" onSubmit={event => { event.preventDefault(); setPage(1); setSearch(keyword.trim()); setRevision(value => value + 1); }}>
-      <label><span>回流批次</span><select value={batchId} onChange={event => { setPage(1); onBatchChange?.(event.target.value); }}><option value="">当前合并台账</option>{batches.map(task => <option key={task.id} value={task.id} title={hrssTaskDateLabel(task.details)}>{new Date(task.finishedAt ?? task.createdAt).toLocaleString()} · {task.id.slice(0, 8).toUpperCase()}{task.details?.dateFilterStatus === 'pending' ? ' · 日期筛选待接入' : ''}</option>)}</select></label>
+      <label><span>回流批次</span><select value={batchId} onChange={event => selectBatchOption(event.target.value, batchPages, id => { setPage(1); onBatchChange?.(id); })}><option value="">当前合并台账</option>{batches.map(task => <option key={task.id} value={task.id} title={hrssTaskDateLabel(task.details)}>{new Date(task.finishedAt ?? task.createdAt).toLocaleString()} · {task.id.slice(0, 8).toUpperCase()}{task.details?.dateFilterStatus === 'pending' ? ' · 日期筛选待接入' : ''}</option>)}<BatchPageOptions {...batchPages} /></select></label>
       <label><span>列表搜索</span><input value={keyword} onChange={event => setKeyword(event.target.value)} placeholder="申请编号、姓名或单位" /></label>
       <button className="primary" type="submit" disabled={loading}>查询</button><button className="secondary" type="button" disabled={loading} onClick={() => setRevision(value => value + 1)} aria-label="刷新台账"><AppIcon name="refresh" size={18} /></button>
     </form>}

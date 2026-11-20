@@ -10,6 +10,13 @@ interface TaskRow {
   metadata_json?: string;
 }
 
+function taskFromRow(row: TaskRow): RuntimeTask {
+  return { id: row.id, type: row.type, name: row.name, systemId: row.system_id, matterId: row.matter_id,
+    status: row.status, progress: JSON.parse(row.progress_json), createdAt: row.created_at,
+    startedAt: row.started_at, finishedAt: row.finished_at, error: row.error_message,
+    details: row.metadata_json ? JSON.parse(row.metadata_json) : undefined };
+}
+
 interface RecordRow {
   system_id: string; matter_id: string; record_key: string; data_json: string; first_seen_at: number; updated_at: number;
 }
@@ -22,6 +29,32 @@ export interface LocalRecordQuery {
   pageSize?: number;
   /** Added by the runtime, never accepted from IPC input. */
   accessScopes?: Array<{ systemId: string; matterIds?: string[] }>;
+}
+
+export interface TaskHistoryQuery {
+  systemId?: string;
+  matterId?: string;
+  taskId?: string;
+  completedBatches?: boolean;
+  page?: number;
+  pageSize?: number;
+}
+
+function scopeConditions(query: Pick<LocalRecordQuery, 'systemId' | 'matterId' | 'accessScopes'>) {
+  const where: string[] = [];
+  const params: unknown[] = [];
+  if (query.accessScopes) {
+    const scopes = query.accessScopes.filter(scope => !scope.matterIds || scope.matterIds.length).map(scope => {
+      params.push(scope.systemId);
+      if (!scope.matterIds) return '(system_id=?)';
+      params.push(...scope.matterIds);
+      return `(system_id=? AND matter_id IN (${scope.matterIds.map(() => '?').join(',')}))`;
+    });
+    where.push(scopes.length ? `(${scopes.join(' OR ')})` : '0');
+  }
+  if (query.systemId) { where.push('system_id = ?'); params.push(query.systemId); }
+  if (query.matterId) { where.push('matter_id = ?'); params.push(query.matterId); }
+  return { where, params };
 }
 
 export interface TaskOutputRow {
@@ -63,12 +96,25 @@ export class SqlitePlatformStore implements TaskStore, AuditLog, SettingsStore {
 
   async listTasks(limit = 100): Promise<RuntimeTask[]> {
     const rows = await this.database.all<TaskRow>('SELECT * FROM runtime_tasks ORDER BY created_at DESC LIMIT ?', [limit]);
-    return rows.map((row) => ({
-      id: row.id, type: row.type, name: row.name, systemId: row.system_id, matterId: row.matter_id,
-      status: row.status, progress: JSON.parse(row.progress_json), createdAt: row.created_at,
-      startedAt: row.started_at, finishedAt: row.finished_at, error: row.error_message,
-      details: row.metadata_json ? JSON.parse(row.metadata_json) : undefined,
-    }));
+    return rows.map(taskFromRow);
+  }
+
+  async getTask(id: string) {
+    const row = await this.database.get<TaskRow>('SELECT * FROM runtime_tasks WHERE id=?', [id]);
+    return row ? taskFromRow(row) : undefined;
+  }
+
+  async taskPage(query: TaskHistoryQuery, accessScopes: NonNullable<LocalRecordQuery['accessScopes']>) {
+    const { where, params } = scopeConditions({ ...query, accessScopes });
+    if (query.taskId) { where.push('id=?'); params.push(query.taskId); }
+    if (query.completedBatches) where.push("type='data-return' AND status='completed'");
+    const clause = `WHERE ${where.join(' AND ')}`;
+    const pageSize = query.pageSize ?? 20, page = query.page ?? 1;
+    const total = await this.database.get<{ count: number }>(`SELECT COUNT(*) AS count FROM runtime_tasks ${clause}`, params);
+    const rows = await this.database.all<TaskRow>(
+      `SELECT * FROM runtime_tasks ${clause} ORDER BY created_at DESC,id DESC LIMIT ? OFFSET ?`,
+      [...params, pageSize, (page - 1) * pageSize]);
+    return { rows: rows.map(taskFromRow), total: total?.count ?? 0 };
   }
 
   /** Prefer the latest completed batch, including an empty one. Older local-only ledgers have no batch. */
@@ -138,19 +184,7 @@ export class SqlitePlatformStore implements TaskStore, AuditLog, SettingsStore {
   }
 
   async listRecords(query: LocalRecordQuery): Promise<{ rows: StoredRecord[]; total: number }> {
-    const where: string[] = [];
-    const params: unknown[] = [];
-    if (query.accessScopes) {
-      const scopes = query.accessScopes.filter(scope => !scope.matterIds || scope.matterIds.length).map(scope => {
-        params.push(scope.systemId);
-        if (!scope.matterIds) return '(system_id=?)';
-        params.push(...scope.matterIds);
-        return `(system_id=? AND matter_id IN (${scope.matterIds.map(() => '?').join(',')}))`;
-      });
-      where.push(scopes.length ? `(${scopes.join(' OR ')})` : '0');
-    }
-    if (query.systemId) { where.push('system_id = ?'); params.push(query.systemId); }
-    if (query.matterId) { where.push('matter_id = ?'); params.push(query.matterId); }
+    const { where, params } = scopeConditions(query);
     if (query.keyword) { where.push('(record_key LIKE ? OR data_json LIKE ?)'); params.push(`%${query.keyword}%`, `%${query.keyword}%`); }
     const clause = where.length ? `WHERE ${where.join(' AND ')}` : '';
     const total = await this.database.get<{ count: number }>(`SELECT COUNT(*) AS count FROM local_records ${clause}`, params);

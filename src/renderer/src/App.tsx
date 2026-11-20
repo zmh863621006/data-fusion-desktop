@@ -1,5 +1,5 @@
 import { PractitionerNumberPanel } from './PractitionerNumberPanel';
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import type { SourceTabsState } from '../../core/session/source-tabs';
 import { DOUBLE_PUBLICITY_TEMPLATE } from '../../core/double-publicity/template';
 import { validateExport } from '../../core/double-publicity/validation';
@@ -19,6 +19,7 @@ import type { ComponentSummary } from '../../core/plugins/components';
 import { ComponentCatalog } from './ComponentCatalog';
 import { publicationPlatform, publicationPlatformsForSystem, type PublicationPlatformId } from '../../core/publication/platforms';
 import { HrssLedgerPage, type HrssListColumn } from './HrssLedgerPage';
+import { BatchPageOptions, selectBatchOption, useCompletedBatches } from './useCompletedBatches';
 import { HrssDashboardWindowPage } from './HrssDashboardWindowPage';
 import { HrssDateNotice } from './HrssDateNotice';
 import { hrssTaskDateLabel } from '../../core/hrss/date-filters';
@@ -599,7 +600,7 @@ function Workspace({ license }: { license: LicenseStatus }) {
             <button className="browser-icon-button" title="刷新" aria-label="刷新原系统" onClick={() => void window.desktopApi.systems.reloadLogin(loginTab.systemId)}><AppIcon name="refresh" size={18} /></button>
             <div className="browser-address" title={loginTab.error ?? loginTab.displayUrl}><span>{loginTab.error ?? loginTab.displayUrl}</span></div>
             {publicationTab ? <button className="detect-login-button" onClick={() => void activateSourceTab(null)}>返回回流数据</button> : <>
-              <span className={`login-detection ${sourceSession?.status === 'authenticated' ? 'success' : ''}`} title={sourceSession?.message}><i />{sourceSession?.status === 'authenticated' ? '已识别登录' : sourceSession?.status === 'unverified' ? '会话待验证' : sourceSession?.status === 'logged-out' ? '未登录' : '待检测登录'}</span>
+              <span className={`login-detection ${sourceSession?.status === 'authenticated' ? 'success' : ''}`} title={sourceSession?.message}><i />{sourceSession?.status === 'authenticated' ? '已识别登录' : sourceSession?.status === 'unverified' ? '会话待验证' : sourceSession?.status === 'expired' ? '登录已失效' : sourceSession?.status === 'logged-out' ? '未登录' : '待检测登录'}</span>
               <button className="detect-login-button" disabled={checkingLogin} onClick={() => void returnFromLogin()}>{checkingLogin ? '正在检测登录…' : '检测登录并返回工作台'}</button>
             </>}
           </div>
@@ -638,7 +639,7 @@ function Workspace({ license }: { license: LicenseStatus }) {
         </nav>}
         {selectedMatter?.executionMode === 'one-click-return' && message && <div className="message page-message">{message}</div>}
 
-        {!selectedMatter ? <div className="panel empty" role="status">{message || (matterSystemId === selectedSystemId ? '当前系统暂无可用业务事项。' : '正在加载业务事项…')}</div> : ['return-ledger', 'list-ledger'].includes(selectedSystem?.workspaceMode ?? '') && matterSection === 'tasks' ? <TaskCenterPage systemId={selectedSystemId} matterId={selectedMatterId} matterName={selectedMatter?.name} onViewBatch={(batchId) => { setSelectedDataBatchId(batchId); setMatterSection('data'); }} /> : selectedSystem?.workspaceMode === 'list-ledger' && matterSection === 'data' ? <HrssLedgerPage key={selectedMatterId} matterId={selectedMatterId} matterName={selectedMatter.name} columns={selectedMatter.listColumns ?? []} batchId={selectedDataBatchId} onBatchChange={setSelectedDataBatchId} allowExport={license.grant?.allowExport} /> : selectedSystem?.workspaceMode === 'return-ledger' && matterSection === 'data' ? <LocalDataPage systemId={selectedSystemId} matterId={selectedMatterId} matterName={selectedMatter?.name} selectedBatchId={selectedDataBatchId} onBatchChange={setSelectedDataBatchId} onOpenPublication={openPublication} openingPublication={openingPublication} /> : <>
+        {!selectedMatter ? <div className="panel empty" role="status">{message || (matterSystemId === selectedSystemId ? '当前系统暂无可用业务事项。' : '正在加载业务事项…')}</div> : ['return-ledger', 'list-ledger'].includes(selectedSystem?.workspaceMode ?? '') && matterSection === 'tasks' ? <TaskCenterPage key={`${selectedSystemId}/${selectedMatterId}`} systemId={selectedSystemId} matterId={selectedMatterId} matterName={selectedMatter?.name} onViewBatch={(batchId) => { setSelectedDataBatchId(batchId); setMatterSection('data'); }} /> : selectedSystem?.workspaceMode === 'list-ledger' && matterSection === 'data' ? <HrssLedgerPage key={selectedMatterId} matterId={selectedMatterId} matterName={selectedMatter.name} columns={selectedMatter.listColumns ?? []} batchId={selectedDataBatchId} onBatchChange={setSelectedDataBatchId} allowExport={license.grant?.allowExport} /> : selectedSystem?.workspaceMode === 'return-ledger' && matterSection === 'data' ? <LocalDataPage key={`${selectedSystemId}/${selectedMatterId}`} systemId={selectedSystemId} matterId={selectedMatterId} matterName={selectedMatter?.name} selectedBatchId={selectedDataBatchId} onBatchChange={setSelectedDataBatchId} onOpenPublication={openPublication} openingPublication={openingPublication} /> : <>
 
         {selectedMatter?.executionMode === 'one-click-return' ? (
           <>
@@ -887,13 +888,34 @@ function PageHeader({ eyebrow, title, description, action, className = '' }: { e
 
 function TaskCenterPage({ systemId, matterId, matterName, onViewBatch }: { systemId: string; matterId: string; matterName?: string; onViewBatch: (batchId: string) => void }) {
   const [tasks, setTasks] = useState<RuntimeTask[]>([]);
+  const [page, setPage] = useState(1);
+  const [total, setTotal] = useState(0);
+  const [revision, setRevision] = useState(0);
+  const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
-  const reload = () => window.desktopApi.tasks.list().then((value) => setTasks((value as RuntimeTask[]).filter((task) => task.systemId === systemId && task.matterId === matterId)));
   useEffect(() => {
-    const refresh = () => { void reload().catch(() => setError('任务列表暂时无法加载，请稍后重试。')); };
-    refresh(); const timer = window.setInterval(refresh, 3_000); return () => window.clearInterval(timer);
-  }, [systemId, matterId]);
-  const cancel = async (id: string) => { try { await window.desktopApi.tasks.cancel(id); await reload(); setError(''); } catch (error) { setError(error instanceof Error ? error.message : '取消失败'); } };
+    let disposed = false;
+    let timer: number;
+    const refresh = async () => {
+      try {
+        const result = await window.desktopApi.tasks.page({ systemId, matterId, page, pageSize: 20 });
+        if (disposed) return;
+        setTasks(result.rows); setTotal(result.total); setError('');
+        setPage(Math.min(page, Math.max(1, Math.ceil(result.total / 20))));
+      } catch {
+        if (!disposed) { setTasks([]); setError('任务列表暂时无法加载，请稍后重试。'); }
+      } finally {
+        if (!disposed) { setLoading(false); timer = window.setTimeout(() => void refresh(), 3_000); }
+      }
+    };
+    setLoading(true); setTasks([]);
+    void refresh();
+    return () => { disposed = true; window.clearTimeout(timer); };
+  }, [systemId, matterId, page, revision]);
+  const cancel = async (id: string) => {
+    try { await window.desktopApi.tasks.cancel(id); setRevision(value => value + 1); }
+    catch (error) { setError(error instanceof Error ? error.message : '取消失败'); }
+  };
   const taskPeriod = (task: RuntimeTask) => {
     if (systemId === 'guangdong-hrss') return hrssTaskDateLabel(task.details);
     const start = typeof task.details?.startDate === 'string' ? task.details.startDate : '';
@@ -904,13 +926,14 @@ function TaskCenterPage({ systemId, matterId, matterName, onViewBatch }: { syste
     <PageHeader eyebrow="事项工作区 / 任务" title={`${matterName ?? '当前事项'} · 回流任务`} description="查看当前事项的处理进度、结果与批次数据。" />
     {error && <div className="inline-error" role="status">{error}</div>}
     <section className="panel data-panel task-table-panel"><table><thead><tr><th>批次号</th><th>任务</th><th>回流时间段</th><th>状态</th><th>进度</th><th>生成时间</th><th>结果</th><th></th></tr></thead><tbody>
-      {tasks.map((task) => { const percent = taskProgressPercent(task.progress, task.status); return <tr key={task.id}><td className="batch-id" title={task.id}>{task.id.slice(0, 8).toUpperCase()}</td><td>{task.name}</td><td>{taskPeriod(task)}</td><td><span className={`status-chip ${task.status}`}>{taskStatusLabel(task.status)}</span></td><td><div className="task-progress">{percent !== undefined && <progress max={100} value={percent} aria-label={`${task.name}进度`} />}<span>{task.progress.message ?? (percent !== undefined ? `${percent}%` : '等待进度')}</span></div></td><td>{new Date(task.createdAt).toLocaleString()}</td><td className={task.error ? 'error-text' : ''}>{task.error ?? (task.finishedAt ? taskStatusLabel(task.status) : '执行中')}</td><td>{task.status === 'running' && <button className="link-button error-text" onClick={() => void cancel(task.id)}>取消</button>}{task.type === 'data-return' && task.status === 'completed' && <button className="link-button" onClick={() => onViewBatch(task.id)}>在回流数据中查看</button>}</td></tr>; })}
-      {!tasks.length && <tr><td colSpan={8} className="empty">暂无任务记录</td></tr>}
+      {tasks.map((task) => { const percent = taskProgressPercent(task.progress, task.status); return <tr key={task.id}><td className="batch-id" title={task.id}>{task.id.slice(0, 8).toUpperCase()}</td><td>{task.name}</td><td>{taskPeriod(task)}</td><td><span className={`status-chip ${task.status}`}>{taskStatusLabel(task.status)}</span></td><td><div className="task-progress">{percent !== undefined && <progress max={100} value={percent} aria-label={`${task.name}进度`} />}<span>{task.progress.message ?? (percent !== undefined ? `${percent}%` : '等待进度')}</span></div></td><td>{new Date(task.createdAt).toLocaleString()}</td><td className={task.error ? 'error-text' : ''}>{task.error ?? (task.finishedAt ? taskStatusLabel(task.status) : '执行中')}</td><td>{['queued', 'running'].includes(task.status) && <button className="link-button error-text" onClick={() => void cancel(task.id)}>取消</button>}{task.type === 'data-return' && task.status === 'completed' && <button className="link-button" onClick={() => onViewBatch(task.id)}>在回流数据中查看</button>}</td></tr>; })}
+      {!tasks.length && <tr><td colSpan={8} className="empty">{loading ? '正在读取任务…' : error ? '暂时无法读取任务' : '暂无任务记录'}</td></tr>}
     </tbody></table></section>
+    {total > 20 && <Pagination page={page} pageCount={Math.ceil(total / 20)} total={total} onPage={setPage} />}
   </>;
 }
 
-type LocalRecord = { systemId: string; matterId: string; recordKey: string; data: Record<string, unknown>; firstSeenAt: number; updatedAt: number; rowNo?: number };
+type LocalRecord = { systemId: string; matterId: string; recordKey: string; data: Record<string, unknown>; firstSeenAt?: number; updatedAt?: number; rowNo?: number };
 
 function Pagination({ page, pageCount, total, onPage, pageSize, onPageSize }: { page: number; pageCount: number; total: number; onPage: (page: number) => void; pageSize?: number; onPageSize?: (size: number) => void }) {
   return <div className="pagination"><span>共 {total} 条 · 第 {page}/{pageCount} 页</span>{onPageSize && <label>每页<select value={pageSize} onChange={(event) => onPageSize(Number(event.target.value))}><option value={20}>20</option><option value={50}>50</option><option value={100}>100</option></select>条</label>}<button className="secondary" disabled={page <= 1} onClick={() => onPage(page - 1)}>上一页</button><button className="secondary" disabled={page >= pageCount} onClick={() => onPage(page + 1)}>下一页</button></div>;
@@ -918,7 +941,9 @@ function Pagination({ page, pageCount, total, onPage, pageSize, onPageSize }: { 
 
 function LocalDataPage({ systemId, matterId, matterName, selectedBatchId, onBatchChange, onOpenPublication, openingPublication }: { systemId: string; matterId: string; matterName?: string; selectedBatchId: string; onBatchChange: (batchId: string) => void; onOpenPublication: (id: PublicationPlatformId) => Promise<void>; openingPublication: PublicationPlatformId | null }) {
   const [keyword, setKeyword] = useState('');
-  const [batches, setBatches] = useState<RuntimeTask[]>([]);
+  const batchPages = useCompletedBatches(systemId, matterId, selectedBatchId);
+  const { batches } = batchPages;
+  const selectedBatch = batches.find(task => task.id === selectedBatchId);
   const [rows, setRows] = useState<LocalRecord[]>([]);
   const [total, setTotal] = useState(0);
   const [page, setPage] = useState(1);
@@ -936,33 +961,42 @@ function LocalDataPage({ systemId, matterId, matterName, selectedBatchId, onBatc
   const [exportingTarget, setExportingTarget] = useState<GovernmentExportTarget>();
   const exportInFlight = useRef(false);
   const exportGeneration = useRef(0);
-  useEffect(() => {
+  const listGeneration = useRef(0);
+  const detailGeneration = useRef(0);
+  const [loadingRows, setLoadingRows] = useState(true);
+  const [listError, setListError] = useState('');
+  useLayoutEffect(() => {
     exportGeneration.current += 1;
-    setExportResult(null); setMessage('');
-    return () => { exportGeneration.current += 1; };
+    setExportResult(null); setMessage(''); setSelected(null); setSaving(false); setPage(1);
+    return () => { exportGeneration.current++; listGeneration.current++; detailGeneration.current++; };
   }, [systemId, matterId, selectedBatchId]);
   const rowIssues = useMemo(() => new Map(validateExport(rows).issues.map(issue => [issue.recordKey, issue])), [rows]);
   const load = async (targetPage = page, targetPageSize = pageSize, batchId = selectedBatchId) => {
-    if (batchId) {
-      const result = await window.desktopApi.tasks.output(batchId, targetPage, targetPageSize, keyword.trim() || undefined) as { rows: TaskOutputRow[]; total: number };
-      const task = batches.find((item) => item.id === batchId);
-      const timestamp = task?.finishedAt ?? task?.createdAt ?? Date.now();
-      setRows(result.rows.map((row) => ({ ...row, firstSeenAt: timestamp, updatedAt: timestamp })));
-      setTotal(result.total);
-    } else {
-      const result = await window.desktopApi.records.list({ keyword: keyword.trim() || undefined, systemId, matterId, page: targetPage, pageSize: targetPageSize }) as { rows: LocalRecord[]; total: number };
-      setRows(result.rows); setTotal(result.total);
+    const generation = ++listGeneration.current;
+    setRows([]); setTotal(0); setLoadingRows(true); setListError('');
+    try {
+      const search = keyword.trim() || undefined;
+      if (batchId) {
+        const result = await window.desktopApi.tasks.output(batchId, targetPage, targetPageSize, search) as { rows: TaskOutputRow[]; total: number };
+        if (generation !== listGeneration.current) return;
+        setRows(result.rows);
+        setTotal(result.total);
+      } else {
+        const result = await window.desktopApi.records.list({ keyword: search, systemId, matterId, page: targetPage, pageSize: targetPageSize }) as { rows: LocalRecord[]; total: number };
+        if (generation !== listGeneration.current) return;
+        setRows(result.rows); setTotal(result.total);
+      }
+      setPage(targetPage); setPageSize(targetPageSize);
+    } catch (error) {
+      if (generation === listGeneration.current) setListError(error instanceof Error ? error.message : '读取回流数据失败，请重新查询');
+    } finally {
+      if (generation === listGeneration.current) setLoadingRows(false);
     }
-    setPage(targetPage); setPageSize(targetPageSize);
   };
   useEffect(() => {
     setKeyword(''); setPage(1); setSelected(null);
-    void window.desktopApi.tasks.list().then((value) => {
-      const scoped = (value as RuntimeTask[]).filter((task) => task.type === 'data-return' && task.status === 'completed' && task.systemId === systemId && task.matterId === matterId);
-      setBatches(scoped);
-    });
   }, [systemId, matterId]);
-  useEffect(() => { void load(1, pageSize, selectedBatchId); setSelected(null); }, [systemId, matterId, selectedBatchId, batches.length]);
+  useLayoutEffect(() => { void load(1, pageSize, selectedBatchId); }, [systemId, matterId, selectedBatchId]);
   const exportData = async (target?: GovernmentExportTarget) => {
     if (exportInFlight.current) return;
     const generation = exportGeneration.current;
@@ -979,23 +1013,36 @@ function LocalDataPage({ systemId, matterId, matterName, selectedBatchId, onBatc
     finally { exportInFlight.current = false; setExporting(false); setExportingTarget(undefined); }
   };
   const openRecord = async (row: LocalRecord) => {
+    const generation = ++detailGeneration.current;
     setSelected(row); setDraftData({ ...row.data }); setEditing(false); setShowEmptyFields(false); setDrawerMessage('');
-    setVersions(selectedBatchId ? [] : await window.desktopApi.records.versions(row.systemId, row.matterId, row.recordKey) as typeof versions);
+    setVersions([]);
+    if (selectedBatchId) return;
+    try {
+      const history = await window.desktopApi.records.versions(row.systemId, row.matterId, row.recordKey) as typeof versions;
+      if (generation === detailGeneration.current) setVersions(history);
+    } catch (error) {
+      if (generation === detailGeneration.current) setDrawerMessage(error instanceof Error ? error.message : '历史版本读取失败');
+    }
   };
   const saveRecord = async () => {
-    if (!selected) return;
+    if (!selected || selectedBatchId || saving) return;
+    const generation = ++detailGeneration.current;
     setSaving(true); setMessage(''); setDrawerMessage('');
     try {
       const updated = await window.desktopApi.records.update(selected.systemId, selected.matterId, selected.recordKey, draftData) as LocalRecord;
+      if (generation !== detailGeneration.current) return;
       setSelected(updated); setDraftData({ ...updated.data }); setEditing(false);
-      setVersions(await window.desktopApi.records.versions(updated.systemId, updated.matterId, updated.recordKey) as typeof versions);
-      await load(page, pageSize); setMessage('数据已修改并保存，历史版本已自动留存。');
-    } catch (error) { setDrawerMessage(error instanceof Error ? error.message : '数据保存失败'); }
-    finally { setSaving(false); }
+      setMessage('数据已修改并保存，历史版本已自动留存。');
+      void load(page, pageSize);
+      const history = await window.desktopApi.records.versions(updated.systemId, updated.matterId, updated.recordKey) as typeof versions;
+      if (generation === detailGeneration.current) setVersions(history);
+    } catch (error) { if (generation === detailGeneration.current) setDrawerMessage(error instanceof Error ? error.message : '操作失败'); }
+    finally { if (generation === detailGeneration.current) setSaving(false); }
   };
   const closeRecord = () => {
     if (saving) return;
     if (editing && selected && JSON.stringify(draftData) !== JSON.stringify(selected.data) && !window.confirm('字段有未保存的修改，确定放弃本次修改？')) return;
+    detailGeneration.current++;
     setSelected(null);
   };
   const pageCount = Math.max(1, Math.ceil(total / pageSize));
@@ -1018,21 +1065,21 @@ function LocalDataPage({ systemId, matterId, matterName, selectedBatchId, onBatc
   const hiddenFieldCount = columns.length - detailColumns.length;
   const selectedTitle = String(selected?.data.xkXdrMc ?? selected?.data.applyer ?? selected?.data.xzxkmc ?? '数据详情');
   const selectedDocumentNo = String(selected?.data.xkWsh ?? selected?.data.xkXkbh ?? selected?.data.certificateNumber ?? selected?.data.cityLsh ?? '').trim();
-  const selectedBatch = batches.find((task) => task.id === selectedBatchId);
   const batchLabel = (task: RuntimeTask) => {
     const start = typeof task.details?.startDate === 'string' ? task.details.startDate : '—';
     const end = typeof task.details?.endDate === 'string' ? task.details.endDate : '—';
     return `${task.id.slice(0, 8).toUpperCase()} · ${start} 至 ${end} · ${new Date(task.createdAt).toLocaleString()}`;
   };
   return <>
-    <PageHeader className={supportsGovernmentExport(systemId) ? 'publication-page-header' : ''} eyebrow="事项工作区 / 本地数据" title={`${matterName ?? '当前事项'} · 回流数据`} description={selectedBatch ? `当前查看批次 ${selectedBatch.id.slice(0, 8).toUpperCase()}，共 ${total} 条回流记录。` : `当前查看合并台账，共 ${total} 条回流记录。`} action={<div className="button-row publication-actions">
+    <PageHeader className={supportsGovernmentExport(systemId) ? 'publication-page-header' : ''} eyebrow="事项工作区 / 本地数据" title={`${matterName ?? '当前事项'} · 回流数据`} description={selectedBatchId ? `当前查看批次 ${selectedBatchId.slice(0, 8).toUpperCase()}，共 ${total} 条回流记录。` : `当前查看合并台账，共 ${total} 条回流记录。`} action={<div className="button-row publication-actions">
       {supportsGovernmentExport(systemId) ? (['guangdong-law', 'nanshan'] as const).map((target, index) => <button key={target} className={index === 0 ? 'primary' : 'secondary'} disabled={exporting} aria-busy={exporting && exportingTarget === target} title={`${selectedBatchId ? '导出当前批次' : '导出当前筛选台账'}，使用${GOVERNMENT_EXPORT_LABELS[target]}模板`} onClick={() => void exportData(target)}><AppIcon name="download" size={16} />{exporting && exportingTarget === target ? '导出中…' : `导出${GOVERNMENT_EXPORT_LABELS[target]}`}</button>) : <button className="primary" disabled={exporting} aria-busy={exporting} onClick={() => void exportData()}><AppIcon name="download" size={16} />{exporting ? '导出中…' : `导出数据${selectedBatchId ? '当前批次' : ''}`}</button>}
       {publicationPlatformsForSystem(systemId).map(platform => <button className="secondary" key={platform.id} disabled={Boolean(openingPublication)} aria-busy={openingPublication === platform.id} title={`打开${platform.name}，登录后保留页面`} onClick={() => void onOpenPublication(platform.id)}><AppIcon name="upload" size={16} />{openingPublication === platform.id ? '正在打开…' : platform.buttonLabel}</button>)}
     </div>} />
     {message && <div className="message page-message" role="status">{message}</div>}
+    {batchPages.error && <div className="inline-error" role="status">{batchPages.error}</div>}
     {exportResult && <ExportNotice result={exportResult} />}
-    <section className="panel filter-bar batch-filter-bar"><label><span>回流批次</span><select value={selectedBatchId} onChange={(event) => onBatchChange(event.target.value)}><option value="">当前合并台账（可修改）</option>{batches.map((task) => <option value={task.id} key={task.id}>{batchLabel(task)}</option>)}</select></label><label><span>数据搜索</span><input value={keyword} onChange={(event) => setKeyword(event.target.value)} onKeyDown={(event) => { if (event.key === 'Enter') void load(1, pageSize); }} placeholder="搜索行政相对人、证件号码或许可项目"/></label><button className="primary" onClick={() => void load(1, pageSize)}>查询</button></section>
-    <section className="panel data-panel record-table-panel"><table><thead><tr><th>序号</th>{listColumns.map(([key, label]) => <th key={key}>{label}</th>)}<th>字段状态</th><th>{selectedBatchId ? '批次完成时间' : '更新时间'}</th><th>操作</th></tr></thead><tbody>{rows.map((row, index) => { const issue = rowIssues.get(row.recordKey); return <tr className={issue ? 'record-row-warning' : ''} key={`${row.systemId}-${row.matterId}-${row.recordKey}-${row.rowNo ?? index}`}><td>{row.rowNo ?? ((page - 1) * pageSize + index + 1)}</td>{listColumns.map(([key]) => { const value = String(row.data[key] ?? '').trim(); return <td key={key} className={`record-cell record-cell-${key}`}><span className="cell-ellipsis" title={value}>{value || '—'}</span></td>; })}<td><span className={`status-chip ${issue ? 'warning' : 'ready'}`} title={issue?.fields.map(field => `${field.label}：${field.message}`).join('\n')}>{issue ? `待核对 ${issue.fields.length} 项` : '无填写问题'}</span></td><td className="record-time-cell">{new Date(row.updatedAt).toLocaleString()}</td><td><button className="link-button" onClick={() => void openRecord(row)}>{selectedBatchId ? '查看快照' : '查看修改'}</button></td></tr>; })}{!rows.length && <tr><td colSpan={listColumns.length + 4} className="empty">当前查询条件暂无回流数据</td></tr>}</tbody></table></section>
+    <section className="panel filter-bar batch-filter-bar"><label><span>回流批次</span><select value={selectedBatchId} onChange={(event) => selectBatchOption(event.target.value, batchPages, onBatchChange)}><option value="">当前合并台账（可修改）</option>{batches.map((task) => <option value={task.id} key={task.id}>{batchLabel(task)}</option>)}<BatchPageOptions {...batchPages} /></select></label><label><span>数据搜索</span><input value={keyword} onChange={(event) => setKeyword(event.target.value)} onKeyDown={(event) => { if (event.key === 'Enter') void load(1, pageSize); }} placeholder="搜索行政相对人、证件号码或许可项目"/></label><button className="primary" onClick={() => void load(1, pageSize)}>查询</button></section>
+    <section className="panel data-panel record-table-panel" aria-busy={loadingRows}><table><thead><tr><th>序号</th>{listColumns.map(([key, label]) => <th key={key}>{label}</th>)}<th>字段状态</th><th>{selectedBatchId ? '批次完成时间' : '更新时间'}</th><th>操作</th></tr></thead><tbody>{rows.map((row, index) => { const issue = rowIssues.get(row.recordKey); const timestamp = selectedBatchId ? selectedBatch?.finishedAt ?? selectedBatch?.createdAt : row.updatedAt; return <tr className={issue ? 'record-row-warning' : ''} key={`${row.systemId}-${row.matterId}-${row.recordKey}-${row.rowNo ?? index}`}><td>{row.rowNo ?? ((page - 1) * pageSize + index + 1)}</td>{listColumns.map(([key]) => { const value = String(row.data[key] ?? '').trim(); return <td key={key} className={`record-cell record-cell-${key}`}><span className="cell-ellipsis" title={value}>{value || '—'}</span></td>; })}<td><span className={`status-chip ${issue ? 'warning' : 'ready'}`} title={issue?.fields.map(field => `${field.label}：${field.message}`).join('\n')}>{issue ? `待核对 ${issue.fields.length} 项` : '无填写问题'}</span></td><td className="record-time-cell">{timestamp == null ? '—' : new Date(timestamp).toLocaleString()}</td><td><button className="link-button" onClick={() => void openRecord(row)}>{selectedBatchId ? '查看快照' : '查看修改'}</button></td></tr>; })}{!rows.length && <tr><td colSpan={listColumns.length + 4} className="empty">{loadingRows ? '正在读取回流数据…' : listError || '当前查询条件暂无回流数据'}</td></tr>}</tbody></table></section>
     <Pagination page={page} pageCount={pageCount} total={total} pageSize={pageSize} onPage={(target) => void load(target, pageSize)} onPageSize={(size) => void load(1, size)} />
     {selected && <Modal backdropClassName="drawer-backdrop" className="record-drawer" labelledBy="record-detail-title" onClose={closeRecord}>
       <div className="drawer-head"><div className="drawer-title"><span className="eyebrow">{selectedBatchId ? '批次快照' : '记录详情'}</span><h2 id="record-detail-title">{selectedTitle}</h2><p>{selectedDocumentNo || '未填写许可文书号'}</p></div><div className="drawer-actions">{!selectedBatchId && (editing ? <><button className="secondary" disabled={saving} onClick={() => { setDraftData({ ...selected.data }); setEditing(false); setDrawerMessage(''); }}>取消</button><button className="primary" disabled={saving} onClick={() => void saveRecord()}>{saving ? '保存中…' : '保存修改'}</button></> : <button className="primary" onClick={() => { setEditing(true); setDrawerMessage(''); }}>修改数据</button>)}<button className="secondary" disabled={saving} onClick={closeRecord}>关闭</button></div></div>

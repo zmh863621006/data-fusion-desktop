@@ -61,6 +61,14 @@ ipcMain.handle('ui-redesign:invoke', async (_event, method: string, ...args: any
     case 'matters.list': return publicMatter();
     case 'records.list': assert.equal(args[0].systemId, systemId); return { rows: args[0].matterId === 'unemployment' ? [row] : args[0].matterId === pendingRow.matterId ? [pendingRow] : [], total: ['unemployment', pendingRow.matterId].includes(args[0].matterId) ? 1 : 0 };
     case 'tasks.list': return tasks;
+    case 'tasks.page': {
+      const scope = args[0];
+      const archived = Array.from({ length: 55 }, (_, index) => ({ ...tasks[0], id: 'hrss-archived-' + (index + 1), createdAt: now - (index + 1) * 86400000 }));
+      const rows = [...tasks, ...archived].filter(task => task.systemId === scope.systemId && task.matterId === scope.matterId &&
+        (!scope.completedBatches || task.status === 'completed') && (!scope.taskId || task.id === scope.taskId));
+      const offset = ((scope.page ?? 1) - 1) * (scope.pageSize ?? 20);
+      return { rows: rows.slice(offset, offset + (scope.pageSize ?? 20)), total: rows.length };
+    }
     case 'tasks.output': return { rows: [{ ...(args[0] === 'hrss-demo-pending' ? pendingRow : row), rowNo: 1 }], total: 1 };
     case 'tasks.exportOutput': case 'records.export': return { path: join(output, '业务台账-失业信息-2026-11-01至2026-11-04.xlsx'), rowCount: 1, warningCount: 0 };
     case 'exports.openFolder': return true;
@@ -166,6 +174,17 @@ void app.whenReady().then(async () => {
   await clickText('在回流数据中查看'); await waitFor("Boolean(document.querySelector('.hrss-ledger'))");
   await waitFor("Boolean(document.querySelector('.hrss-ledger-filters select option[value=\"hrss-demo-completed\"]'))");
   await capture('04-batch-snapshot');
+  const batchSelect = 'document.querySelector(".hrss-ledger-filters select")';
+  const selectBatch = async (id: string) => evaluate(`(()=>{const s=${batchSelect};s.value=${JSON.stringify(id)};s.dispatchEvent(new Event('change',{bubbles:true}));})()`);
+  await selectBatch('@older');
+  await waitFor(`Boolean(${batchSelect}.querySelector('option[value="hrss-archived-55"]'))`);
+  assert.equal(await evaluate(batchSelect + '.value'), 'hrss-demo-completed', 'Paging batch choices preserves the selected batch');
+  await selectBatch('hrss-archived-55');
+  await waitFor(`${batchSelect}.value === "hrss-archived-55" && !document.querySelector('.hrss-list-table').getAttribute('aria-busy').includes('true')`);
+  assert(invocations.some(call => call.method === 'tasks.output' && call.args[0] === 'hrss-archived-55'));
+  await selectBatch('@newer');
+  await waitFor(`Boolean(${batchSelect}.querySelector('option[value="@older"]'))`);
+  assert.equal(await evaluate(batchSelect + '.value'), 'hrss-archived-55', 'An older selected batch remains pinned when reading a newer page');
   window.setContentSize(1180, 780); await capture('05-small-workbench');
   assert.equal(errors.length, 0, errors.join('\n'));
   await writeFile(join(output, 'report.json'), JSON.stringify({ passed: true, matterCount: 18, dateControls: 18, pendingDateFilters: 17, checks: ['list-only-metadata', 'date-schema', 'pending-date-status', 'pending-batch-not-effective-range', 'masked-ledger', 'managed-export-folder', 'native-fullscreen', 'escape-preserves-workbench', 'return-task', 'batch-snapshot'], invocationCount: invocations.length }, null, 2));

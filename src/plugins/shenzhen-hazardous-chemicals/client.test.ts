@@ -22,6 +22,32 @@ describe('危化品只读列表客户端', () => {
     await expect(c.validateSession()).rejects.toMatchObject({ code: 'SESSION_EXPIRED' }); expect(c.exportSession()).toBeNull();
     expect(() => decodeHazardousReply({ SYS_HEAD: { RET_STATUS: 'F', RET: [{ RET_CODE: 'other', RET_MSG: 'fixture-secret' }] } })).toThrow('危化品系统未返回成功结果');
   });
+  it.each(['401', '403', '008899', 'success'])('ignores a late %s response after another user logs in with the same token', async outcome => {
+    let complete!: (value: Response) => void;
+    const fetcher = vi.fn(async () => response(envelope([], 0)))
+      .mockImplementationOnce(() => new Promise(resolve => { complete = resolve; }));
+    const c = client(fetcher);
+    const oldCheck = c.validateSession();
+    c.acceptStorage({ Authorization: 'fixture-secret', userId: 'second-user' });
+    await c.validateSession();
+    const late = outcome === 'success' ? response(envelope([], 0)) : outcome === '008899'
+      ? response({ SYS_HEAD: { RET: [{ RET_CODE: outcome }] } }) : new Response(null, { status: Number(outcome) });
+    complete(late);
+    await expect(oldCheck).rejects.toMatchObject({ code: 'SESSION_EXPIRED' });
+    expect(c.exportSession()).toEqual({ Authorization: 'fixture-secret', userId: 'second-user' });
+    expect(c.verified()).toBe(true);
+    expect(fetcher).toHaveBeenCalledTimes(2);
+  });
+  it('does not accept a late success from before logout and re-login with the identical credentials', async () => {
+    let complete!: (value: Response) => void;
+    const c = client(() => new Promise(resolve => { complete = resolve; }));
+    const oldCheck = c.validateSession();
+    c.clearSession();
+    c.acceptStorage({ Authorization: 'fixture-secret', userId: 'fixture-user' });
+    complete(response(envelope([], 0)));
+    await expect(oldCheck).rejects.toMatchObject({ code: 'SESSION_EXPIRED' });
+    expect(c.verified()).toBe(false);
+  });
   it('requires token AND userId, clears removed portal storage and rejects line breaks', () => {
     const c = client(async () => response(envelope([], 0)));
     c.acceptStorage({ Authorization: 'fixture-secret' }); expect(c.hasSession()).toBe(false);

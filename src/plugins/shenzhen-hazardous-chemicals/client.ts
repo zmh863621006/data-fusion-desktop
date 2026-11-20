@@ -33,6 +33,8 @@ function rows(body: Row): Row[] {
 export class HazardousClient implements HazardousTransport {
   private token = '';
   private userId = '';
+  private revision = 0;
+  private expired = false;
   private validatedAt: number | undefined;
   private validation?: Promise<{ displayName: string }>;
   private readonly now: () => number;
@@ -46,45 +48,73 @@ export class HazardousClient implements HazardousTransport {
   acceptStorage(values: Record<string, string>): void {
     const token = credential(values.Authorization) ? values.Authorization.trim() : '';
     const userId = credential(values.userId) ? values.userId.trim() : '';
+    if (!token || !userId) {
+      if (this.hasSession()) this.clearSession();
+      return;
+    }
     if (token === this.token && userId === this.userId) return;
-    this.token = token; this.userId = userId; this.validatedAt = undefined;
+    this.clearSession();
+    this.token = token; this.userId = userId;
   }
-  hasSession(): boolean { return !!this.token && !!this.userId; }
+  hasSession(): boolean { return !this.expired && !!this.token && !!this.userId; }
+  apiCredentials() {
+    return { revision: this.revision, status: this.expired ? 'expired' : this.hasSession() ? 'present' : 'missing' } as const;
+  }
   verified(): boolean { return this.hasSession() && this.validatedAt !== undefined; }
   needsValidation(): boolean { return this.hasSession() && (this.validatedAt === undefined || this.now() - this.validatedAt > 60_000); }
   exportSession(): Row | null { return this.hasSession() ? { Authorization: this.token, userId: this.userId } : null; }
-  restoreSession(value: Row): void { this.acceptStorage({ Authorization: text(value.Authorization), userId: text(value.userId) }); this.validatedAt = undefined; }
-  clearSession(): void { this.token = ''; this.userId = ''; this.validatedAt = undefined; }
+  restoreSession(value: Row): void {
+    this.clearSession();
+    this.acceptStorage({ Authorization: text(value.Authorization), userId: text(value.userId) });
+  }
+  clearSession(): void {
+    this.revision++; this.expired = false; this.validation = undefined;
+    this.token = ''; this.userId = ''; this.validatedAt = undefined;
+  }
+  private assertCurrent(revision: number): void {
+    if (revision !== this.revision) throw new AppError('SESSION_EXPIRED', '危化品会话已切换，请重新开始回流');
+  }
+  private rejectCredentials(revision: number): never {
+    this.assertCurrent(revision);
+    // The page may keep serving this rejected pair from sessionStorage until the next login.
+    this.revision++; this.expired = true; this.validatedAt = undefined; this.validation = undefined;
+    throw new AppError('SESSION_EXPIRED', '危化品系统会话已失效，请重新登录');
+  }
   async logout(): Promise<void> { this.clearSession(); await session.fromPartition(HAZCHEM_PARTITION).clearStorageData(); }
   private async request(service: string, params: Row, signal?: AbortSignal): Promise<Row> {
     if (!Object.values(HAZCHEM_SERVICES).includes(service as typeof HAZCHEM_SERVICES[keyof typeof HAZCHEM_SERVICES])) throw new AppError('QUERY_INVALID', '不支持的危化品接口');
     if (!this.hasSession()) throw new AppError('SESSION_EXPIRED', '请先登录危化品系统');
-    const token = this.token;
-    const payload = JSON.stringify({ ...params, CONSUMER_ID: token, SERVICE_CODE: service });
+    const revision = this.revision;
+    const payload = JSON.stringify({ ...params, CONSUMER_ID: this.token, SERVICE_CODE: service });
     return this.gate.execute(async gateSignal => {
+      this.assertCurrent(revision);
       let response: Response;
       try { response = await this.fetcher(HAZCHEM_ORIGIN + '/DataBus/exchange', {
         method: 'POST', headers: { 'Content-Type': 'application/json', Accept: 'application/json', Origin: HAZCHEM_ORIGIN, Referer: HAZCHEM_ORIGIN + '/iHome/' },
         body: payload, redirect: 'error', signal: gateSignal,
       }); } catch { throw invalid('连接危化品系统失败，请检查网络或原系统页面'); }
-      if ([401, 403].includes(response.status)) { this.clearSession(); throw new AppError('SESSION_EXPIRED', '危化品系统会话已失效，请重新登录'); }
+      this.assertCurrent(revision);
+      if ([401, 403].includes(response.status)) this.rejectCredentials(revision);
       if (!response.ok) throw invalid(`危化品列表请求失败（HTTP ${response.status}）`);
       if (/text\/html/i.test(response.headers.get('content-type') ?? '')) throw invalid('危化品系统未返回列表，请在原系统核对登录状态');
       let value: unknown;
       try { value = await response.json(); } catch { throw invalid('危化品系统未返回有效 JSON 数据'); }
-      try {
-        const reply = decodeHazardousReply(value);
-        if (token !== this.token) throw new AppError('SESSION_EXPIRED', '危化品会话已切换，请重新开始回流');
-        return reply;
-      } catch (error) { if (error instanceof AppError && error.code === 'SESSION_EXPIRED' && token === this.token) this.clearSession(); throw error; }
+      this.assertCurrent(revision);
+      try { return decodeHazardousReply(value); }
+      catch (error) {
+        if (error instanceof AppError && error.code === 'SESSION_EXPIRED') this.rejectCredentials(revision);
+        throw error;
+      }
     }, signal);
   }
   async validateSession(signal?: AbortSignal): Promise<{ displayName: string }> {
+    const revision = this.revision;
     if (!this.validation) this.validation = (async () => {
       const body = await this.request(HAZCHEM_SERVICES.done, this.doneParams(1, 1), signal);
       rows(body); if (!Number.isSafeInteger(Number(body.total)) || Number(body.total) < 0) throw invalid('危化品会话校验未返回有效列表');
+      this.assertCurrent(revision);
       this.validatedAt = this.now(); return { displayName: `${HAZCHEM_SYSTEM_NAME}会话` };
-    })().finally(() => { this.validation = undefined; });
+    })().finally(() => { if (this.revision === revision) this.validation = undefined; });
     return this.validation;
   }
   private doneParams(page: number, size: number, matter?: HazardousMatter): Row {

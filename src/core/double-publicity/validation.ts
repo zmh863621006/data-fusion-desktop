@@ -12,7 +12,8 @@ const governmentAliases: Record<string,string[]> = {
   xkNr: ['xknr'], xkJdrq: ['xkjdrq'], xkYxqz: ['yxqs'], xkYxqzi: ['yxqe'],
 };
 const present = (value: unknown) => (typeof value === 'string' && value.trim().length > 0) || (typeof value === 'number' && Number.isFinite(value));
-export function exportFieldValue(record: StoredRecord, key: string): unknown {
+type PublicityRow = Pick<StoredRecord, 'systemId' | 'matterId' | 'recordKey' | 'data'>;
+export function exportFieldValue(record: PublicityRow, key: string): unknown {
   if (record.systemId === 'government-info' && isDelegatedConstructionWaste(record.data)
     && !resolvedConstructionWasteContractor(record.data) && ['xkXdrMc', 'xkXdrShxym', 'xkFrdb'].includes(key)) return '';
   const keys = [key, ...(record.systemId === 'government-info' ? governmentAliases[key] ?? [] : [])];
@@ -23,7 +24,7 @@ export interface ExportRowIssue { rowNumber: number; recordKey: string; subject:
 export interface ExportValidation { total: number; checked: number; invalid: number; missingRows: number; issues: ExportRowIssue[] }
 export type ConfirmExport = (validation: ExportValidation, format: 'xlsx' | 'csv' | 'json') => Promise<boolean>;
 
-export function validateExport(records: StoredRecord[]): ExportValidation {
+export function validateExport(records: readonly PublicityRow[]): ExportValidation {
   const issues: ExportRowIssue[] = []; let checked = 0, missingRows = 0;
   records.forEach((record,index) => {
     if (!systems.has(record.systemId)) return;

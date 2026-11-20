@@ -1,3 +1,5 @@
+import type { TaskHistoryQuery } from '../core/storage/platform-store';
+import type { RuntimeTask } from '../core/tasks/engine';
 import type { PractitionerNumberConfig } from '../core/config/practitioner-numbers';
 import { contextBridge, ipcRenderer } from 'electron';
 import type { QueryContext } from '../core/query/types';
@@ -46,6 +48,7 @@ const desktopApi = {
   components: { list: (): Promise<ComponentSummary[]> => ipcRenderer.invoke(IPC_CHANNELS.componentsList) },
   tasks: {
     list: () => ipcRenderer.invoke(IPC_CHANNELS.tasksList),
+    page: (query: TaskHistoryQuery): Promise<{ rows: RuntimeTask[]; total: number }> => ipcRenderer.invoke(IPC_CHANNELS.tasksPage, query),
     cancel: (id: string) => ipcRenderer.invoke(IPC_CHANNELS.taskCancel, id),
     output: (id: string, page = 1, pageSize = 100, keyword?: string) => ipcRenderer.invoke(IPC_CHANNELS.taskOutput, id, page, pageSize, keyword),
     exportOutput: (id: string, keyword?: string, target?: GovernmentExportTarget): Promise<ExportResult | null> => ipcRenderer.invoke(IPC_CHANNELS.taskOutputExport, id, keyword, target),

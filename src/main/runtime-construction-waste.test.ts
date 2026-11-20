@@ -27,7 +27,7 @@ describe('construction-waste contractor reflow', () => {
         enterprise: { id: 'fixture', name: '施工企业有限公司', creditCode: '91440300123456789Q', legalPerson: '施工单位法人', source: 'cache', updatedAt: 1 } }] });
     });
     const replaceTaskOutput = vi.fn();
-    Object.assign(runtime, { repository, syncEngine: engine, platformStore: { replaceTaskOutput }, requireLicense: vi.fn(async () => {}),
+    Object.assign(runtime, { repository, syncEngine: engine, platformStore: { transaction: (work: () => Promise<unknown>) => work(), replaceTaskOutput }, requireLicense: vi.fn(async () => {}),
       enterpriseService: new EnterpriseEnrichmentService('https://backend.test/api/enterprises/resolve', async () => ({
         proof: { payload: 'fixture', signature: 'fixture', algorithm: 'RSA-SHA256' }, deviceId: 'fixture',
       }), fetcher) });

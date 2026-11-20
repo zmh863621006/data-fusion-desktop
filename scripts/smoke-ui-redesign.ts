@@ -42,6 +42,7 @@ let updateState = initialUpdate(), updateCheckMode: 'latest' | 'download' = 'lat
 let finishUpdateCheck: ((value: unknown) => void) | undefined;
 let delaySnapshotOnce = false;
 let failPublicationOnce = false;
+let delayedBatch: { started: () => void; wait: Promise<void> } | undefined;
 let componentGate: Promise<void> | undefined, sessionGate: Promise<void> | undefined;
 const updateArtifact = { version: '1.0.4', notes: '本条仅为隔离界面测试，非真实发布。\n改善更新下载状态，并保留原有授权、会话和业务记录。', installer: 'nsis', platform: 'win32', arch: 'x64' };
 function publishUpdate(state: UpdatePresentationState) {
@@ -120,8 +121,25 @@ async function invoke(method: string, ...args: any[]) {
     case 'matters.query': queryContexts.push({ systemId: args[0], matterId: args[1], context: args[2] }); return { rows: [recordData], total: 1 };
     case 'matters.run': return { taskId: `${args[0]}-batch-0` };
     case 'tasks.list': return tasks();
+    case 'tasks.page': {
+      const scope = args[0];
+      const rows = tasks().filter(task => task.systemId === scope.systemId && task.matterId === scope.matterId &&
+        (!scope.completedBatches || task.status === 'completed') && (!scope.taskId || task.id === scope.taskId));
+      return { rows, total: rows.length };
+    }
     case 'tasks.cancel': return true;
-    case 'tasks.output': return { rows: [record(args[0].split('-batch-')[0], `${args[0].split('-batch-')[0]}-matter-0`)], total: 1 };
+    case 'tasks.output': {
+      const system = args[0].split('-batch-')[0];
+      const row = record(system, `${system}-matter-0`);
+      if (delayedBatch) {
+        const gate = delayedBatch;
+        delayedBatch = undefined;
+        gate.started();
+        await gate.wait;
+        return { rows: [{ ...row, data: { ...row.data, xkXdrMc: '延迟返回的批次样例' } }], total: 1 };
+      }
+      return { rows: [row], total: 1 };
+    }
     case 'tasks.exportOutput': case 'records.export': case 'healthTool.export': return { path: 'fixture-only.xlsx', rowCount: 1, warningCount: 1 };
     case 'exports.openFolder': return true;
     case 'records.list': {
@@ -344,6 +362,7 @@ function assertAuthorizedReads(start: number, label: string) {
     if (call.method === 'records.list' || call.method === 'records.export') return !call.allowedSystems.includes(call.args[0]?.systemId);
     if (/^tasks\./.test(call.method)) {
       if (!call.allowedSystems.length) return true;
+      if (call.method === 'tasks.page') return !call.allowedSystems.includes(call.args[0]?.systemId);
       if (call.method !== 'tasks.list') return !call.allowedSystems.some(id => String(call.args[0]).startsWith(`${id}-batch-`));
     }
     return false;
@@ -459,8 +478,19 @@ async function runViewport(width: number, height: number) {
   await click('.record-table-panel tbody tr .link-button'); await checkDialogFocus('.record-drawer');
   assert(await dom('Boolean(document.querySelector(".snapshot-notice"))'), 'Batch snapshot must remain read-only');
   assert.equal(await dom('document.querySelectorAll(".record-edit-form").length'), 0); await screenshot('09-batch-snapshot'); await escapeDialog('.record-drawer');
+  let finishBatch!: () => void;
+  const batchStarted = new Promise<void>(started => {
+    delayedBatch = { started, wait: new Promise<void>(resolve => { finishBatch = resolve; }) };
+  });
+  await button('查询', '.batch-filter-bar');
+  await bounded(batchStarted, 'delayed historical snapshot query');
   await dom('(()=>{const select=document.querySelector(".batch-filter-bar select");select.value="";select.dispatchEvent(new Event("change",{bubbles:true}));})()');
   await until('document.querySelector(".record-table-panel .link-button")?.textContent.includes("修改")');
+  const ledgerText = await dom('document.querySelector(".record-table-panel").textContent');
+  finishBatch();
+  await settled();
+  assert.equal(await dom('document.querySelector(".record-table-panel").textContent.includes("延迟返回的批次样例")'), false, 'A late snapshot must never become an editable ledger row');
+  assert.equal(await dom('document.querySelector(".record-table-panel").textContent'), ledgerText);
   for (const [label, target] of [['导出省执法双公示', 'guangdong-law'], ['导出南山双公示', 'nanshan']]) {
     await button(label); await until('[...document.querySelectorAll(".page-message")].some(item=>item.textContent.includes("fixture-only.xlsx"))');
     const exported = invocations.filter(call => call.method === 'records.export').at(-1)!;

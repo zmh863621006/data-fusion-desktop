@@ -19,6 +19,7 @@ export const IPC_CHANNELS = {
   modulesList: 'modules:list',
   componentsList: 'components:list',
   tasksList: 'tasks:list',
+  tasksPage: 'tasks:page',
   taskCancel: 'task:cancel',
   taskOutput: 'task:output',
   taskOutputExport: 'task:output-export',

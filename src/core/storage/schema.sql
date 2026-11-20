@@ -91,6 +91,9 @@ CREATE TABLE IF NOT EXISTS runtime_tasks (
 CREATE INDEX IF NOT EXISTS idx_runtime_tasks_created_at
   ON runtime_tasks(created_at DESC);
 
+CREATE INDEX IF NOT EXISTS idx_runtime_tasks_matter_history
+  ON runtime_tasks(system_id, matter_id, created_at DESC, id DESC);
+
 CREATE INDEX IF NOT EXISTS idx_runtime_tasks_success_snapshot
   ON runtime_tasks(system_id, matter_id, type, status, finished_at DESC, created_at DESC);
 

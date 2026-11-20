@@ -21,7 +21,7 @@ import { EnterpriseEnrichmentService, enterpriseInput, mergeEnterpriseRecord } f
 import type { LicenseGrant } from '../core/license/types';
 import { assertSystemLicensed } from '../core/license/gate';
 import { join } from 'node:path';
-import { SqlitePlatformStore, type LocalRecordQuery } from '../core/storage/platform-store';
+import { SqlitePlatformStore, type LocalRecordQuery, type TaskHistoryQuery } from '../core/storage/platform-store';
 import type { AppSettings } from '../core/settings/types';
 import type { AuditEventType } from '../core/audit/types';
 import { LocalExportService } from '../core/export/local-export-service';
@@ -100,6 +100,20 @@ interface PendingSyncPreview {
   summary: SyncSummary<Record<string, unknown>>;
 }
 
+const MAX_EXPORT_ROWS = 50_000;
+
+async function readExportRows<T>(readPage: (page: number) => Promise<{ total: number; rows: T[] }>): Promise<T[]> {
+  const records: T[] = [];
+  for (let page = 1; ; page++) {
+    const { rows, total } = await readPage(page);
+    if (total > MAX_EXPORT_ROWS || records.length + rows.length > MAX_EXPORT_ROWS) {
+      throw new Error('单次导出不能超过 50000 条，请缩小筛选范围');
+    }
+    records.push(...rows);
+    if (records.length >= total || rows.length === 0) return records;
+  }
+}
+
 export interface SyncPreviewReceipt {
   previewId: string;
   total: number;
@@ -163,7 +177,7 @@ export class AppRuntime {
     this.healthPublicityService = new HealthPublicityService(database);
     await this.healthPublicityService.initialize();
     await this.platformStore.recoverInterruptedTasks();
-    this.tasks = new TaskEngine(this.platformStore);
+    this.tasks = new TaskEngine(this.platformStore, (await this.platformStore.get()).taskConcurrency);
 
     const backend = backendConfiguration(process.env, businessBootstrapContext()?.backend);
     this.license = new LocalLicenseService({
@@ -345,7 +359,9 @@ export class AppRuntime {
     const groups = new Map<string, T[]>();
     for (const row of records) {
       const key = `${row.systemId}:${row.matterId}`;
-      groups.set(key, [...(groups.get(key) ?? []), row]);
+      const group = groups.get(key);
+      if (group) group.push(row);
+      else groups.set(key, [row]);
     }
     for (const rows of groups.values()) {
       const { systemId, matterId } = rows[0];
@@ -365,16 +381,9 @@ export class AppRuntime {
     assertFeatureLicensed(await this.currentGrant(), 'export');
     if (target) assertGovernmentExportTarget(target, format, [query.systemId ?? '']);
     if (!this.platformStore) throw new Error('本地数据模块未就绪');
-    const records = [];
-    let page = 1;
-    while (records.length < 50_000) {
-      const result = await this.platformStore.listRecords({ ...query, page, pageSize: 200 });
-      records.push(...result.rows);
-      if (records.length >= result.total || result.rows.length === 0) break;
-      page += 1;
-    }
+    const store = this.platformStore;
+    const records = await readExportRows(page => store.listRecords({ ...query, page, pageSize: 200 }));
     if (records.length === 0) throw new Error('当前筛选条件没有可导出的数据');
-    if (records.length >= 50_000) throw new Error('单次导出不能超过 50000 条，请缩小筛选范围');
     const matters = new Map(records.map(record => [`${record.systemId}:${record.matterId}`, record]));
     for (const record of matters.values()) await this.requireLicense(record.systemId, record.matterId);
     // Freeze the selected rows before enrichment, so changes to searchable fields cannot shift export pages.
@@ -400,10 +409,26 @@ export class AppRuntime {
     return updated;
   }
 
+  async taskPage(query: TaskHistoryQuery) {
+    if (!this.platformStore) throw new Error('任务模块未就绪');
+    const grant = await this.currentGrant();
+    if (query.systemId) assertSystemLicensed(grant, query.systemId, query.matterId);
+    if (!grant || grant.expiresAt <= Date.now()) return { rows: [], total: 0 };
+    const scopes = grant.allowedSystems.map(systemId => ({ systemId, matterIds: grant.allowedMatters?.[systemId] }));
+    return this.platformStore.taskPage(query, scopes);
+  }
+
+  async cancelTask(id: string) {
+    const task = this.tasks.get(id);
+    if (!task?.systemId || !task.matterId) return false;
+    await this.requireLicense(task.systemId, task.matterId);
+    return this.tasks.cancel(id);
+  }
+
   async listTaskOutput(taskId: string, page?: number, pageSize?: number, keyword?: string) {
     if (!this.platformStore) throw new Error('任务结果模块未就绪');
-    const task = (await this.tasks.history(1_000)).find((item) => item.id === taskId && item.type === 'data-return');
-    if (!task?.systemId || !task.matterId) throw new Error('回流批次不存在');
+    const task = await this.platformStore.getTask(taskId);
+    if (task?.type !== 'data-return' || !task.systemId || !task.matterId) throw new Error('回流批次不存在');
     await this.requireLicense(task.systemId, task.matterId);
     const result = await this.platformStore.listTaskOutput(taskId, page, pageSize, keyword);
     await this.refreshEnterpriseRecords(result.rows);
@@ -413,23 +438,17 @@ export class AppRuntime {
   async exportTaskOutput(taskId: string, path?: string, keyword?: string, confirm?: ConfirmExport, target?: GovernmentExportTarget) {
     assertFeatureLicensed(await this.currentGrant(), 'export');
     if (!this.platformStore) throw new Error('任务结果模块未就绪');
-    const task = (await this.tasks.history(1_000)).find((item) => item.id === taskId && item.type === 'data-return');
-    if (!task?.systemId || !task.matterId) throw new Error('回流批次不存在');
+    const task = await this.platformStore.getTask(taskId);
+    if (task?.type !== 'data-return' || !task.systemId || !task.matterId) throw new Error('回流批次不存在');
     assertGovernmentExportTarget(target, 'xlsx', [task.systemId]);
     await this.requireLicense(task.systemId, task.matterId);
-    const records: StoredRecord[] = [];
-    let page = 1;
-    while (records.length < 50_000) {
-      const result = await this.platformStore.listTaskOutput(taskId, page, 200, keyword);
-      records.push(...result.rows.map((row) => ({
-        systemId: row.systemId, matterId: row.matterId, recordKey: row.recordKey, data: row.data,
-        firstSeenAt: task.createdAt, updatedAt: task.finishedAt ?? task.createdAt,
-      })));
-      if (records.length >= result.total || result.rows.length === 0) break;
-      page += 1;
-    }
+    const store = this.platformStore;
+    const rows = await readExportRows(page => store.listTaskOutput(taskId, page, 200, keyword));
+    const records: StoredRecord[] = rows.map(row => ({
+      systemId: row.systemId, matterId: row.matterId, recordKey: row.recordKey, data: row.data,
+      firstSeenAt: task.createdAt, updatedAt: task.finishedAt ?? task.createdAt,
+    }));
     if (records.length === 0) throw new Error('当前批次没有可导出的数据');
-    if (records.length >= 50_000) throw new Error('单次导出不能超过 50000 条');
     if (this.enterpriseService && task.systemId !== 'guangdong-hrss') {
       const enriched = await this.enterpriseService.enrich(task.systemId, task.matterId, records.map(row => row.data));
       for (let i = 0; i < records.length; i++) {
@@ -506,19 +525,24 @@ export class AppRuntime {
       : `已提取 ${result.rows.length} 条，正在去重比对` });
     const enriched = this.enterpriseService ? await this.enterpriseService.enrich(systemId, matterId, localRows, context.signal) : localRows;
     if (context.signal.aborted) throw new Error('任务已取消');
-    const commitRows = async (numbered: Record<string, unknown>[]) => {
-    const summary = await this.syncEngine!.preview(systemId, matterId, matter.uniqueKey, numbered,
-      (incoming, previous) => mergeEnterpriseRecord(systemId, matter.mergeRecord ? matter.mergeRecord(incoming, previous) : incoming, previous));
-    if (context.signal.aborted) throw new Error('任务已取消');
-
     context.report({ current: 3, total: 4, message: '正在保存本次回流数据' });
-    await this.syncEngine!.commit(systemId, matterId, summary);
-    await this.platformStore!.replaceTaskOutput(
-      context.taskId,
-      systemId,
-      matterId,
-      summary.changes.map((change) => ({ recordKey: change.key, data: change.current })),
-    );
+    const commitRows = async (numbered: Record<string, unknown>[]) => {
+      const summary = await this.syncEngine!.preview(systemId, matterId, matter.uniqueKey, numbered,
+        (incoming, previous) => mergeEnterpriseRecord(systemId, matter.mergeRecord ? matter.mergeRecord(incoming, previous) : incoming, previous));
+      if (context.signal.aborted) throw new Error('任务已取消');
+      await this.syncEngine!.commit(systemId, matterId, summary);
+      await this.platformStore!.replaceTaskOutput(context.taskId, systemId, matterId,
+        summary.changes.map(change => ({ recordKey: change.key, data: change.current })));
+      if (context.signal.aborted) throw new Error('任务已取消');
+      return summary;
+    };
+    const summary = await this.platformStore.transaction(async () => {
+      await this.requireLicense(systemId, matterId);
+      if (context.signal.aborted) throw new Error('任务已取消');
+      if (systemId !== 'transport-practitioner') return commitRows(enriched);
+      if (!this.practitionerNumbers) throw new Error('编号模块未就绪');
+      return this.practitionerNumbers.withNumbers(matterId, enriched, commitRows);
+    });
     const undated = result.undatedExcludedCount;
     const warning = undated ? `。另有 ${undated} 条许可决定日期无法确认，未纳入本批次。可清空日期回流后核对。` : '';
     context.report({ current: 4, total: 4, message: `回流完成，共 ${summary.total} 条${warning}` });
@@ -529,12 +553,6 @@ export class AppRuntime {
       unchanged: summary.unchanged,
       ...(undated ? { undatedExcludedCount: undated } : {}),
     };
-    };
-    if (systemId === 'transport-practitioner') {
-      if (!this.practitionerNumbers) throw new Error('编号模块未就绪');
-      return this.practitionerNumbers.withNumbers(matterId, enriched, commitRows);
-    }
-    return commitRows(enriched);
   }
 
   async getSettings(): Promise<AppSettings> {
@@ -544,7 +562,9 @@ export class AppRuntime {
 
   async updateSettings(patch: Partial<AppSettings>): Promise<AppSettings> {
     if (!this.platformStore) throw new Error('设置模块未就绪');
-    return this.platformStore.update(patch);
+    const settings = await this.platformStore.update(patch);
+    this.tasks.setConcurrency(settings.taskConcurrency);
+    return settings;
   }
 
   async credentialStatus(systemId: string) {
@@ -657,7 +677,16 @@ export class AppRuntime {
     };
   }
 
+  syncPreviewScope(previewId: string) {
+    this.removeExpiredPreviews();
+    const pending = this.pendingPreviews.get(previewId);
+    if (!pending) throw new Error('同步预览已失效，请重新预览');
+    return { systemId: pending.systemId, matterId: pending.matterId };
+  }
+
   async commitSyncPreview(previewId: string): Promise<Omit<SyncPreviewReceipt, 'previewId'>> {
+    const { systemId, matterId } = this.syncPreviewScope(previewId);
+    await this.requireLicense(systemId, matterId);
     this.removeExpiredPreviews();
     const pending = this.pendingPreviews.get(previewId);
     if (!pending || !this.syncEngine) throw new Error('同步预览已失效，请重新预览');

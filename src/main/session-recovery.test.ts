@@ -5,6 +5,7 @@ vi.mock('electron', () => ({ session: {} }));
 import { AppError } from '../core/errors/app-error';
 import type { BusinessSystemPlugin } from '../core/plugins/types';
 import { restoredCookie, SessionRecoveryService, type SessionVault } from './session-recovery';
+import { createShenzhenHazardousPlugin } from '../plugins/shenzhen-hazardous-chemicals';
 
 function vault() {
   const values = new Map<string, string>();
@@ -37,6 +38,77 @@ const key = 'browser-session.v1.a';
 afterEach(() => { vi.useRealTimers(); vi.restoreAllMocks(); });
 
 describe('encrypted browser and API session recovery coordination', () => {
+  const credentials = { Authorization: 'fixture-token', userId: 'fixture-user' };
+  const validReply = () => new Response(JSON.stringify({
+    SYS_HEAD: { RET_STATUS: 'S', RET: [{ RET_CODE: '000000' }] }, BODY: { status: 'success', data: [], total: 0 },
+  }));
+  it('validates the fresh hazardous credentials immediately even when an old request is still running', async () => {
+    let finish!: (value: Response) => void;
+    const fetcher = vi.fn(async () => validReply()).mockImplementationOnce(() => new Promise(resolve => { finish = resolve; }));
+    const p = createShenzhenHazardousPlugin({ minimumIntervalMs: 0, fetcher });
+    const store = vault(), service = new SessionRecoveryService(store, () => browser());
+    await service.register(p);
+    p.loginPage!.browserAuth!.accept(credentials);
+    const old = p.getSessionState();
+    await vi.waitFor(() => expect(finish).toBeDefined());
+    const fresh = { ...credentials, userId: 'fresh-user' };
+    p.loginPage!.browserAuth!.accept(fresh);
+    expect((await p.getSessionState()).status).toBe('authenticated');
+    finish(new Response(null, { status: 401 }));
+    expect((await old).status).toBe('authenticated');
+    expect(service.storage(p.id)).toMatchObject(fresh);
+    expect(fetcher).toHaveBeenCalledTimes(2);
+    expect(store.delete).not.toHaveBeenCalled();
+  });
+  it('does not retry rejected hazardous credentials on cookies, repeated page reads or forced checks; fresh login recovers', async () => {
+    vi.useFakeTimers();
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const fetcher = vi.fn(async () => validReply());
+    const p = createShenzhenHazardousPlugin({ minimumIntervalMs: 0, fetcher });
+    const cookieStore = browser([{ ...cookie, domain: new URL(p.loginPage!.allowedOrigin).hostname }]);
+    const store = vault(), service = new SessionRecoveryService(store, () => cookieStore);
+    await service.register(p);
+    expect((await p.getSessionState()).status).toBe('logged-out');
+    await service.capture(p.id);
+    expect(store.set).not.toHaveBeenCalled();
+    p.loginPage!.browserAuth!.accept(credentials);
+    expect((await p.getSessionState()).status).toBe('authenticated');
+    fetcher.mockResolvedValueOnce(new Response(null, { status: 403 }));
+    expect((await p.getSessionState({ force: true })).status).toBe('expired');
+    for (let i = 0; i < 3; i++) {
+      vi.setSystemTime(Date.now() + 61_000);
+      p.loginPage!.browserAuth!.accept(credentials);
+      await service.saveStorage(p.id, credentials);
+      expect((await p.getSessionState({ force: true })).status).toBe('expired');
+    }
+    expect(warn).toHaveBeenCalledTimes(1);
+    expect(fetcher).toHaveBeenCalledTimes(2);
+    expect(store.delete).toHaveBeenCalledTimes(1);
+    expect(store.values.size).toBe(0);
+    expect(service.storage(p.id)).toEqual({});
+    p.loginPage!.onLoginPageChange!(true);
+    await service.forget(p.id, { awaitApiLogin: true });
+    p.loginPage!.onLoginPageChange!(false);
+    p.loginPage!.browserAuth!.accept(credentials);
+    fetcher.mockRejectedValueOnce(new Error('network unavailable'));
+    expect((await p.getSessionState()).status).toBe('unverified');
+    vi.setSystemTime(Date.now() + 5_001);
+    expect((await p.getSessionState()).status).toBe('authenticated');
+    expect(store.values.size).toBe(1);
+  });
+  it('clears a saved API login on shutdown if the last business validation confirmed expiry between polls', async () => {
+    vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const fetcher = vi.fn(async () => validReply());
+    const p = createShenzhenHazardousPlugin({ minimumIntervalMs: 0, fetcher });
+    const store = vault(), service = new SessionRecoveryService(store, () => browser());
+    await service.register(p); p.loginPage!.browserAuth!.accept(credentials);
+    await p.getSessionState();
+    fetcher.mockResolvedValueOnce(new Response(null, { status: 401 }));
+    await expect(p.sessionRecovery!.validate(new AbortController().signal)).rejects.toMatchObject({ code: 'SESSION_EXPIRED' });
+    await service.flush();
+    expect(store.values.size).toBe(0);
+    expect(fetcher).toHaveBeenCalledTimes(2);
+  });
   it('saves a login and restores its API/session cookie/page storage without extending cookie expiry', async () => {
     const store = vault(); const first = fixture(); const firstBrowser = browser([cookie]);
     const service = new SessionRecoveryService(store, () => firstBrowser);

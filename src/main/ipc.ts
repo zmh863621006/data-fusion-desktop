@@ -1,7 +1,7 @@
 import { BrowserWindow, dialog, ipcMain, shell, type IpcMainInvokeEvent } from 'electron';
 import { appRuntime } from './runtime';
 import { IPC_CHANNELS } from '../core/ipc/channels';
-import { parseIdentifier, parseLocalRecordQuery, parseQueryContext, parseRows, parseSettingsPatch } from '../core/ipc/validation';
+import { parseIdentifier, parseLocalRecordQuery, parseQueryContext, parseRows, parseSettingsPatch, parseTaskHistoryQuery } from '../core/ipc/validation';
 import { validateFilters } from '../core/query/validation';
 import { readFile } from 'node:fs/promises';
 import { loginTabController } from './login-tab';
@@ -177,12 +177,17 @@ export function registerIpcHandlers(getTrustedWebContentsId: () => number | unde
 
   handle(IPC_CHANNELS.tasksList, async (event) => {
     trusted(event);
-    return appRuntime.tasks.history();
+    return (await appRuntime.taskPage({ pageSize: 100 })).rows;
+  });
+
+  handle(IPC_CHANNELS.tasksPage, async (event, query: unknown) => {
+    trusted(event);
+    return appRuntime.taskPage(parseTaskHistoryQuery(query));
   });
 
   handle(IPC_CHANNELS.taskCancel, async (event, idInput: unknown) => {
     trusted(event);
-    return appRuntime.tasks.cancel(parseIdentifier(idInput, '任务标识'));
+    return appRuntime.cancelTask(parseIdentifier(idInput, '任务标识'));
   });
 
   handle(IPC_CHANNELS.taskOutput, async (event, idInput: unknown, pageInput: unknown, pageSizeInput: unknown, keywordInput: unknown) => {
@@ -497,22 +502,20 @@ export function registerIpcHandlers(getTrustedWebContentsId: () => number | unde
       const plugin = requireSystem(systemId);
       await appRuntime.requireLicense(systemId, matterId);
       if (systemId === 'guangdong-hrss') throw new Error('请使用人社列表回流任务，以保证批次完整保存');
-      const session = await plugin.getSessionState();
-      if (session.status !== 'authenticated') {
-        throw new Error('请先登录该业务系统');
-      }
-
-      // Authentication material is resolved only inside the main process.
-      await plugin.auth.getSessionForRequest();
-
       const matter = plugin.matters.find((item) => item.id === matterId);
       if (!matter) throw new Error(`Unknown matter: ${matterId}`);
       validateFilters(matter.querySchema, context.filters);
       const task = await appRuntime.tasks.run(
         `查询：${plugin.name} / ${matter.name}`,
-        ({ report, signal }) => {
+        async ({ report, signal }) => {
+          await appRuntime.requireLicense(systemId, matterId);
+          if ((await plugin.getSessionState()).status !== 'authenticated') throw new Error('请先登录该业务系统');
+          await plugin.auth.getSessionForRequest();
+          signal.throwIfAborted();
           report({ current: 0, total: 1, message: '正在请求业务系统' });
-          return matter.query({ ...context, signal });
+          const result = await matter.query({ ...context, signal });
+          signal.throwIfAborted();
+          return result;
         },
         { type: 'remote-query', systemId, matterId },
       );
@@ -531,9 +534,14 @@ export function registerIpcHandlers(getTrustedWebContentsId: () => number | unde
       trusted(event);
       const systemId = parseIdentifier(systemIdInput, '系统标识');
       const matterId = parseIdentifier(matterIdInput, '事项标识');
+      await appRuntime.requireLicense(systemId, matterId);
       const task = await appRuntime.tasks.run(
         `同步预览：${systemId} / ${matterId}`,
-        () => appRuntime.createSyncPreview(systemId, matterId, parseRows(rowsInput)),
+        async ({ signal }) => {
+          const preview = await appRuntime.createSyncPreview(systemId, matterId, parseRows(rowsInput));
+          signal.throwIfAborted();
+          return preview;
+        },
         { type: 'sync-preview', systemId, matterId },
       );
       if (task.status !== 'completed') throw new Error(task.error ?? '同步预览失败');
@@ -544,7 +552,10 @@ export function registerIpcHandlers(getTrustedWebContentsId: () => number | unde
 
   handle(IPC_CHANNELS.syncCommit, async (event, previewIdInput: unknown) => {
     trusted(event);
-    const task = await appRuntime.tasks.run('提交本地同步', () => appRuntime.commitSyncPreview(parseIdentifier(previewIdInput, '预览标识')), { type: 'sync-commit' });
+    const previewId = parseIdentifier(previewIdInput, '预览标识');
+    const scope = appRuntime.syncPreviewScope(previewId);
+    await appRuntime.requireLicense(scope.systemId, scope.matterId);
+    const task = await appRuntime.tasks.run('提交本地同步', () => appRuntime.commitSyncPreview(previewId), { type: 'sync-commit', ...scope });
     if (task.status !== 'completed') throw new Error(task.error ?? '同步写入失败');
     await appRuntime.audit('sync.committed', undefined, undefined, task.id, task.result as unknown as Record<string, unknown>);
     return task.result;

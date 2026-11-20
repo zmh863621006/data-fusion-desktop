@@ -25,7 +25,7 @@ contextBridge.exposeInMainWorld('desktopApi', {
     },
   },
   matters: { list: (id: string) => invoke('matters', id) },
-  tasks: { list: async () => [] },
+  tasks: { list: async () => [], page: async () => ({ rows: [], total: 0 }) },
   records: { list: async () => ({ rows: [], total: 0 }) },
   credentials: { status: async () => ({ configured: false, account: '' }), save: (id: string, account: string, password: string) => invoke('credentials', id, account, password) },
   diagnostics: { report: async () => true },

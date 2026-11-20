@@ -145,6 +145,44 @@ describe('persistent source system tabs', () => {
     expect(mocks.views[1].webContents.loadURL).toHaveBeenCalledWith('https://b.example/home');
     expect(() => controller.open(window, plugin('c'), null, { url: 'https://evil.example/home' })).toThrow('非原系统');
   });
+  it('recognizes the exact SPA login route and restores homepage sessionStorage before checking credentials', async () => {
+    vi.useFakeTimers();
+    const controller = new LoginTabController(), source = plugin('a');
+    source.loginPage!.url = 'https://a.example/iHome/#/login';
+    const onLoginPageChange = vi.fn(), accept = vi.fn(), forget = vi.fn(async () => {});
+    source.loginPage!.onLoginPageChange = onLoginPageChange;
+    source.loginPage!.browserAuth = { localStorageKeys: [], sessionStorageKeys: ['Authorization'], accept };
+    const saved = { Authorization: 'fixture-restored' };
+    controller.configurePersistence({ load: () => saved, save: async () => {}, forget });
+    const home = 'https://a.example/iHome/';
+    controller.open(windowMock(), source, null, { url: home });
+    const contents = mocks.views[0].webContents;
+    let restored = false;
+    contents.executeJavaScript.mockImplementation(async (script: string) => {
+      if (script.includes('sessionStorage.setItem')) { restored = true; return true; }
+      return restored ? saved : {};
+    });
+    contents.emit('did-navigate', {}, home, 200);
+    await vi.advanceTimersByTimeAsync(0);
+    expect(accept).not.toHaveBeenCalled();
+    contents.emit('did-finish-load');
+    await vi.advanceTimersByTimeAsync(0);
+    expect(accept).toHaveBeenCalledExactlyOnceWith(saved);
+    const navigate = (hash: string) => {
+      contents.url = home + hash;
+      contents.emit('did-navigate-in-page', {}, contents.url, true);
+    };
+    navigate('#/login-history');
+    expect(forget).not.toHaveBeenCalled();
+    navigate('#/login/?redirect=home');
+    await vi.advanceTimersByTimeAsync(5_000);
+    expect(forget).toHaveBeenCalledOnce();
+    expect(onLoginPageChange.mock.calls).toEqual([[false], [true]]);
+    navigate('#/dashboard');
+    await vi.advanceTimersByTimeAsync(0);
+    expect(onLoginPageChange).toHaveBeenLastCalledWith(false);
+    controller.close();
+  });
   it('flushes page sessionStorage before shutdown and refuses foreign origins', async () => {
     const controller = new LoginTabController(); const save = vi.fn(async () => {});
     controller.configurePersistence({ load: () => ({}), save });
