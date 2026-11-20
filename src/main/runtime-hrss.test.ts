@@ -76,6 +76,18 @@ describe('HRSS complete-list transaction and aggregate boundary', () => {
     expect((await store.listRecords({ systemId, matterId })).total).toBe(1);
   });
 
+  it('uses local ledger rows until an authorized matter has a completed batch', async () => {
+    await repository.upsert({ systemId, matterId, recordKey: 'older-ledger-entry', data: { employmentStatus: '失业' }, firstSeenAt: 1, updatedAt: 1 });
+    const initial = await runtime.hrssDashboard();
+    expect(initial).toMatchObject({ totalRecords: 1, syncState: 'local-only', syncedMatterCount: 0 });
+    query.mockRejectedValueOnce(new Error('回流失败'));
+    await execute();
+    expect((await runtime.hrssDashboard()).totalRecords).toBe(1);
+    rows = [];
+    await execute();
+    expect(await runtime.hrssDashboard()).toMatchObject({ totalRecords: 0, syncState: 'synced', syncedMatterCount: 1 });
+  });
+
   it('rolls back both ledger and batch output when cancellation arrives while saving', async () => {
     await execute();
     rows = [{ ...rows[0], employmentStatus: '已就业' }];

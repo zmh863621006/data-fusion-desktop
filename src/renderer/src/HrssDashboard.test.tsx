@@ -20,14 +20,14 @@ describe('local HRSS dashboard presentation', () => {
 
   it('distinguishes unsynced numbers from confirmed zero without showing fabricated population totals', () => {
     const unsynced = renderToStaticMarkup(<HrssDashboard data={empty()} />);
-    expect(unsynced).toContain('尚未同步，数值未知');
+    expect(unsynced).toContain('尚无统计依据');
     expect(unsynced).toContain('等待首次回流');
     const zero = buildHrssDashboard({ allowedMatterIds: [matterId], records: [], tasks: [{ matterId, type: 'data-return', status: 'completed', finishedAt: NOW - 1_000 }], now: NOW });
     const synced = renderToStaticMarkup(<HrssDashboard data={zero} />);
     expect(synced).toContain('当前成功批次记录数为 0');
     expect(synced).toContain('已成功回流，当前记录数为 0');
-    expect(synced).toContain('不代表人社源系统全量');
-    expect(synced).not.toContain('尚未同步，数值未知');
+    expect(synced).toContain('已授权事项的数据概览');
+    expect(synced).not.toContain('尚无统计依据');
   });
 
   it('renders aggregate chart labels, missing evidence and latest failure while retaining successful data', () => {
@@ -46,7 +46,7 @@ describe('local HRSS dashboard presentation', () => {
     expect(html).toContain('就业创业补贴');
     expect(html).toContain('支付状态结构');
     expect(html).toContain('粤海街道');
-    expect(html).toContain('网站申请');
+    expect(html).toContain('线上申请');
     expect(html).toContain('2026-10');
     expect(html).toContain('role="region"');
     expect(html).not.toContain('synthetic-sensitive-name');

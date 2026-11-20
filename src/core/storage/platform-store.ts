@@ -71,7 +71,7 @@ export class SqlitePlatformStore implements TaskStore, AuditLog, SettingsStore {
     }));
   }
 
-  /** One completed snapshot per authorized ledger, including successful empty batches. */
+  /** Prefer the latest completed batch, including an empty one. Older local-only ledgers have no batch. */
   async successfulSnapshots(systemId: string, matterIds: string[]): Promise<{ records: StoredRecord[]; tasks: RuntimeTask[] }> {
     const records: StoredRecord[] = [];
     const tasks: RuntimeTask[] = [];
@@ -91,6 +91,12 @@ export class SqlitePlatformStore implements TaskStore, AuditLog, SettingsStore {
           [row.id, systemId, matterId]);
         records.push(...rows.map(record => ({ systemId, matterId, recordKey: record.record_key, data: JSON.parse(record.data_json),
           firstSeenAt: row.created_at, updatedAt: row.finished_at ?? row.created_at })));
+      }
+      if (!latest.some((row) => row.status === 'completed')) {
+        const rows = await this.database.all<RecordRow>(
+          'SELECT * FROM local_records WHERE system_id=? AND matter_id=?', [systemId, matterId]);
+        records.push(...rows.map((row) => ({ systemId, matterId, recordKey: row.record_key, data: JSON.parse(row.data_json),
+          firstSeenAt: row.first_seen_at, updatedAt: row.updated_at })));
       }
     }
     return { records, tasks };

@@ -210,7 +210,26 @@ describe('authorized local HRSS dashboard', () => {
       { id: '蛇口街道', label: '蛇口街道', count: 1 },
       { id: '未知街道', label: '未知街道', count: 1 },
     ]);
-    expect(data.subsidies.channels.map((item) => item.count)).toEqual([1, 1, 1]);
+    expect(data.subsidies.channels.map((item) => item.count)).toEqual([1, 1, 0, 1]);
     expect(JSON.stringify(data)).not.toMatch(/private-synthetic/);
+  });
+
+  it('uses confirmed payment dates, flexible subsidy months and employer applicant counts with coverage', () => {
+    const flexible = 'graduate-flexible-employment-subsidy', expansion = 'one-time-job-expansion-subsidy';
+    const data = build({ allowedMatterIds: [SUBSIDY, flexible, expansion], records: [
+      record({ applyDate: '2026-10-01 23:59:00', payDate: '2026-10-04 00:00:00', payStatus: '支付成功', applyCount: 99 }, SUBSIDY),
+      record({ applyDate: '2026-10-04', payDate: '2026-10-03', payStatus: '支付成功' }, SUBSIDY),
+      record({ applyDate: '2026-10-03', payDate: '2026-10-04', payStatus: '待支付', subsidyMonthCount: '3' }, flexible),
+      record({ subsidyMonthCount: 'invalid', applyCount: -3 }, flexible),
+      record({ applyCount: 0, dataOrigin: '免申请-省比对' }, expansion),
+      record({ applyCount: '5', dataOrigin: '窗口受理', processArea: '南山区/西丽街道' }, expansion),
+    ] });
+    expect(data.subsidies.averagePaymentDays).toEqual({ value: 3, recordCount: 1 });
+    expect(data.subsidies.flexibleSubsidyMonths).toEqual({ value: 3, recordCount: 1 });
+    expect(data.subsidies.reportedApplicants).toEqual({ value: 5, recordCount: 2 });
+    expect(count(data.subsidies.channels, 'matched')).toBe(1);
+    expect(count(data.subsidies.channels, 'counter')).toBe(1);
+    expect(count(data.subsidies.streets, '西丽街道')).toBe(1);
+    expect(build().subsidies.averagePaymentDays).toEqual({ value: null, recordCount: 0 });
   });
 });

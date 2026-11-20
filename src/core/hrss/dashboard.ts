@@ -64,6 +64,10 @@ export interface HrssSubsidyMatterSummary {
   awaitingPayment: number | null;
   other: number | null;
 }
+interface HrssCoveredMetric {
+  value: number | null;
+  recordCount: number;
+}
 export interface HrssSubsidySummary {
   total: number | null;
   syncedMatterCount: number;
@@ -76,6 +80,9 @@ export interface HrssSubsidySummary {
   missingApplyDate: number;
   streets: HrssCountBucket[];
   channels: HrssCountBucket[];
+  averagePaymentDays: HrssCoveredMetric;
+  flexibleSubsidyMonths: HrssCoveredMetric;
+  reportedApplicants: HrssCoveredMetric;
   matters: HrssSubsidyMatterSummary[];
 }
 export interface HrssDashboardData {
@@ -111,6 +118,8 @@ const SUBSIDY_REVIEW_MATTERS = new Set([
   'employment-internship-subsidy', 'startup-rent-subsidy', 'greater-bay-youth-living-subsidy',
 ]);
 const PAYMENT_MATTERS = new Set([...SUBSIDY_REVIEW_MATTERS].filter((id) => id !== 'one-time-job-expansion-subsidy'));
+const FLEXIBLE_SUBSIDY_MATTERS = new Set(['graduate-flexible-employment-subsidy', 'difficult-flexible-employment-subsidy']);
+const APPLICANT_COUNT_MATTERS = new Set(['one-time-job-expansion-subsidy', 'startup-employment-subsidy']);
 const REVIEW_MATTERS = new Set([...SUBSIDY_REVIEW_MATTERS, 'self-employment-identity', 'youth-internship-agreement']);
 const AGE_BUCKETS = [
   ['under-30', '30岁以下'], ['30-39', '30–39岁'], ['40-49', '40–49岁'],
@@ -128,7 +137,7 @@ const STATUS_TEXT: Record<Exclude<StatusId, 'unknown'>, readonly string[]> = {
   'awaiting-payment': ['待支付', '待拨付', '待发放', '待拨款'],
   paid: ['已支付', '支付成功', '已发放', '发放成功', '支付完成', '发放完成'],
   completed: ['已办结', '办结', '已完成', '办理成功', '办理成功（审核通过）', '审核通过', '审批通过', '备案成功', '已备案', '认定成功', '已认定', '认定通过', '有效', '认定有效'],
-  unsuccessful: ['审核不通过', '审批不通过', '办理失败（审核不通过）', '办理失败', '已驳回', '驳回', '退回', '不通过', '备案失败', '认定不通过'],
+  unsuccessful: ['审核不通过', '审批不通过', '办理失败（审核不通过）', '办理失败（审批不通过）', '办理失败（公示不通过）', '办理失败（不予受理）', '办理失败', '已驳回', '驳回', '退回', '不通过', '备案失败', '认定不通过'],
   exited: ['已退出', '已注销', '注销', '无效', '已取消', '已撤销', '撤销', '超期自动终止', '已终止', '终止'],
   employed: ['就业', '已就业', '在岗'],
   unemployed: ['失业', '未就业', '登记失业'],
@@ -141,6 +150,18 @@ const TASK_STATUSES: readonly string[] = ['queued', 'running', 'completed', 'fai
 
 function text(value: unknown): string {
   return typeof value === 'string' ? value.trim() : '';
+}
+function nonnegativeCount(value: unknown): number | null {
+  const count = typeof value === 'number' ? value : /^\d{1,9}$/.test(text(value)) ? Number(value) : NaN;
+  return Number.isSafeInteger(count) && count >= 0 && count <= 999_999_999 ? count : null;
+}
+function addMetric(metric: HrssCoveredMetric, value: number | null): void {
+  if (value === null) return;
+  metric.value = (metric.value ?? 0) + value;
+  metric.recordCount++;
+}
+function subsidyStreet(area: unknown): string {
+  return STREET_NAMES.find((name) => text(area).includes(name)) ?? '未知街道';
 }
 function finiteTime(value: unknown): value is number {
   return typeof value === 'number' && Number.isFinite(value) && value > 0 && Number.isFinite(new Date(value).getTime());
@@ -342,7 +363,10 @@ export function buildHrssDashboard(input: HrssDashboardInput): HrssDashboardData
   const subsidyMatters = matters.filter((matter) => SUBSIDY_REVIEW_MATTERS.has(matter.id));
   const monthly = new Map<string, number>();
   const streetCounts = new Map<string, number>();
-  const channelCounts = buckets([['online', '网站申请'], ['counter', '窗口申请'], ['unknown', '其他 / 未知']]);
+  const channelCounts = buckets([['online', '线上申请'], ['counter', '窗口申请'], ['matched', '免申比对'], ['unknown', '其他 / 未知']]);
+  const averagePaymentDays: HrssCoveredMetric = { value: null, recordCount: 0 };
+  const flexibleSubsidyMonths: HrssCoveredMetric = { value: null, recordCount: 0 };
+  const reportedApplicants: HrssCoveredMetric = { value: null, recordCount: 0 };
   let missingApplyDate = 0;
   let paymentTotal = 0;
   let paid = 0;
@@ -360,15 +384,24 @@ export function buildHrssDashboard(input: HrssDashboardInput): HrssDashboardData
         const key = `${year}-${String(month).padStart(2, '0')}`;
         monthly.set(key, (monthly.get(key) ?? 0) + 1);
       } else missingApplyDate++;
-      const area = text(data.applyAddress);
-      const street = STREET_NAMES.find((name) => area.includes(name)) ?? '未知街道';
+      const street = subsidyStreet(data.applyAddress ?? data.processArea);
       streetCounts.set(street, (streetCounts.get(street) ?? 0) + 1);
-      const channel = text(data.applyChannel);
-      const channelId = /网站|网上|线上|网办/.test(channel) ? 'online' : /窗口|线下|现场/.test(channel) ? 'counter' : 'unknown';
+      const channel = text(data.applyChannel) || text(data.dataOrigin);
+      const channelId = /网站|网上|线上|网办|^创业一件事（深圳）$/.test(channel) ? 'online'
+        : /窗口|线下|现场/.test(channel) ? 'counter' : channel === '免申请-省比对' ? 'matched' : 'unknown';
       channelCounts.find((bucket) => bucket.id === channelId)!.count++;
+      if (FLEXIBLE_SUBSIDY_MATTERS.has(matter.id)) addMetric(flexibleSubsidyMonths, nonnegativeCount(data.subsidyMonthCount));
+      if (APPLICANT_COUNT_MATTERS.has(matter.id)) addMetric(reportedApplicants, nonnegativeCount(data.applyCount));
       if (paymentSupported) {
         const status = STATUS_LOOKUP.get(text(data.payStatus));
-        if (status === 'paid') localPaid++;
+        if (status === 'paid') {
+          localPaid++;
+          const paidAt = parseSourceDate(data.payDate);
+          if (appliedAt !== null && paidAt !== null && appliedAt <= paidAt && paidAt <= now) {
+            const days = Math.floor((paidAt + SHANGHAI_OFFSET) / DAY) - Math.floor((appliedAt + SHANGHAI_OFFSET) / DAY);
+            addMetric(averagePaymentDays, days);
+          }
+        }
         else if (status === 'awaiting-payment') localAwaiting++;
         else localOther++;
       }
@@ -386,6 +419,7 @@ export function buildHrssDashboard(input: HrssDashboardInput): HrssDashboardData
   });
   const subsidyHasEvidence = subsidyMatters.some((matter) => matter.total !== null);
   const paymentHasEvidence = subsidyRows.some((matter) => matter.total !== null && matter.paymentSupported);
+  if (averagePaymentDays.value !== null) averagePaymentDays.value = Math.round(10 * averagePaymentDays.value / averagePaymentDays.recordCount) / 10;
   const subsidies: HrssSubsidySummary = {
     total: subsidyHasEvidence ? subsidyMatters.reduce((sum, matter) => sum + (matter.total ?? 0), 0) : null,
     syncedMatterCount: subsidyMatters.filter((matter) => matter.syncState === 'synced').length,
@@ -396,6 +430,7 @@ export function buildHrssDashboard(input: HrssDashboardInput): HrssDashboardData
     missingApplyDate,
     streets: [...streetCounts].sort((a, b) => b[1] - a[1]).map(([label, count]) => ({ id: label, label, count })),
     channels: channelCounts,
+    averagePaymentDays, flexibleSubsidyMonths, reportedApplicants,
     matters: subsidyRows,
   };
   const successTimes = matters.flatMap((matter) => matter.lastSuccessAt === null ? [] : [matter.lastSuccessAt]);
