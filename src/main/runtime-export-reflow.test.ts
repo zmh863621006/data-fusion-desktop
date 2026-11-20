@@ -103,9 +103,9 @@ describe('reflow enterprise completion and managed export integration', () => {
       createdAt: 1, details: { startDate: '2026-10-01', endDate: '2026-10-19' } };
     Object.assign(runtime, { exportDirectory: new ApplicationExportDirectory(directory),
       currentGrant: vi.fn(async () => ({ allowExport: true })), requireLicense: vi.fn(async () => {}),
-      platformStore: { getTask: async () => task, listTaskOutput: async () => ({
-        total: 1, rows: [{ systemId: task.systemId, matterId: task.matterId, recordKey: 'test', data: canonical }],
-      }) },
+      platformStore: { getTask: async () => task, taskRowsForExport: async () => [
+        { systemId: task.systemId, matterId: task.matterId, recordKey: 'test', data: canonical },
+      ] },
     });
     const result = await runtime.exportTaskOutput(task.id, undefined, undefined, async () => true);
     expect(basename(result!.path)).toBe('行政许可-大件运输许可-2026-10-01至2026-10-19.xlsx');
@@ -122,7 +122,7 @@ describe('reflow enterprise completion and managed export integration', () => {
       data: canonical, firstSeenAt: 1, updatedAt: 1 };
     Object.assign(runtime, { exportDirectory: new ApplicationExportDirectory(directory),
       currentGrant: vi.fn(async () => ({ allowExport: true })), requireLicense: vi.fn(async () => {}),
-      platformStore: { listRecords: async () => ({ total: 1, rows: [record] }) },
+      platformStore: { recordsForExport: async () => [record] },
     });
     const result = await runtime.exportLocalRecords({ systemId: record.systemId, matterId: record.matterId }, undefined, 'xlsx', async () => true);
     expect(basename(result!.path)).toBe('行政许可-网约车车证-2026-10-06至2026-10-06.xlsx');
@@ -134,17 +134,17 @@ describe('reflow enterprise completion and managed export integration', () => {
       data: { ...canonical, ajmc: '原案件', xkCljg: '予以许可', xkZqly: '依职权', xkXkzs: '原证书', xkXklb: '普通', xkNr: '原内容' }, firstSeenAt: 1, updatedAt: 1 };
     const task = { id: 'government-batch', type: 'data-return', systemId: record.systemId, matterId: record.matterId,
       createdAt: 1, details: { startDate: '2026-10-01', endDate: '2026-10-19' } };
-    const listTaskOutput = vi.fn(async () => ({ total: 1, rows: [record] }));
-    const listRecords = vi.fn(async () => ({ total: 1, rows: [record] }));
+    const taskRowsForExport = vi.fn(async () => [record]);
+    const recordsForExport = vi.fn(async () => [record]);
     const requireLicense = vi.fn(async () => {});
     Object.assign(runtime, { exportDirectory: new ApplicationExportDirectory(directory),
       currentGrant: vi.fn(async () => ({ allowExport: true })), requireLicense,
-      platformStore: { getTask: async () => task, listTaskOutput, listRecords },
+      platformStore: { getTask: async () => task, taskRowsForExport, recordsForExport },
     });
     const label = target === 'guangdong-law' ? '省执法双公示' : '南山双公示';
     const batch = await runtime.exportTaskOutput(task.id, undefined, '原关键字', async () => true, target);
     expect(basename(batch!.path)).toBe(`行政许可-${label}-污水排入排水管网许可证核发（新办）-2026-10-01至2026-10-19.xlsx`);
-    expect(listTaskOutput).toHaveBeenCalledWith(task.id, 1, 200, '原关键字');
+    expect(taskRowsForExport).toHaveBeenCalledWith(task.id, '原关键字');
     expect(requireLicense).toHaveBeenCalledWith(record.systemId, record.matterId);
     expect(await runtime.exportFolder(batch!.path)).toBeTruthy();
     const book = await new ExcelJS.Workbook().xlsx.readFile(batch!.path, { ignoreNodes: ['dataValidations'] });
@@ -152,7 +152,7 @@ describe('reflow enterprise completion and managed export integration', () => {
     expect(book.worksheets).toHaveLength(target === 'guangdong-law' ? 1 : 2);
     const ledger = await runtime.exportLocalRecords({ systemId: record.systemId, matterId: record.matterId, keyword: '原关键字' }, undefined, 'xlsx', async () => true, target);
     expect(basename(ledger!.path)).toBe(`行政许可-${label}-污水排入排水管网许可证核发（新办）-2026-10-06至2026-10-06.xlsx`);
-    expect(listRecords).toHaveBeenCalledWith(expect.objectContaining({ keyword: '原关键字', matterId: record.matterId }));
+    expect(recordsForExport).toHaveBeenCalledWith(expect.objectContaining({ keyword: '原关键字', matterId: record.matterId }));
     await expect(runtime.exportLocalRecords({ systemId: 'oversize-transport' }, undefined, 'xlsx', undefined, target)).rejects.toThrow('仅支持政务');
     Object.assign(runtime, { currentGrant: vi.fn(async () => ({ allowExport: false })) });
     await expect(runtime.exportTaskOutput(task.id, undefined, undefined, undefined, target)).rejects.toThrow();

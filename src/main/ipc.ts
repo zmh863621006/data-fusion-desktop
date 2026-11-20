@@ -81,15 +81,13 @@ export function registerIpcHandlers(getTrustedWebContentsId: () => number | unde
   });
 
   handle(IPC_CHANNELS.practitionerNumbersGet, async (event, year: number) => {
-    trusted(event); await appRuntime.requireLicense('transport-practitioner');
-    if (!appRuntime.practitionerNumbers) throw new Error('编号模块未就绪');
-    return appRuntime.practitionerNumbers.list(year);
+    trusted(event);
+    return appRuntime.listPractitionerNumbers(year);
   });
   handle(IPC_CHANNELS.practitionerNumbersSave, async (event, config) => {
-    trusted(event); await appRuntime.requireLicense('transport-practitioner');
+    trusted(event);
     if (!config || typeof config.latestNumber !== 'string' || typeof config.matterId !== 'string') throw new Error('编号配置格式错误');
-    if (!appRuntime.practitionerNumbers) throw new Error('编号模块未就绪');
-    return appRuntime.practitionerNumbers.save(config);
+    return appRuntime.savePractitionerNumber(config);
   });
   handle(IPC_CHANNELS.licenseStatus, async (event) => {
     trusted(event);

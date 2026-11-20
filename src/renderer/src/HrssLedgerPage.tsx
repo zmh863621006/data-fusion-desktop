@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from 'react';
 import { AppIcon } from './AppIcon';
+import { PageSizeOptions } from './PageSizeOptions';
 import { ExportNotice, type ExportResult } from './ExportNotice';
 import './HrssLedgerPage.css';
 import { HrssBatchDateNotice } from './HrssDateNotice';
@@ -19,14 +20,14 @@ export function hrssDisplayValue(column: HrssListColumn, value: unknown): string
   return text.slice(0, 3) + '********' + text.slice(-4);
 }
 
-export function HrssLedgerPage({ matterId, matterName, columns, batchId = '', onBatchChange, allowExport = false, preview = false, onViewAll }: {
-  matterId: string; matterName: string; columns: readonly HrssListColumn[]; batchId?: string;
+export function HrssLedgerPage({ matterId, matterName, columns, defaultPageSize, batchId = '', onBatchChange, allowExport = false, preview = false, onViewAll }: {
+  matterId: string; matterName: string; columns: readonly HrssListColumn[]; defaultPageSize: number; batchId?: string;
   onBatchChange?: (id: string) => void; allowExport?: boolean; preview?: boolean; onViewAll?: () => void;
 }) {
   const [keyword, setKeyword] = useState('');
   const [search, setSearch] = useState('');
   const [page, setPage] = useState(1);
-  const [pageSize, setPageSize] = useState(20);
+  const [pageSize, setPageSize] = useState(defaultPageSize);
   const [rows, setRows] = useState<Row[]>([]);
   const [total, setTotal] = useState(0);
   const [loading, setLoading] = useState(true);
@@ -83,7 +84,7 @@ export function HrssLedgerPage({ matterId, matterName, columns, batchId = '', on
       {!rows.length && <tr><td colSpan={visibleColumns.length + 1} className="empty">{loading ? '正在读取本地列表…' : error ? '暂时无法读取数据' : '尚无列表记录，请先登录原系统并完成回流'}</td></tr>}
     </tbody></table></div>
     <footer className="hrss-ledger-footer"><span>{loading ? '正在读取…' : `共 ${total.toLocaleString()} 条列表记录`}{preview && total > 5 ? '，预览最近5条' : ''}</span>
-      {!preview && <div><label>每页<select value={pageSize} onChange={event => { setPage(1); setPageSize(Number(event.target.value)); }}><option value={20}>20</option><option value={50}>50</option><option value={100}>100</option></select>条</label><button className="secondary" disabled={loading || page <= 1} onClick={() => setPage(value => value - 1)}>上一页</button><span>{page} / {pageCount}</span><button className="secondary" disabled={loading || page >= pageCount} onClick={() => setPage(value => value + 1)}>下一页</button></div>}
+      {!preview && <div><label>每页<select value={pageSize} onChange={event => { setPage(1); setPageSize(Number(event.target.value)); }}><PageSizeOptions defaultPageSize={defaultPageSize} /></select>条</label><button className="secondary" disabled={loading || page <= 1} onClick={() => setPage(value => value - 1)}>上一页</button><span>{page} / {pageCount}</span><button className="secondary" disabled={loading || page >= pageCount} onClick={() => setPage(value => value + 1)}>下一页</button></div>}
     </footer>
   </section>;
 }

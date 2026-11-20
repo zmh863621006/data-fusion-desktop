@@ -54,6 +54,7 @@ ipcMain.handle('ui-redesign:invoke', async (_event, method: string, ...args: any
   invocations.push({ method, args });
   switch (method) {
     case 'license.status': return { state: 'active', grant, deviceId: 'ui-fixture' };
+    case 'settings.get': return { defaultPageSize: 37 };
     case 'components.list': return [component];
     case 'systems.list': return [{ ...component, session: { systemId, status: 'authenticated' } }];
     case 'systems.tabs': case 'systems.activateTab': return { tabs: [], activeSystemId: null };
@@ -148,6 +149,8 @@ void app.whenReady().then(async () => {
   assert(!await evaluate("document.querySelector('.hrss-ledger').innerText.includes('440305199901011234')"), 'ID must be masked');
   assert(!await evaluate("document.querySelector('.hrss-ledger').innerText.includes('13800001234')"), 'Phone must be masked');
   await capture('02-local-ledger');
+  assert.equal(await evaluate("document.querySelector('.hrss-ledger-footer select').value"), '37');
+  assert(invocations.some(call => call.method === 'records.list' && call.args[0]?.pageSize === 37));
   await clickText('导出台账'); await waitFor("Boolean(document.querySelector('.export-notice-path'))");
   await evaluate("document.querySelector('.export-notice-path').click()");
   await waitFor("!document.querySelector('.export-notice-path').disabled");

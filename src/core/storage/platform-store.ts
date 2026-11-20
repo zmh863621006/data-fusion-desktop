@@ -31,6 +31,9 @@ export interface LocalRecordQuery {
   accessScopes?: Array<{ systemId: string; matterIds?: string[] }>;
 }
 
+const MAX_EXPORT_ROWS = 50_000;
+type RowPage = { size: number; offset: number };
+
 export interface TaskHistoryQuery {
   systemId?: string;
   matterId?: string;
@@ -184,18 +187,23 @@ export class SqlitePlatformStore implements TaskStore, AuditLog, SettingsStore {
   }
 
   async listRecords(query: LocalRecordQuery): Promise<{ rows: StoredRecord[]; total: number }> {
+    const pageSize = Math.min(500, Math.max(10, query.pageSize ?? DEFAULT_APP_SETTINGS.defaultPageSize));
+    const page = Math.max(1, query.page ?? 1);
+    return this.selectRecords(query, { size: pageSize, offset: (page - 1) * pageSize });
+  }
+
+  async recordsForExport(query: LocalRecordQuery): Promise<StoredRecord[]> {
+    return (await this.selectRecords(query)).rows;
+  }
+
+  private async selectRecords(query: LocalRecordQuery, page?: RowPage) {
     const { where, params } = scopeConditions(query);
     if (query.keyword) { where.push('(record_key LIKE ? OR data_json LIKE ?)'); params.push(`%${query.keyword}%`, `%${query.keyword}%`); }
     const clause = where.length ? `WHERE ${where.join(' AND ')}` : '';
-    const total = await this.database.get<{ count: number }>(`SELECT COUNT(*) AS count FROM local_records ${clause}`, params);
-    const pageSize = Math.min(200, Math.max(10, query.pageSize ?? 50));
-    const page = Math.max(1, query.page ?? 1);
-    const rows = await this.database.all<RecordRow>(
-      `SELECT * FROM local_records ${clause} ORDER BY COALESCE(json_extract(data_json, '$.xkJdrq'), '') DESC, COALESCE(json_extract(data_json, '$.xkWsh'), '') DESC, updated_at DESC, system_id, matter_id, record_key LIMIT ? OFFSET ?`,
-      [...params, pageSize, (page - 1) * pageSize],
-    );
+    const { total, rows } = await this.selectRows<RecordRow>(`local_records ${clause}`, params,
+      "COALESCE(json_extract(data_json, '$.xkJdrq'), '') DESC, COALESCE(json_extract(data_json, '$.xkWsh'), '') DESC, updated_at DESC, system_id, matter_id, record_key", page);
     return {
-      total: total?.count ?? 0,
+      total,
       rows: rows.map((row) => ({ systemId: row.system_id, matterId: row.matter_id, recordKey: row.record_key,
         data: JSON.parse(row.data_json), firstSeenAt: row.first_seen_at, updatedAt: row.updated_at })),
     };
@@ -269,20 +277,21 @@ export class SqlitePlatformStore implements TaskStore, AuditLog, SettingsStore {
   async listTaskOutput(taskId: string, page = 1, pageSize = 100, keyword?: string): Promise<{ rows: TaskOutputRow[]; total: number }> {
     const safePage = Math.max(1, page);
     const safePageSize = Math.min(500, Math.max(10, pageSize));
+    return this.selectTaskOutput(taskId, keyword, { size: safePageSize, offset: (safePage - 1) * safePageSize });
+  }
+
+  async taskRowsForExport(taskId: string, keyword?: string): Promise<TaskOutputRow[]> {
+    return (await this.selectTaskOutput(taskId, keyword)).rows;
+  }
+
+  private async selectTaskOutput(taskId: string, keyword?: string, page?: RowPage) {
     const keywordClause = keyword ? ' AND (record_key LIKE ? OR data_json LIKE ?)' : '';
     const keywordParams = keyword ? [`%${keyword}%`, `%${keyword}%`] : [];
-    const total = await this.database.get<{ count: number }>(
-      `SELECT COUNT(*) AS count FROM task_output_rows WHERE task_id = ?${keywordClause}`,
-      [taskId, ...keywordParams],
-    );
-    const rows = await this.database.all<{
+    const { total, rows } = await this.selectRows<{
       row_no: number; system_id: string; matter_id: string; record_key: string; data_json: string;
-    }>(
-      `SELECT * FROM task_output_rows WHERE task_id = ?${keywordClause} ORDER BY row_no LIMIT ? OFFSET ?`,
-      [taskId, ...keywordParams, safePageSize, (safePage - 1) * safePageSize],
-    );
+    }>(`task_output_rows WHERE task_id = ?${keywordClause}`, [taskId, ...keywordParams], 'row_no', page);
     return {
-      total: total?.count ?? 0,
+      total,
       rows: rows.map((row) => ({
         rowNo: row.row_no,
         systemId: row.system_id,
@@ -291,5 +300,14 @@ export class SqlitePlatformStore implements TaskStore, AuditLog, SettingsStore {
         data: JSON.parse(row.data_json),
       })),
     };
+  }
+
+  private async selectRows<T>(source: string, params: unknown[], order: string, page?: RowPage) {
+    const count = page ? await this.database.get<{ count: number }>(`SELECT COUNT(*) AS count FROM ${source}`, params) : undefined;
+    // One SELECT freezes both membership and order for an export, even while other tasks write.
+    const rows = await this.database.all<T>(`SELECT * FROM ${source} ORDER BY ${order} LIMIT ? OFFSET ?`,
+      [...params, page?.size ?? MAX_EXPORT_ROWS + 1, page?.offset ?? 0]);
+    if (!page && rows.length > MAX_EXPORT_ROWS) throw new Error('单次导出不能超过 50000 条，请缩小筛选范围');
+    return { total: count?.count ?? rows.length, rows };
   }
 }

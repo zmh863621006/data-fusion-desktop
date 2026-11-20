@@ -13,7 +13,7 @@ export function nextPractitionerNumber(item: PractitionerNumberConfig): string {
   return road ? `惠交从（许可）字（${item.year}）${digits}号` : `${item.year}${digits}`;
 }
 
-export function PractitionerNumberPanel({ onClose }: { onClose: () => void }) {
+export function PractitionerNumberPanel({ allowedMatters, onClose }: { allowedMatters: readonly string[]; onClose: () => void }) {
   const dialogRef = useRef<HTMLDialogElement>(null);
   useEffect(() => {
     const dialog = dialogRef.current;
@@ -36,7 +36,8 @@ export function PractitionerNumberPanel({ onClose }: { onClose: () => void }) {
     try {
       await window.desktopApi.practitionerNumbers.save(item);
       const refreshed = await window.desktopApi.practitionerNumbers.get(year);
-      setItems(current => current.map(value => value.matterId === item.matterId ? refreshed.find(fresh => fresh.matterId === item.matterId)! : value));
+      setItems(current => refreshed.map(fresh => fresh.matterId === item.matterId
+        ? fresh : current.find(draft => draft.matterId === fresh.matterId) ?? fresh));
       setMessage('已保存，后续新增许可从下一号开始。');
     } catch (error) { setMessage(error instanceof Error ? error.message : '保存失败'); }
     finally { setBusy(false); }
@@ -46,7 +47,7 @@ export function PractitionerNumberPanel({ onClose }: { onClose: () => void }) {
     <div className="number-dialog-body">
     <p className="number-description">填写最后一个已使用的完整编号。后续新增许可自动续号，已有许可保留原编号。</p>
     <label className="number-year"><span>编号年份</span><select aria-label="编号年份" value={year} disabled={busy} onChange={event => setYear(Number(event.target.value))}>{Array.from({ length: 12 }, (_, i) => new Date().getFullYear() - 9 + i).map(value => <option key={value} value={value}>{value} 年</option>)}</select></label>
-    <div className="practitioner-number-grid">{items.map(item => <div className="number-business" key={item.matterId}>
+    <div className="practitioner-number-grid">{items.filter(item => allowedMatters.includes(item.matterId)).map(item => <div className="number-business" key={item.matterId}>
       <h4>{item.matterId === 'road-practitioner-return' ? '道路运输从业人员' : '出租车驾驶员'}</h4>
       <label><span>最后已用编号</span><input aria-label={`${item.matterId === 'road-practitioner-return' ? '道路运输从业人员' : '出租车驾驶员'}最后已用编号`} value={item.latestNumber} disabled={busy} maxLength={80} placeholder={item.matterId === 'road-practitioner-return' ? `惠交从（许可）字（${year}）00010962号` : `${year}006755`} onChange={event => setItems(current => current.map(value => value.matterId === item.matterId ? { ...value, latestNumber: event.target.value } : value))} /></label>
       <div className="number-preview"><span>下一条编号</span><strong>{nextPractitionerNumber(item) || '请填写对应年份的完整编号，保留前导零'}</strong></div>

@@ -4,6 +4,7 @@ import { buildRecordKey } from '../sync/engine';
 export type PractitionerNumberConfig = { matterId: string; year: number; latestNumber: string; version: number };
 export const ROAD = 'road-practitioner-return';
 export const TAXI = 'taxi-driver-return';
+export const PRACTITIONER_NUMBER_MATTERS = [ROAD, TAXI] as const;
 const SYSTEM = 'transport-practitioner';
 
 export function numberParts(matter: string, value: string): [number, number] {
@@ -27,9 +28,10 @@ export class PractitionerNumbers {
     await this.db.run('INSERT OR IGNORE INTO practitioner_numbers(matter,year,serial) VALUES(?,2026,10962)', [ROAD]);
     await this.db.run('INSERT OR IGNORE INTO practitioner_numbers(matter,year,serial) VALUES(?,2026,6755)', [TAXI]);
   }
-  async list(year: number): Promise<PractitionerNumberConfig[]> {
+  async list(year: number, allowedMatters?: readonly string[]): Promise<PractitionerNumberConfig[]> {
     if (!Number.isInteger(year) || year < 2000 || year > 9999) throw new Error('年份不正确');
-    return this.db.transaction(async () => Promise.all([ROAD, TAXI].map(async matterId => {
+    const matters = PRACTITIONER_NUMBER_MATTERS.filter(id => !allowedMatters || allowedMatters.includes(id));
+    return this.db.transaction(async () => Promise.all(matters.map(async matterId => {
       const row = await this.db.get<{ serial: number; version: number }>('SELECT serial,version FROM practitioner_numbers WHERE matter=? AND year=?', [matterId, year]);
       return { matterId, year, latestNumber: row ? formatNumber(matterId, year, row.serial) : '', version: row?.version ?? -1 };
     })));

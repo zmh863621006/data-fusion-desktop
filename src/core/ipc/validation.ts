@@ -75,7 +75,7 @@ export function parseLocalRecordQuery(value: unknown): LocalRecordQuery {
     result.page = Number(value.page);
   }
   if (value.pageSize !== undefined) {
-    if (!Number.isSafeInteger(value.pageSize) || Number(value.pageSize) < 10 || Number(value.pageSize) > 200) throw new AppError('QUERY_INVALID', '每页数量无效');
+    if (!Number.isSafeInteger(value.pageSize) || Number(value.pageSize) < 10 || Number(value.pageSize) > 500) throw new AppError('QUERY_INVALID', '每页数量无效');
     result.pageSize = Number(value.pageSize);
   }
   return result;

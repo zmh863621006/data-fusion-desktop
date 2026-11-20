@@ -1,4 +1,4 @@
-import { PractitionerNumbers } from '../core/config/practitioner-numbers';
+import { PractitionerNumbers, type PractitionerNumberConfig } from '../core/config/practitioner-numbers';
 import { DefaultPluginRegistry, sourceOrigins } from '../core/plugins/types';
 import { publicationPlatformsForSystem } from '../core/publication/platforms';
 import { marketAccessPlugin } from '../plugins/market-access';
@@ -98,20 +98,6 @@ interface PendingSyncPreview {
   matterId: string;
   createdAt: number;
   summary: SyncSummary<Record<string, unknown>>;
-}
-
-const MAX_EXPORT_ROWS = 50_000;
-
-async function readExportRows<T>(readPage: (page: number) => Promise<{ total: number; rows: T[] }>): Promise<T[]> {
-  const records: T[] = [];
-  for (let page = 1; ; page++) {
-    const { rows, total } = await readPage(page);
-    if (total > MAX_EXPORT_ROWS || records.length + rows.length > MAX_EXPORT_ROWS) {
-      throw new Error('单次导出不能超过 50000 条，请缩小筛选范围');
-    }
-    records.push(...rows);
-    if (records.length >= total || rows.length === 0) return records;
-  }
 }
 
 export interface SyncPreviewReceipt {
@@ -326,6 +312,24 @@ export class AppRuntime {
     return grant!;
   }
 
+  async listPractitionerNumbers(year: number): Promise<PractitionerNumberConfig[]> {
+    const systemId = 'transport-practitioner';
+    const grant = await this.requireLicense(systemId);
+    if (!this.practitionerNumbers) throw new Error('编号模块未就绪');
+    const configs = await this.practitionerNumbers.list(year, grant.allowedMatters?.[systemId]);
+    const latest = (await this.requireLicense(systemId)).allowedMatters?.[systemId];
+    return latest ? configs.filter(config => latest.includes(config.matterId)) : configs;
+  }
+
+  async savePractitionerNumber(config: PractitionerNumberConfig): Promise<void> {
+    const numbers = this.practitionerNumbers;
+    if (!numbers || !this.platformStore) throw new Error('编号模块未就绪');
+    await this.platformStore.transaction(async () => {
+      await this.requireLicense('transport-practitioner', config.matterId);
+      await numbers.save(config);
+    });
+  }
+
   async hrssDashboard() {
     const systemId = 'guangdong-hrss';
     const grant = await this.requireLicense(systemId);
@@ -350,11 +354,11 @@ export class AppRuntime {
     if (query.systemId) await this.requireLicense(query.systemId, query.matterId);
     const accessScopes = grant.allowedSystems.map(systemId => ({ systemId, matterIds: grant.allowedMatters?.[systemId] }));
     const result = await this.platformStore.listRecords({ ...query, accessScopes });
-    await this.refreshEnterpriseRecords(result.rows);
+    await this.refreshEnterpriseRecords(result.rows, true);
     return result;
   }
 
-  private async refreshEnterpriseRecords<T extends { systemId: string; matterId: string; recordKey: string; data: Record<string, unknown> }>(records: T[]): Promise<void> {
+  private async refreshEnterpriseRecords<T extends { systemId: string; matterId: string; recordKey: string; data: Record<string, unknown> }>(records: T[], readLatestLedger = false): Promise<void> {
     if (!this.enterpriseService || !this.platformStore) return;
     const groups = new Map<string, T[]>();
     for (const row of records) {
@@ -372,7 +376,9 @@ export class AppRuntime {
         if (JSON.stringify(rows[i].data) === JSON.stringify(enriched[i])) continue;
         if (matter && buildRecordKey(enriched[i], matter.uniqueKey) !== rows[i].recordKey) continue;
         await this.platformStore.applyEnterpriseEnrichment(systemId, matterId, rows[i].recordKey, rows[i].data, enriched[i]);
-        rows[i].data = (await this.repository?.find(systemId, matterId, rows[i].recordKey))?.data ?? enriched[i];
+        rows[i].data = readLatestLedger
+          ? (await this.repository?.find(systemId, matterId, rows[i].recordKey))?.data ?? enriched[i]
+          : enriched[i];
       }
     }
   }
@@ -381,12 +387,10 @@ export class AppRuntime {
     assertFeatureLicensed(await this.currentGrant(), 'export');
     if (target) assertGovernmentExportTarget(target, format, [query.systemId ?? '']);
     if (!this.platformStore) throw new Error('本地数据模块未就绪');
-    const store = this.platformStore;
-    const records = await readExportRows(page => store.listRecords({ ...query, page, pageSize: 200 }));
+    const records = await this.platformStore.recordsForExport(query);
     if (records.length === 0) throw new Error('当前筛选条件没有可导出的数据');
     const matters = new Map(records.map(record => [`${record.systemId}:${record.matterId}`, record]));
     for (const record of matters.values()) await this.requireLicense(record.systemId, record.matterId);
-    // Freeze the selected rows before enrichment, so changes to searchable fields cannot shift export pages.
     await this.refreshEnterpriseRecords(records);
     const names = [...new Set([...matters.values()].map(record => this.businessName(record.systemId, record.matterId)))];
     return this.exportRecords(records, format, { businessName: names.length > 3 ? `${names.slice(0, 3).join('、')}等${names.length}项业务` : names.join('、') }, path, confirm, target);
@@ -442,8 +446,7 @@ export class AppRuntime {
     if (task?.type !== 'data-return' || !task.systemId || !task.matterId) throw new Error('回流批次不存在');
     assertGovernmentExportTarget(target, 'xlsx', [task.systemId]);
     await this.requireLicense(task.systemId, task.matterId);
-    const store = this.platformStore;
-    const rows = await readExportRows(page => store.listTaskOutput(taskId, page, 200, keyword));
+    const rows = await this.platformStore.taskRowsForExport(taskId, keyword);
     const records: StoredRecord[] = rows.map(row => ({
       systemId: row.systemId, matterId: row.matterId, recordKey: row.recordKey, data: row.data,
       firstSeenAt: task.createdAt, updatedAt: task.finishedAt ?? task.createdAt,

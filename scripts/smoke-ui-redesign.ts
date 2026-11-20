@@ -4,6 +4,7 @@ import { tmpdir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
 import assert from 'node:assert/strict';
 import { DOUBLE_PUBLICITY_TEMPLATE } from '../src/core/double-publicity/template';
+import { parseSettingsPatch } from '../src/core/ipc/validation';
 import type { UpdatePresentationState } from '../src/renderer/src/UpdateStatus';
 import { PUBLICATION_PLATFORMS, publicationPlatform } from '../src/core/publication/platforms';
 
@@ -32,7 +33,9 @@ const invocations: Array<{ method: string; args: any[]; scenario: Scenario; epoc
 // Keep the explicit finish() exit code authoritative while the test window and
 // temporary profile are torn down (including assertion-failure exits).
 app.on('window-all-closed', () => {});
-let settings = { autoCheckUpdates: false, defaultPageSize: 20, taskConcurrency: 2 };
+let settings = { locale: 'zh-CN' as const, retainAuditDays: 180, autoCheckUpdates: false, defaultPageSize: 20, taskConcurrency: 2 };
+let allowExport = true;
+let numberScope: string[] | undefined;
 let recordData: Record<string, unknown> = { xzxkmc: '演示许可事项', xkXdrMc: '演示医疗服务有限公司', xkXdrLb: '法人及非法人组织', xkXdrShxym: 'DEMO-CODE-NOT-REAL', xkFrdb: '演示法人', xkWsh: '演示许可〔2026〕001号', xkNr: '仅供界面回归测试的示例许可内容。', xkJdrq: '2026-10-16', xkXkjg: '演示机关' };
 let authorityCode = '';
 let oversizeEvidenceStatus: 'matched' | 'conflict' = 'matched';
@@ -42,6 +45,8 @@ let updateState = initialUpdate(), updateCheckMode: 'latest' | 'download' = 'lat
 let finishUpdateCheck: ((value: unknown) => void) | undefined;
 let delaySnapshotOnce = false;
 let failPublicationOnce = false;
+let marketQuery: ((context: { page: number; pageSize: number }) => Promise<{ rows: Record<string, unknown>[]; page: number; pageSize: number; total: number }>) | undefined;
+let marketPreviewGate: Promise<void> | undefined;
 let delayedBatch: { started: () => void; wait: Promise<void> } | undefined;
 let componentGate: Promise<void> | undefined, sessionGate: Promise<void> | undefined;
 const updateArtifact = { version: '1.0.4', notes: '本条仅为隔离界面测试，非真实发布。\n改善更新下载状态，并保留原有授权、会话和业务记录。', installer: 'nsis', platform: 'win32', arch: 'x64' };
@@ -55,7 +60,8 @@ function allowedTools() { return scenario === 'active' || scenario === 'tools-on
 function grant() {
   return { licenseId: 'ui-only-fixture', customerName: '界面测试客户（示例）', expiresAt: now + 365 * 86400000,
     allowedSystems: allowedSystems(), allowedTools: allowedTools(),
-    allowExport: true, allowAutoSync: true, allowAutoUpdate: false, activationMode: 'online' };
+    ...(numberScope && { allowedMatters: { 'transport-practitioner': numberScope } }),
+    allowExport, allowAutoSync: true, allowAutoUpdate: false, activationMode: 'online' };
 }
 function license() { return { state: scenario === 'inactive' ? 'inactive' : 'active', deviceId: 'ui-fixture-device-000000000000', grant: scenario === 'inactive' ? undefined : grant() }; }
 function matters(systemId: string) {
@@ -94,6 +100,11 @@ async function invoke(method: string, ...args: any[]) {
     case 'license.status': case 'license.refresh': return license();
     case 'license.activate': case 'license.importFile': scenario = 'active'; return license();
     case 'license.deactivate': scenario = 'inactive'; return license();
+    case 'practitionerNumbers.get':
+      return ['road-practitioner-return', 'taxi-driver-return'].map(matterId => ({
+        matterId, year: args[0], version: 0, latestNumber: matterId === 'taxi-driver-return'
+          ? `${args[0]}006755` : `惠交从（许可）字（${args[0]}）00010962号`,
+      }));
     // Deliberately include unauthorized entries so the renderer's defensive
     // filtering is exercised, independent from production IPC enforcement.
     case 'components.list':
@@ -118,7 +129,11 @@ async function invoke(method: string, ...args: any[]) {
     case 'systems.closeLogin': sourceTabs.tabs = sourceTabs.tabs.filter(tab => tab.systemId !== args[0]); if (sourceTabs.activeSystemId === args[0]) sourceTabs.activeSystemId = null; return sourceTabs;
     case 'systems.reloadLogin': case 'systems.backLogin': case 'systems.logout': return true;
     case 'matters.list': return matters(args[0]);
-    case 'matters.query': queryContexts.push({ systemId: args[0], matterId: args[1], context: args[2] }); return { rows: [recordData], total: 1 };
+    case 'matters.query': {
+      const context = args[2];
+      queryContexts.push({ systemId: args[0], matterId: args[1], context });
+      return marketQuery ? marketQuery(context) : { rows: [recordData], total: 1, page: context.page, pageSize: context.pageSize };
+    }
     case 'matters.run': return { taskId: `${args[0]}-batch-0` };
     case 'tasks.list': return tasks();
     case 'tasks.page': {
@@ -150,7 +165,7 @@ async function invoke(method: string, ...args: any[]) {
     case 'records.versions': return [{ version: 1, capturedAt: now - 60000, data: { ...recordData, xkNr: '演示历史版本内容' } }, { version: 2, capturedAt: now, data: recordData }];
     case 'records.update': recordData = args[3]; return record(args[0], args[1]);
     case 'settings.get': return settings;
-    case 'settings.update': settings = { ...settings, ...args[0] }; return settings;
+    case 'settings.update': settings = { ...settings, ...parseSettingsPatch(args[0]) }; return settings;
     case 'credentials.status': return { configured: true, account: 'fixture-account' };
     case 'credentials.save': return { configured: true, account: args[1] };
     case 'modules.list': return ids.map((id, index) => ({ id, name: names[index], version: '0.1.0', description: '独立业务组件，测试示例。', authorized: allowedSystems().includes(id) }));
@@ -180,7 +195,10 @@ async function invoke(method: string, ...args: any[]) {
     case 'diagnostics.report': if (args[0] === 'error') errors.push(`${args[1]}: ${args[2]}`); return true;
     case 'diagnostics.openFolder': return true;
     case 'diagnostics.export': return { path: 'fixture-only.log', count: 1 };
-    case 'sync.preview': return { previewId: 'fixture-preview', total: 1, inserted: 1, updated: 0, unchanged: 0, changes: [{ type: 'insert', key: 'fixture-record-1', current: recordData }] };
+    case 'sync.preview': {
+      await marketPreviewGate;
+      return { previewId: `fixture-preview-${args[2][0].applyno ?? 'single'}`, total: args[2].length, inserted: args[2].length, updated: 0, unchanged: 0 };
+    }
     case 'sync.commit': return true;
     case 'healthTool.state': return healthState();
     case 'healthTool.importFiles': return { state: healthState(), added: 1, duplicates: 0, errors: [] };
@@ -357,6 +375,7 @@ async function assertEntitledChrome(label: string) {
 function assertAuthorizedReads(start: number, label: string) {
   const violations = invocations.slice(start).filter(call => {
     if (call.method.startsWith('healthTool.')) return !call.allowedTools.includes('health-publicity');
+    if (call.method.startsWith('practitionerNumbers.')) return !call.allowedSystems.includes('transport-practitioner');
     if (call.method === 'publications.open') return !call.allowedSystems.includes('government-info');
     if (/^(matters\.|credentials\.|systems\.(session|login|reloadLogin|backLogin|logout)$|records\.(versions|update)$|sync\.preview$)/.test(call.method)) return !call.allowedSystems.includes(call.args[0]);
     if (call.method === 'records.list' || call.method === 'records.export') return !call.allowedSystems.includes(call.args[0]?.systemId);
@@ -397,6 +416,96 @@ async function checkDialogFocus(selector: string) {
   await dom('document.dispatchEvent(new KeyboardEvent("keydown", {key:"Tab", bubbles:true, cancelable:true}))'); await settled();
   assert(await dom(`document.querySelector(${JSON.stringify(selector)}).contains(document.activeElement)`), `${selector}: Tab should stay in modal`);
   assert(await dom(`(() => { const controls = [...document.querySelector(${JSON.stringify(selector)}).querySelectorAll('button:not([disabled]),input:not([disabled]),textarea:not([disabled]),select:not([disabled]),[tabindex="0"]')].filter(item=>item.getClientRects().length); return document.activeElement === controls[0]; })()`), `${selector}: Tab from last control should wrap to first`);
+}
+
+async function verifyLedgerPreferences() {
+  const original = settings;
+  await reload('active');
+  await button('设置', '.sidebar');
+  await until('Boolean(document.querySelector(".settings-form input[type=number]"))');
+  await type('.settings-form input[type=number]', '37');
+  await button('保存设置', '.runtime-settings');
+  await until('document.querySelector(".page-message")?.textContent.includes("设置已保存")');
+  assert.equal(settings.defaultPageSize, 37);
+  await button('工作台', '.sidebar');
+  await click('.home-recent .link-button');
+  await until('Boolean(document.querySelector(".record-table-panel tbody .link-button"))');
+  assert.equal(await dom('document.querySelector(".pagination select").value'), '37');
+  assert.equal(invocations.filter(call => call.method === 'tasks.output').at(-1)?.args[2], 37);
+  await type('.batch-filter-bar input', '实际查询的企业');
+  await button('查询', '.batch-filter-bar');
+  await until('Boolean(document.querySelector(".record-table-panel tbody .link-button"))');
+  await type('.batch-filter-bar input', '尚未提交的搜索词');
+  await button('导出省执法双公示');
+  await until('Boolean(document.querySelector(".export-notice-path"))');
+  assert.equal(invocations.filter(call => call.method === 'tasks.exportOutput').at(-1)?.args[1], '实际查询的企业');
+  allowExport = false;
+  await dom('window.dispatchEvent(new Event("focus"))');
+  await until('![...document.querySelectorAll(".publication-actions button")].some(item=>item.textContent.includes("导出"))');
+  assert.equal(await dom('document.querySelectorAll(".publication-actions button").length'), 2);
+  assert.equal(await dom('Boolean(document.querySelector(".export-notice-path"))'), false);
+  allowExport = true;
+  settings = original;
+}
+
+async function verifyMarketQueryPages() {
+  const total = 73;
+  let failQuery = false;
+  let queryGate: Promise<void> | undefined;
+  marketQuery = async ({ page, pageSize }) => {
+    await queryGate;
+    if (failQuery) throw new Error('模拟市场查询失败');
+    const offset = (page - 1) * pageSize;
+    const rows = Array.from({ length: Math.max(0, Math.min(pageSize, total - offset)) }, (_, i) => ({ applyno: `M-${offset + i + 1}` }));
+    return { page, pageSize, rows, total };
+  };
+  try {
+    await button('执行查询', '.query-panel');
+    await until('Boolean(document.querySelector(".result-panel .pagination"))');
+    const size = queryContexts.at(-1)!.context.pageSize;
+    assert.equal(size, Math.min(settings.defaultPageSize, 200));
+    let releasePreview!: () => void;
+    marketPreviewGate = new Promise<void>(resolve => { releasePreview = resolve; });
+    await button('预览本页同步变化', '.result-panel');
+    await until('document.querySelector(".query-panel .message")?.textContent.includes("计算本页")');
+    await button('下一页', '.result-panel');
+    await until(`document.querySelector(".result-panel tbody td")?.textContent === "M-${size + 1}"`);
+    releasePreview(); marketPreviewGate = undefined;
+    await settled();
+    assert.equal(await dom('Boolean(document.querySelector(".sync-preview"))'), false, 'Previous page preview must never enable confirmation on the next page');
+    for (let page = 3; page <= Math.ceil(total / size); page++) {
+      await button('下一页', '.result-panel');
+      await until(`document.querySelector(".result-panel tbody td")?.textContent === "M-${(page - 1) * size + 1}"`);
+    }
+    const lastStart = Math.floor((total - 1) / size) * size + 1;
+    await button('预览本页同步变化', '.result-panel');
+    await until('Boolean(document.querySelector(".sync-preview button:not(:disabled)"))');
+    const preview = invocations.filter(call => call.method === 'sync.preview').at(-1)!;
+    assert.deepEqual(preview.args[2].map((row: {applyno: string}) => row.applyno),
+      Array.from({ length: total - lastStart + 1 }, (_, i) => `M-${lastStart + i}`));
+    await button('确认写入本页', '.sync-preview');
+    await until('document.querySelector(".query-panel .message")?.textContent.includes("已写入")');
+    assert.equal(invocations.filter(call => call.method === 'sync.commit').at(-1)?.args[0], `fixture-preview-M-${lastStart}`);
+
+    await button('预览本页同步变化', '.result-panel');
+    await until('Boolean(document.querySelector(".sync-preview button:not(:disabled)"))');
+    failQuery = true;
+    await button('执行查询', '.query-panel');
+    await until('document.querySelector(".query-panel .message")?.textContent.includes("模拟市场查询失败")');
+    assert.equal(await dom('document.querySelectorAll(".sync-preview, .result-panel tbody tr, .result-panel button").length'), 0);
+
+    failQuery = false;
+    let releaseQuery!: () => void;
+    queryGate = new Promise<void>(resolve => { releaseQuery = resolve; });
+    await button('执行查询', '.query-panel');
+    await until('document.querySelector(".query-panel .message")?.textContent.includes("正在查询")');
+    await dom('document.querySelectorAll(".system-nav-toggle")[0].click()');
+    await until('Boolean(document.querySelector(".return-preview"))');
+    await dom('document.querySelectorAll(".system-nav-toggle")[1].click()');
+    await until('Boolean(document.querySelector(".query-panel"))');
+    releaseQuery(); await settled();
+    assert.equal(await dom('document.querySelectorAll(".result-panel tbody tr, .sync-preview").length'), 0);
+  } finally { marketQuery = undefined; marketPreviewGate = undefined; }
 }
 
 async function runViewport(width: number, height: number) {
@@ -531,7 +640,8 @@ async function runViewport(width: number, height: number) {
       await click('.advanced-toggle'); await until('document.querySelectorAll(".query-panel .form-grid > label").length === 4');
       await button('执行查询', '.query-panel'); await until('document.querySelectorAll(".result-panel tbody tr").length === 1');
       assert.equal(queryContexts.at(-1)?.context.filters.recordNo, 'ADVANCED-FIXTURE', 'Collapsing advanced conditions must not erase their submitted value');
-      await button('预览同步变化', '.result-panel'); await until('Boolean(document.querySelector(".sync-preview"))'); await screenshot('13-query-sync-preview'); await button('确认写入本地', '.sync-preview');
+      await button('预览本页同步变化', '.result-panel'); await until('Boolean(document.querySelector(".sync-preview"))'); await screenshot('13-query-sync-preview'); await button('确认写入本页', '.sync-preview');
+      await verifyMarketQueryPages();
     }
   }
   // The remote page itself is deliberately never loaded. Check only its app chrome.
@@ -731,6 +841,22 @@ async function verifyInitialUpdateRace() {
   publishUpdate(initialUpdate());
 }
 
+async function verifyPractitionerNumberScope() {
+  await reload('active');
+  await until('document.querySelectorAll(".system-card-title").length === 5');
+  await click('.system-card:nth-child(3) .system-card-title');
+  await button('编号配置', '.session-box');
+  await until('document.querySelectorAll(".number-business").length === 2');
+  try {
+    numberScope = ['taxi-driver-return'];
+    await dom('window.dispatchEvent(new Event("focus"))');
+    await until('document.querySelectorAll(".number-business").length === 1 && document.querySelector(".number-business h4").textContent === "出租车驾驶员"', 'only the still-authorized numbering form survives a grant reduction');
+    numberScope = [];
+    await dom('window.dispatchEvent(new Event("focus"))');
+    await until('document.querySelector(".session-box") && !document.querySelector(".practitioner-number-dialog") && !document.querySelector(".session-box").textContent.includes("编号配置")', 'removing both matters closes the dialog and hides its entry');
+  } finally { numberScope = undefined; }
+}
+
 async function run() {
   profile = process.env.DATA_FUSION_UI_TEST_PROFILE || await mkdtemp(join(tmpdir(), 'fusion-ui-redesign-')); app.setPath('userData', profile);
   await app.whenReady();
@@ -740,6 +866,8 @@ async function run() {
   window.webContents.on('console-message', (_event, level, message) => { if (level === 3) errors.push(message); });
   window.webContents.on('render-process-gone', (_event, details) => errors.push(`renderer gone: ${details.reason}`));
   ipcMain.handle('ui-redesign:invoke', (_event, method, ...args) => invoke(method, ...args));
+  await verifyPractitionerNumberScope();
+  await verifyLedgerPreferences();
   await runViewport(1440, 900); await runViewport(1180, 720);
   assertAuthorizedReads(0, 'Complete authorization regression');
   assert.equal(errors.length, 0, `Renderer errors: ${errors.join('\n')}`); assert.equal(blockedRequests.length, 0, `UI tried to access external resources: ${blockedRequests.join(', ')}`);

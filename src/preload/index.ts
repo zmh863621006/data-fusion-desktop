@@ -13,6 +13,7 @@ import type { AutomaticUpdateState } from '../core/updater/automatic';
 import type { ComponentSummary } from '../core/plugins/components';
 import type { PublicationPlatformId } from '../core/publication/platforms';
 import type { HrssDashboardData } from '../core/hrss/dashboard';
+import type { AppSettings } from '../core/settings/types';
 
 const desktopApi = {
   hrss: {
@@ -63,8 +64,8 @@ const desktopApi = {
       ipcRenderer.invoke(IPC_CHANNELS.recordsExport, query, format, target),
   },
   settings: {
-    get: () => ipcRenderer.invoke(IPC_CHANNELS.settingsGet),
-    update: (patch: Record<string, unknown>) => ipcRenderer.invoke(IPC_CHANNELS.settingsUpdate, patch),
+    get: (): Promise<AppSettings> => ipcRenderer.invoke(IPC_CHANNELS.settingsGet),
+    update: (patch: Partial<Omit<AppSettings, 'locale'>>): Promise<AppSettings> => ipcRenderer.invoke(IPC_CHANNELS.settingsUpdate, patch),
   },
   credentials: {
     status: (systemId: string) => ipcRenderer.invoke(IPC_CHANNELS.credentialsStatus, systemId),

@@ -1,4 +1,5 @@
 import { PractitionerNumberPanel } from './PractitionerNumberPanel';
+import { PRACTITIONER_NUMBER_MATTERS } from '../../core/config/practitioner-numbers';
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import type { SourceTabsState } from '../../core/session/source-tabs';
 import { DOUBLE_PUBLICITY_TEMPLATE } from '../../core/double-publicity/template';
@@ -11,6 +12,8 @@ import { HealthPublicityPage } from './HealthPublicityPage';
 import { ExportNotice, type ExportResult } from './ExportNotice';
 import { AppIcon, BrandMark, SystemBadge, systemIcon } from './AppIcon';
 import { Modal } from './Modal';
+import { PageSizeOptions } from './PageSizeOptions';
+import { DEFAULT_APP_SETTINGS, type AppSettings } from '../../core/settings/types';
 import { shortSystemName, systemDescription, taskProgressPercent, taskStatusLabel } from './ui-format';
 import type { LicenseStatus } from '../../core/license/types';
 import { workspaceAccess, type AppPage } from './workspace-access';
@@ -24,6 +27,7 @@ import { HrssDashboardWindowPage } from './HrssDashboardWindowPage';
 import { HrssDateNotice } from './HrssDateNotice';
 import { hrssTaskDateLabel } from '../../core/hrss/date-filters';
 import { GOVERNMENT_EXPORT_LABELS, supportsGovernmentExport, type GovernmentExportTarget } from '../../core/export/government-target';
+import type { QueryPage } from '../../core/query/types';
 
 type SessionState = {
   status: 'logged-out' | 'logging-in' | 'authenticated' | 'unverified' | 'expiring' | 'expired';
@@ -237,6 +241,7 @@ function WorkspaceSidebar({ systems, matters, license, selectedSystemId, selecte
 
 function Workspace({ license }: { license: LicenseStatus }) {
   const access = workspaceAccess(license);
+  const [defaultPageSize, setDefaultPageSize] = useState(DEFAULT_APP_SETTINGS.defaultPageSize);
   const scope = access.permissionKey;
   const [allSystems, setSystems] = useState<SystemSummary[]>([]);
   const [components, setComponents] = useState<ComponentSummary[]>([]);
@@ -251,18 +256,28 @@ function Workspace({ license }: { license: LicenseStatus }) {
   const [matterSystemId, setMatterSystemId] = useState('');
   const [selectedMatterId, setSelectedMatterId] = useState<string>('');
   const [filters, setFilters] = useState<Record<string, unknown>>({});
-  const [rows, setRows] = useState<Record<string, unknown>[]>([]);
+  const [queryResult, setQueryResult] = useState<QueryPage | null>(null);
+  const rows = queryResult?.rows ?? [];
+  const queryGeneration = useRef(0);
+  const [queryLoading, setQueryLoading] = useState(false);
+  const [queryMessage, setQueryMessage] = useState('');
   const [loading, setLoading] = useState(false);
   const [message, setMessage] = useState('');
   const [syncPreview, setSyncPreview] = useState<SyncPreview | null>(null);
   const [requestedPage, setActivePage] = useState<AppPage>(access.defaultPage);
   const activePage = access.resolvePage(requestedPage);
+  useLayoutEffect(() => {
+    setQueryResult(null); setSyncPreview(null); setQueryLoading(false); setQueryMessage('');
+    return () => { queryGeneration.current++; };
+  }, [activePage, selectedSystemId, selectedMatterId, scope, filters]);
   useEffect(() => {
     if (requestedPage !== activePage) setActivePage(activePage);
   }, [scope, requestedPage, activePage]);
   const [matterSection, setMatterSection] = useState<MatterSection>('return');
   const [selectedDataBatchId, setSelectedDataBatchId] = useState('');
   const [showPractitionerNumbers, setShowPractitionerNumbers] = useState(false);
+  const numberMatters = selectedSystemId === 'transport-practitioner'
+    ? PRACTITIONER_NUMBER_MATTERS.filter(id => access.canOpenMatter(selectedSystemId, id)) : [];
   const [showSystemCredentials, setShowSystemCredentials] = useState(false);
   const [showAdvancedFilters, setShowAdvancedFilters] = useState(false);
   const updateState = useUpdateState();
@@ -341,8 +356,10 @@ function Workspace({ license }: { license: LicenseStatus }) {
     let disposed = false;
     pendingTaskNavigation.current = null;
     setCatalogError('');
-    void window.desktopApi.components.list().then(value => {
+    const preferences = access.hasSystems ? window.desktopApi.settings.get().catch(() => undefined) : undefined;
+    void Promise.all([window.desktopApi.components.list(), preferences]).then(([value, settings]) => {
       if (disposed) return;
+      setDefaultPageSize(settings?.defaultPageSize ?? DEFAULT_APP_SETTINGS.defaultPageSize);
       const visible = value.filter(component => component.authorized && (component.kind === 'system'
         ? access.canOpenSystem(component.id) : access.canOpenTool(component.id)));
       const metadata: SystemSummary[] = visible.filter(component => component.kind === 'system').map(component => ({ ...component,
@@ -378,8 +395,6 @@ function Workspace({ license }: { license: LicenseStatus }) {
       setMatterSystemId(selectedSystemId);
       setSelectedMatterId(list[0]?.id ?? '');
       setFilters(list[0]?.defaultFilters ?? {});
-      setRows([]);
-      setSyncPreview(null);
       setMatterSection('return');
       setSelectedDataBatchId('');
       setShowSystemCredentials(false);
@@ -488,24 +503,30 @@ function Workspace({ license }: { license: LicenseStatus }) {
     setActivePage(page);
   }
 
-  async function query() {
-    if (!selectedMatter || !access.canOpenMatter(selectedSystemId, selectedMatterId)) return;
-    setLoading(true);
-    setMessage('正在查询…');
+  async function runQueryAction<T>(pending: string, failure: string, action: () => Promise<T>, apply: (result: T) => void) {
+    const generation = ++queryGeneration.current;
+    setQueryLoading(true);
+    setQueryMessage(pending);
     try {
-      const result = (await window.desktopApi.matters.query(selectedSystemId, selectedMatterId, {
-        page: 1,
-        pageSize: 50,
-        filters,
-      })) as { rows: Record<string, unknown>[]; total: number };
-      setRows(result.rows);
-      setSyncPreview(null);
-      setMessage(`查询完成，共 ${result.total} 条`);
+      const result = await action();
+      if (generation === queryGeneration.current) apply(result);
     } catch (error) {
-      setMessage(error instanceof Error ? error.message : '查询失败');
+      if (generation === queryGeneration.current) setQueryMessage(error instanceof Error ? error.message : failure);
     } finally {
-      setLoading(false);
+      if (generation === queryGeneration.current) setQueryLoading(false);
     }
+  }
+
+  function query(targetPage = 1, pageSize = Math.min(defaultPageSize, 200)) {
+    if (!selectedMatter || !access.canOpenMatter(selectedSystemId, selectedMatterId)) return;
+    setQueryResult(null);
+    setSyncPreview(null);
+    void runQueryAction('正在查询…', '查询失败', () =>
+      window.desktopApi.matters.query(selectedSystemId, selectedMatterId, { page: targetPage, pageSize, filters }),
+    (result: QueryPage) => {
+      setQueryResult(result);
+      setQueryMessage(`共 ${result.total} 条，本页 ${result.rows.length} 条`);
+    });
   }
 
   function runOneClickReturn() {
@@ -524,8 +545,6 @@ function Workspace({ license }: { license: LicenseStatus }) {
   function selectMatter(matter: MatterSummary) {
     setSelectedMatterId(matter.id);
     setFilters(matter.defaultFilters ?? {});
-    setRows([]);
-    setSyncPreview(null);
     setMessage('');
     setMatterSection('return');
     setSelectedDataBatchId('');
@@ -545,34 +564,22 @@ function Workspace({ license }: { license: LicenseStatus }) {
     setActivePage('workspace');
   }
 
-  async function previewSync() {
-    if (!selectedSystemId || !selectedMatterId || !rows.length) return;
-    setLoading(true);
-    setMessage('正在计算本地数据变化…');
-    try {
-      const result = await window.desktopApi.sync.preview(selectedSystemId, selectedMatterId, rows) as SyncPreview;
+  function previewSync() {
+    if (!selectedSystemId || !selectedMatterId || !queryResult?.rows.length) return;
+    setSyncPreview(null);
+    void runQueryAction('正在计算本页数据变化…', '同步预览失败', () =>
+      window.desktopApi.sync.preview(selectedSystemId, selectedMatterId, rows), (result: SyncPreview) => {
       setSyncPreview(result);
-      setMessage('同步预览已生成，确认后才会写入本地数据库');
-    } catch (error) {
-      setMessage(error instanceof Error ? error.message : '同步预览失败');
-    } finally {
-      setLoading(false);
-    }
+      setQueryMessage(`第 ${queryResult.page} 页同步预览已生成，共 ${result.total} 条。`);
+    });
   }
 
-  async function commitSync() {
-    if (!syncPreview) return;
-    setLoading(true);
-    setMessage('正在写入本地数据库…');
-    try {
-      await window.desktopApi.sync.commit(syncPreview.previewId);
+  function commitSync() {
+    if (!queryResult || !syncPreview) return;
+    void runQueryAction('正在写入本地数据库…', '写入失败', () => window.desktopApi.sync.commit(syncPreview.previewId), () => {
       setSyncPreview(null);
-      setMessage('数据已安全写入本地数据库');
-    } catch (error) {
-      setMessage(error instanceof Error ? error.message : '写入失败');
-    } finally {
-      setLoading(false);
-    }
+      setQueryMessage(`第 ${queryResult.page} 页数据已写入本地数据库。`);
+    });
   }
 
 
@@ -610,7 +617,7 @@ function Workspace({ license }: { license: LicenseStatus }) {
         <UpdateBanner state={updateState} onOpen={() => setActivePage('settings')} />
         {activePage === 'home' && message && <div className="message page-message" role="status">{message}</div>}
         {activePage === 'home' ? <HomePage systems={systems} license={license} loading={loading} onSelect={(id) => { setSelectedSystemId(id); setActivePage('workspace'); }} onLogin={(id) => { void login(id); }} onTool={() => setActivePage('tools')} onTask={openTaskData} /> : activePage === 'tools' ? <HealthPublicityPage licensed={Boolean(license.grant?.allowedTools?.includes('health-publicity'))} allowExport={Boolean(license.grant?.allowExport)} /> : activePage !== 'workspace' ? (
-          <PlatformPage page={activePage} license={license} components={components} onNavigate={setActivePage} onSystemSelect={id => { if (access.canOpenSystem(id)) { setSelectedSystemId(id); setActivePage('workspace'); } }} />
+          <PlatformPage onPageSizeSaved={setDefaultPageSize} page={activePage} license={license} components={components} onNavigate={setActivePage} onSystemSelect={id => { if (access.canOpenSystem(id)) { setSelectedSystemId(id); setActivePage('workspace'); } }} />
         ) : <>
         <header className="topbar">
           <div>
@@ -624,12 +631,12 @@ function Workspace({ license }: { license: LicenseStatus }) {
             <button className="secondary" onClick={() => void login()} disabled={loading || !selectedSystemId}>
               {['authenticated', 'unverified'].includes(selectedSystem?.session.status ?? '') ? '打开原系统' : '登录系统'}
             </button>
-            {selectedSystemId === 'transport-practitioner' && <button className="secondary" onClick={() => setShowPractitionerNumbers(value => !value)}>编号配置</button>}
+            {numberMatters.length > 0 && <button className="secondary" onClick={() => setShowPractitionerNumbers(value => !value)}>编号配置</button>}
             {selectedSystem?.supportsCredentialConfiguration && <button className="secondary" onClick={() => setShowSystemCredentials((value) => !value)}>账号配置</button>}
           </div>
         </header>
 
-        {showPractitionerNumbers && selectedSystemId === 'transport-practitioner' && <PractitionerNumberPanel onClose={() => setShowPractitionerNumbers(false)} />}
+        {showPractitionerNumbers && numberMatters.length > 0 && <PractitionerNumberPanel key={numberMatters.join('/')} allowedMatters={numberMatters} onClose={() => setShowPractitionerNumbers(false)} />}
         {showSystemCredentials && selectedSystem?.supportsCredentialConfiguration && <SystemCredentialPanel systemId={selectedSystemId} systemName={selectedSystem?.name ?? '当前业务系统'} onClose={() => setShowSystemCredentials(false)} onLogin={() => { setShowSystemCredentials(false); void login(); }} />}
 
         {['return-ledger', 'list-ledger'].includes(selectedSystem?.workspaceMode ?? '') && <nav className={`matter-workspace-tabs ${supportsGovernmentExport(selectedSystemId) ? 'government-workspace-tabs' : ''}`} aria-label="事项工作区">
@@ -639,7 +646,7 @@ function Workspace({ license }: { license: LicenseStatus }) {
         </nav>}
         {selectedMatter?.executionMode === 'one-click-return' && message && <div className="message page-message">{message}</div>}
 
-        {!selectedMatter ? <div className="panel empty" role="status">{message || (matterSystemId === selectedSystemId ? '当前系统暂无可用业务事项。' : '正在加载业务事项…')}</div> : ['return-ledger', 'list-ledger'].includes(selectedSystem?.workspaceMode ?? '') && matterSection === 'tasks' ? <TaskCenterPage key={`${selectedSystemId}/${selectedMatterId}`} systemId={selectedSystemId} matterId={selectedMatterId} matterName={selectedMatter?.name} onViewBatch={(batchId) => { setSelectedDataBatchId(batchId); setMatterSection('data'); }} /> : selectedSystem?.workspaceMode === 'list-ledger' && matterSection === 'data' ? <HrssLedgerPage key={selectedMatterId} matterId={selectedMatterId} matterName={selectedMatter.name} columns={selectedMatter.listColumns ?? []} batchId={selectedDataBatchId} onBatchChange={setSelectedDataBatchId} allowExport={license.grant?.allowExport} /> : selectedSystem?.workspaceMode === 'return-ledger' && matterSection === 'data' ? <LocalDataPage key={`${selectedSystemId}/${selectedMatterId}`} systemId={selectedSystemId} matterId={selectedMatterId} matterName={selectedMatter?.name} selectedBatchId={selectedDataBatchId} onBatchChange={setSelectedDataBatchId} onOpenPublication={openPublication} openingPublication={openingPublication} /> : <>
+        {!selectedMatter ? <div className="panel empty" role="status">{message || (matterSystemId === selectedSystemId ? '当前系统暂无可用业务事项。' : '正在加载业务事项…')}</div> : ['return-ledger', 'list-ledger'].includes(selectedSystem?.workspaceMode ?? '') && matterSection === 'tasks' ? <TaskCenterPage pageSize={defaultPageSize} key={`${selectedSystemId}/${selectedMatterId}`} systemId={selectedSystemId} matterId={selectedMatterId} matterName={selectedMatter?.name} onViewBatch={(batchId) => { setSelectedDataBatchId(batchId); setMatterSection('data'); }} /> : selectedSystem?.workspaceMode === 'list-ledger' && matterSection === 'data' ? <HrssLedgerPage defaultPageSize={defaultPageSize} key={selectedMatterId} matterId={selectedMatterId} matterName={selectedMatter.name} columns={selectedMatter.listColumns ?? []} batchId={selectedDataBatchId} onBatchChange={setSelectedDataBatchId} allowExport={license.grant?.allowExport} /> : selectedSystem?.workspaceMode === 'return-ledger' && matterSection === 'data' ? <LocalDataPage defaultPageSize={defaultPageSize} allowExport={Boolean(license.grant?.allowExport)} key={`${selectedSystemId}/${selectedMatterId}`} systemId={selectedSystemId} matterId={selectedMatterId} matterName={selectedMatter?.name} selectedBatchId={selectedDataBatchId} onBatchChange={setSelectedDataBatchId} onOpenPublication={openPublication} openingPublication={openingPublication} /> : <>
 
         {selectedMatter?.executionMode === 'one-click-return' ? (
           <>
@@ -669,7 +676,7 @@ function Workspace({ license }: { license: LicenseStatus }) {
             <span>{selectedSystem?.session.status === 'authenticated' ? '提取完成后自动去重保存，可在回流任务中查看进度。' : selectedSystem?.session.status === 'unverified' ? '会话待验证，请检查网络。' : '请先在原系统标签页完成登录。'}</span>
             </div>
           </section>
-          {selectedSystem?.workspaceMode === 'list-ledger' ? <HrssLedgerPage key={selectedMatterId} matterId={selectedMatterId} matterName={selectedMatter.name} columns={selectedMatter.listColumns ?? []} preview onViewAll={() => { setSelectedDataBatchId(''); setMatterSection('data'); }} /> : <ReturnPreview systemId={selectedSystemId} matterId={selectedMatterId} onViewAll={() => { setSelectedDataBatchId(''); setMatterSection('data'); }} />}
+          {selectedSystem?.workspaceMode === 'list-ledger' ? <HrssLedgerPage defaultPageSize={defaultPageSize} key={selectedMatterId} matterId={selectedMatterId} matterName={selectedMatter.name} columns={selectedMatter.listColumns ?? []} preview onViewAll={() => { setSelectedDataBatchId(''); setMatterSection('data'); }} /> : <ReturnPreview systemId={selectedSystemId} matterId={selectedMatterId} onViewAll={() => { setSelectedDataBatchId(''); setMatterSection('data'); }} />}
           </>
         ) : <>
         <section className="query-workspace">
@@ -759,9 +766,9 @@ function Workspace({ license }: { license: LicenseStatus }) {
             <div className="actions">
               {compactQuery && <button className="text-button advanced-toggle" aria-expanded={showAdvancedFilters} onClick={() => setShowAdvancedFilters(value => !value)}>{showAdvancedFilters ? '收起更多条件' : `更多条件（${advancedFieldCount}）`}{activeAdvancedCount > 0 && ` · 已设置 ${activeAdvancedCount} 项`}</button>}
               <button className="secondary" onClick={() => setFilters({})}>清空条件</button>
-              <button className="primary" onClick={query} disabled={loading}>执行查询</button>
+              <button className="primary" onClick={() => query()} disabled={loading || queryLoading}>执行查询</button>
             </div>
-            {message && <div className="message">{message}</div>}
+            {(queryMessage || message) && <div className="message" role="status">{queryMessage || message}</div>}
           </div>
         </section>
 
@@ -771,7 +778,7 @@ function Workspace({ license }: { license: LicenseStatus }) {
               <h3>查询结果预览</h3>
             </div>
             {rows.length > 0 && (
-              <button className="primary" onClick={previewSync} disabled={loading}>预览同步变化</button>
+              <button className="primary" onClick={previewSync} disabled={queryLoading}>预览本页同步变化</button>
             )}
           </div>
           {syncPreview && (
@@ -780,11 +787,11 @@ function Workspace({ license }: { license: LicenseStatus }) {
               <div><span>新增</span><strong>{syncPreview.inserted}</strong></div>
               <div><span>更新</span><strong>{syncPreview.updated}</strong></div>
               <div><span>无变化</span><strong>{syncPreview.unchanged}</strong></div>
-              <button className="primary" onClick={commitSync} disabled={loading}>确认写入本地</button>
+              <button className="primary" onClick={commitSync} disabled={queryLoading}>确认写入本页</button>
             </div>
           )}
           {rows.length === 0 ? (
-            <div className="empty">暂无查询结果</div>
+            <div className="empty">{queryLoading ? '正在查询…' : '暂无查询结果'}</div>
           ) : (
             <div className="table-wrap">
               <table>
@@ -801,6 +808,8 @@ function Workspace({ license }: { license: LicenseStatus }) {
               </table>
             </div>
           )}
+          {queryResult && queryResult.total > queryResult.pageSize && <Pagination page={queryResult.page} total={queryResult.total}
+            pageCount={Math.ceil(queryResult.total / queryResult.pageSize)} onPage={page => query(page, queryResult.pageSize)} />}
         </section>
         </>}
         </>}
@@ -876,17 +885,18 @@ type TaskOutputRow = {
 
 function PlatformPage(props: {
   page: AppPage; license: LicenseStatus; components: ComponentSummary[]; onNavigate: (page: AppPage) => void; onSystemSelect: (id: string) => void;
+  onPageSizeSaved: (size: number) => void;
 }) {
   if (props.page === 'systems') return <ComponentCatalog components={props.components} license={props.license} onOpenTool={() => props.onNavigate('tools')} onOpenSystem={props.onSystemSelect} />;
   if (props.page === 'diagnostics') return <DiagnosticsPage onClose={() => props.onNavigate('settings')} />;
-  return <SettingsPage license={props.license} onOpenDiagnostics={() => props.onNavigate('diagnostics')} />;
+  return <SettingsPage license={props.license} onPageSizeSaved={props.onPageSizeSaved} onOpenDiagnostics={() => props.onNavigate('diagnostics')} />;
 }
 
 function PageHeader({ eyebrow, title, description, action, className = '' }: { eyebrow: string; title: string; description: string; action?: React.ReactNode; className?: string }) {
   return <header className={`page-header ${className}`}><div>{eyebrow && <span className="eyebrow">{eyebrow}</span>}<h1>{title}</h1><p>{description}</p></div>{action}</header>;
 }
 
-function TaskCenterPage({ systemId, matterId, matterName, onViewBatch }: { systemId: string; matterId: string; matterName?: string; onViewBatch: (batchId: string) => void }) {
+function TaskCenterPage({ systemId, matterId, matterName, pageSize, onViewBatch }: { pageSize: number; systemId: string; matterId: string; matterName?: string; onViewBatch: (batchId: string) => void }) {
   const [tasks, setTasks] = useState<RuntimeTask[]>([]);
   const [page, setPage] = useState(1);
   const [total, setTotal] = useState(0);
@@ -898,10 +908,10 @@ function TaskCenterPage({ systemId, matterId, matterName, onViewBatch }: { syste
     let timer: number;
     const refresh = async () => {
       try {
-        const result = await window.desktopApi.tasks.page({ systemId, matterId, page, pageSize: 20 });
+        const result = await window.desktopApi.tasks.page({ systemId, matterId, page, pageSize });
         if (disposed) return;
         setTasks(result.rows); setTotal(result.total); setError('');
-        setPage(Math.min(page, Math.max(1, Math.ceil(result.total / 20))));
+        setPage(Math.min(page, Math.max(1, Math.ceil(result.total / pageSize))));
       } catch {
         if (!disposed) { setTasks([]); setError('任务列表暂时无法加载，请稍后重试。'); }
       } finally {
@@ -911,7 +921,7 @@ function TaskCenterPage({ systemId, matterId, matterName, onViewBatch }: { syste
     setLoading(true); setTasks([]);
     void refresh();
     return () => { disposed = true; window.clearTimeout(timer); };
-  }, [systemId, matterId, page, revision]);
+  }, [systemId, matterId, page, pageSize, revision]);
   const cancel = async (id: string) => {
     try { await window.desktopApi.tasks.cancel(id); setRevision(value => value + 1); }
     catch (error) { setError(error instanceof Error ? error.message : '取消失败'); }
@@ -929,25 +939,26 @@ function TaskCenterPage({ systemId, matterId, matterName, onViewBatch }: { syste
       {tasks.map((task) => { const percent = taskProgressPercent(task.progress, task.status); return <tr key={task.id}><td className="batch-id" title={task.id}>{task.id.slice(0, 8).toUpperCase()}</td><td>{task.name}</td><td>{taskPeriod(task)}</td><td><span className={`status-chip ${task.status}`}>{taskStatusLabel(task.status)}</span></td><td><div className="task-progress">{percent !== undefined && <progress max={100} value={percent} aria-label={`${task.name}进度`} />}<span>{task.progress.message ?? (percent !== undefined ? `${percent}%` : '等待进度')}</span></div></td><td>{new Date(task.createdAt).toLocaleString()}</td><td className={task.error ? 'error-text' : ''}>{task.error ?? (task.finishedAt ? taskStatusLabel(task.status) : '执行中')}</td><td>{['queued', 'running'].includes(task.status) && <button className="link-button error-text" onClick={() => void cancel(task.id)}>取消</button>}{task.type === 'data-return' && task.status === 'completed' && <button className="link-button" onClick={() => onViewBatch(task.id)}>在回流数据中查看</button>}</td></tr>; })}
       {!tasks.length && <tr><td colSpan={8} className="empty">{loading ? '正在读取任务…' : error ? '暂时无法读取任务' : '暂无任务记录'}</td></tr>}
     </tbody></table></section>
-    {total > 20 && <Pagination page={page} pageCount={Math.ceil(total / 20)} total={total} onPage={setPage} />}
+    {total > pageSize && <Pagination page={page} pageCount={Math.ceil(total / pageSize)} total={total} onPage={setPage} />}
   </>;
 }
 
 type LocalRecord = { systemId: string; matterId: string; recordKey: string; data: Record<string, unknown>; firstSeenAt?: number; updatedAt?: number; rowNo?: number };
 
-function Pagination({ page, pageCount, total, onPage, pageSize, onPageSize }: { page: number; pageCount: number; total: number; onPage: (page: number) => void; pageSize?: number; onPageSize?: (size: number) => void }) {
-  return <div className="pagination"><span>共 {total} 条 · 第 {page}/{pageCount} 页</span>{onPageSize && <label>每页<select value={pageSize} onChange={(event) => onPageSize(Number(event.target.value))}><option value={20}>20</option><option value={50}>50</option><option value={100}>100</option></select>条</label>}<button className="secondary" disabled={page <= 1} onClick={() => onPage(page - 1)}>上一页</button><button className="secondary" disabled={page >= pageCount} onClick={() => onPage(page + 1)}>下一页</button></div>;
+function Pagination({ page, pageCount, total, onPage, pageSize, defaultPageSize = DEFAULT_APP_SETTINGS.defaultPageSize, onPageSize }: { defaultPageSize?: number; page: number; pageCount: number; total: number; onPage: (page: number) => void; pageSize?: number; onPageSize?: (size: number) => void }) {
+  return <div className="pagination"><span>共 {total} 条 · 第 {page}/{pageCount} 页</span>{onPageSize && <label>每页<select value={pageSize} onChange={(event) => onPageSize(Number(event.target.value))}><PageSizeOptions defaultPageSize={defaultPageSize} /></select>条</label>}<button className="secondary" disabled={page <= 1} onClick={() => onPage(page - 1)}>上一页</button><button className="secondary" disabled={page >= pageCount} onClick={() => onPage(page + 1)}>下一页</button></div>;
 }
 
-function LocalDataPage({ systemId, matterId, matterName, selectedBatchId, onBatchChange, onOpenPublication, openingPublication }: { systemId: string; matterId: string; matterName?: string; selectedBatchId: string; onBatchChange: (batchId: string) => void; onOpenPublication: (id: PublicationPlatformId) => Promise<void>; openingPublication: PublicationPlatformId | null }) {
+function LocalDataPage({ systemId, matterId, matterName, selectedBatchId, onBatchChange, onOpenPublication, openingPublication, defaultPageSize, allowExport }: { defaultPageSize: number; allowExport: boolean; systemId: string; matterId: string; matterName?: string; selectedBatchId: string; onBatchChange: (batchId: string) => void; onOpenPublication: (id: PublicationPlatformId) => Promise<void>; openingPublication: PublicationPlatformId | null }) {
   const [keyword, setKeyword] = useState('');
   const batchPages = useCompletedBatches(systemId, matterId, selectedBatchId);
+  const [appliedKeyword, setAppliedKeyword] = useState('');
   const { batches } = batchPages;
   const selectedBatch = batches.find(task => task.id === selectedBatchId);
   const [rows, setRows] = useState<LocalRecord[]>([]);
   const [total, setTotal] = useState(0);
   const [page, setPage] = useState(1);
-  const [pageSize, setPageSize] = useState(50);
+  const [pageSize, setPageSize] = useState(defaultPageSize);
   const [selected, setSelected] = useState<LocalRecord | null>(null);
   const [editing, setEditing] = useState(false);
   const [draftData, setDraftData] = useState<Record<string, unknown>>({});
@@ -971,13 +982,15 @@ function LocalDataPage({ systemId, matterId, matterName, selectedBatchId, onBatc
     return () => { exportGeneration.current++; listGeneration.current++; detailGeneration.current++; };
   }, [systemId, matterId, selectedBatchId]);
   const rowIssues = useMemo(() => new Map(validateExport(rows).issues.map(issue => [issue.recordKey, issue])), [rows]);
-  const load = async (targetPage = page, targetPageSize = pageSize, batchId = selectedBatchId) => {
+  const load = async (targetPage = page, targetPageSize = pageSize, filter = appliedKeyword) => {
     const generation = ++listGeneration.current;
+    exportGeneration.current++;
+    setExportResult(null);
     setRows([]); setTotal(0); setLoadingRows(true); setListError('');
     try {
-      const search = keyword.trim() || undefined;
-      if (batchId) {
-        const result = await window.desktopApi.tasks.output(batchId, targetPage, targetPageSize, search) as { rows: TaskOutputRow[]; total: number };
+      const search = filter || undefined;
+      if (selectedBatchId) {
+        const result = await window.desktopApi.tasks.output(selectedBatchId, targetPage, targetPageSize, search) as { rows: TaskOutputRow[]; total: number };
         if (generation !== listGeneration.current) return;
         setRows(result.rows);
         setTotal(result.total);
@@ -986,7 +999,7 @@ function LocalDataPage({ systemId, matterId, matterName, selectedBatchId, onBatc
         if (generation !== listGeneration.current) return;
         setRows(result.rows); setTotal(result.total);
       }
-      setPage(targetPage); setPageSize(targetPageSize);
+      setAppliedKeyword(filter); setPage(targetPage); setPageSize(targetPageSize);
     } catch (error) {
       if (generation === listGeneration.current) setListError(error instanceof Error ? error.message : '读取回流数据失败，请重新查询');
     } finally {
@@ -996,15 +1009,16 @@ function LocalDataPage({ systemId, matterId, matterName, selectedBatchId, onBatc
   useEffect(() => {
     setKeyword(''); setPage(1); setSelected(null);
   }, [systemId, matterId]);
-  useLayoutEffect(() => { void load(1, pageSize, selectedBatchId); }, [systemId, matterId, selectedBatchId]);
+  useLayoutEffect(() => { void load(1, pageSize); }, [systemId, matterId, selectedBatchId]);
+  const exportDisabled = exporting || loadingRows || !total || Boolean(listError);
   const exportData = async (target?: GovernmentExportTarget) => {
-    if (exportInFlight.current) return;
+    if (!allowExport || exportDisabled || exportInFlight.current) return;
     const generation = exportGeneration.current;
     exportInFlight.current = true; setExporting(true); setExportingTarget(target); setMessage(''); setExportResult(null);
     try {
       const result = selectedBatchId
-        ? await window.desktopApi.tasks.exportOutput(selectedBatchId, keyword.trim() || undefined, target) as ExportResult | null
-        : await window.desktopApi.records.export({ keyword: keyword.trim() || undefined, systemId, matterId }, 'xlsx', target) as ExportResult | null;
+        ? await window.desktopApi.tasks.exportOutput(selectedBatchId, appliedKeyword || undefined, target) as ExportResult | null
+        : await window.desktopApi.records.export({ keyword: appliedKeyword || undefined, systemId, matterId }, 'xlsx', target) as ExportResult | null;
       if (generation === exportGeneration.current) {
         setExportResult(result);
         if (!result) setMessage('已取消导出');
@@ -1072,15 +1086,15 @@ function LocalDataPage({ systemId, matterId, matterName, selectedBatchId, onBatc
   };
   return <>
     <PageHeader className={supportsGovernmentExport(systemId) ? 'publication-page-header' : ''} eyebrow="事项工作区 / 本地数据" title={`${matterName ?? '当前事项'} · 回流数据`} description={selectedBatchId ? `当前查看批次 ${selectedBatchId.slice(0, 8).toUpperCase()}，共 ${total} 条回流记录。` : `当前查看合并台账，共 ${total} 条回流记录。`} action={<div className="button-row publication-actions">
-      {supportsGovernmentExport(systemId) ? (['guangdong-law', 'nanshan'] as const).map((target, index) => <button key={target} className={index === 0 ? 'primary' : 'secondary'} disabled={exporting} aria-busy={exporting && exportingTarget === target} title={`${selectedBatchId ? '导出当前批次' : '导出当前筛选台账'}，使用${GOVERNMENT_EXPORT_LABELS[target]}模板`} onClick={() => void exportData(target)}><AppIcon name="download" size={16} />{exporting && exportingTarget === target ? '导出中…' : `导出${GOVERNMENT_EXPORT_LABELS[target]}`}</button>) : <button className="primary" disabled={exporting} aria-busy={exporting} onClick={() => void exportData()}><AppIcon name="download" size={16} />{exporting ? '导出中…' : `导出数据${selectedBatchId ? '当前批次' : ''}`}</button>}
+      {allowExport && (supportsGovernmentExport(systemId) ? (['guangdong-law', 'nanshan'] as const).map((target, index) => <button key={target} className={index === 0 ? 'primary' : 'secondary'} disabled={exportDisabled} aria-busy={exporting && exportingTarget === target} title={`${selectedBatchId ? '导出当前批次' : '导出当前筛选台账'}，使用${GOVERNMENT_EXPORT_LABELS[target]}模板`} onClick={() => void exportData(target)}><AppIcon name="download" size={16} />{exporting && exportingTarget === target ? '导出中…' : `导出${GOVERNMENT_EXPORT_LABELS[target]}`}</button>) : <button className="primary" disabled={exportDisabled} aria-busy={exporting} onClick={() => void exportData()}><AppIcon name="download" size={16} />{exporting ? '导出中…' : `导出数据${selectedBatchId ? '当前批次' : ''}`}</button>)}
       {publicationPlatformsForSystem(systemId).map(platform => <button className="secondary" key={platform.id} disabled={Boolean(openingPublication)} aria-busy={openingPublication === platform.id} title={`打开${platform.name}，登录后保留页面`} onClick={() => void onOpenPublication(platform.id)}><AppIcon name="upload" size={16} />{openingPublication === platform.id ? '正在打开…' : platform.buttonLabel}</button>)}
     </div>} />
     {message && <div className="message page-message" role="status">{message}</div>}
     {batchPages.error && <div className="inline-error" role="status">{batchPages.error}</div>}
-    {exportResult && <ExportNotice result={exportResult} />}
-    <section className="panel filter-bar batch-filter-bar"><label><span>回流批次</span><select value={selectedBatchId} onChange={(event) => selectBatchOption(event.target.value, batchPages, onBatchChange)}><option value="">当前合并台账（可修改）</option>{batches.map((task) => <option value={task.id} key={task.id}>{batchLabel(task)}</option>)}<BatchPageOptions {...batchPages} /></select></label><label><span>数据搜索</span><input value={keyword} onChange={(event) => setKeyword(event.target.value)} onKeyDown={(event) => { if (event.key === 'Enter') void load(1, pageSize); }} placeholder="搜索行政相对人、证件号码或许可项目"/></label><button className="primary" onClick={() => void load(1, pageSize)}>查询</button></section>
+    {allowExport && exportResult && <ExportNotice result={exportResult} />}
+    <section className="panel filter-bar batch-filter-bar"><label><span>回流批次</span><select value={selectedBatchId} onChange={(event) => selectBatchOption(event.target.value, batchPages, onBatchChange)}><option value="">当前合并台账（可修改）</option>{batches.map((task) => <option value={task.id} key={task.id}>{batchLabel(task)}</option>)}<BatchPageOptions {...batchPages} /></select></label><label><span>数据搜索</span><input value={keyword} onChange={(event) => setKeyword(event.target.value)} onKeyDown={(event) => { if (event.key === 'Enter') void load(1, pageSize, keyword.trim()); }} placeholder="搜索行政相对人、证件号码或许可项目"/></label><button className="primary" onClick={() => void load(1, pageSize, keyword.trim())}>查询</button></section>
     <section className="panel data-panel record-table-panel" aria-busy={loadingRows}><table><thead><tr><th>序号</th>{listColumns.map(([key, label]) => <th key={key}>{label}</th>)}<th>字段状态</th><th>{selectedBatchId ? '批次完成时间' : '更新时间'}</th><th>操作</th></tr></thead><tbody>{rows.map((row, index) => { const issue = rowIssues.get(row.recordKey); const timestamp = selectedBatchId ? selectedBatch?.finishedAt ?? selectedBatch?.createdAt : row.updatedAt; return <tr className={issue ? 'record-row-warning' : ''} key={`${row.systemId}-${row.matterId}-${row.recordKey}-${row.rowNo ?? index}`}><td>{row.rowNo ?? ((page - 1) * pageSize + index + 1)}</td>{listColumns.map(([key]) => { const value = String(row.data[key] ?? '').trim(); return <td key={key} className={`record-cell record-cell-${key}`}><span className="cell-ellipsis" title={value}>{value || '—'}</span></td>; })}<td><span className={`status-chip ${issue ? 'warning' : 'ready'}`} title={issue?.fields.map(field => `${field.label}：${field.message}`).join('\n')}>{issue ? `待核对 ${issue.fields.length} 项` : '无填写问题'}</span></td><td className="record-time-cell">{timestamp == null ? '—' : new Date(timestamp).toLocaleString()}</td><td><button className="link-button" onClick={() => void openRecord(row)}>{selectedBatchId ? '查看快照' : '查看修改'}</button></td></tr>; })}{!rows.length && <tr><td colSpan={listColumns.length + 4} className="empty">{loadingRows ? '正在读取回流数据…' : listError || '当前查询条件暂无回流数据'}</td></tr>}</tbody></table></section>
-    <Pagination page={page} pageCount={pageCount} total={total} pageSize={pageSize} onPage={(target) => void load(target, pageSize)} onPageSize={(size) => void load(1, size)} />
+    <Pagination page={page} pageCount={pageCount} total={total} pageSize={pageSize} defaultPageSize={defaultPageSize} onPage={(target) => void load(target, pageSize)} onPageSize={(size) => void load(1, size)} />
     {selected && <Modal backdropClassName="drawer-backdrop" className="record-drawer" labelledBy="record-detail-title" onClose={closeRecord}>
       <div className="drawer-head"><div className="drawer-title"><span className="eyebrow">{selectedBatchId ? '批次快照' : '记录详情'}</span><h2 id="record-detail-title">{selectedTitle}</h2><p>{selectedDocumentNo || '未填写许可文书号'}</p></div><div className="drawer-actions">{!selectedBatchId && (editing ? <><button className="secondary" disabled={saving} onClick={() => { setDraftData({ ...selected.data }); setEditing(false); setDrawerMessage(''); }}>取消</button><button className="primary" disabled={saving} onClick={() => void saveRecord()}>{saving ? '保存中…' : '保存修改'}</button></> : <button className="primary" onClick={() => { setEditing(true); setDrawerMessage(''); }}>修改数据</button>)}<button className="secondary" disabled={saving} onClick={closeRecord}>关闭</button></div></div>
       {drawerMessage && <div className="inline-error drawer-message">{drawerMessage}</div>}
@@ -1116,9 +1130,9 @@ function SystemCredentialPanel({ systemId, systemName, onClose, onLogin }: { sys
   return <section className="panel credential-card system-credential-card"><div className="panel-head"><div><span className="eyebrow">当前系统 / 账号</span><h3>{systemName} · 系统账号配置</h3></div><div className="drawer-actions"><span className={`status-chip ${configured ? 'ready' : 'disabled'}`}>{configured ? '已配置' : '未配置'}</span><button className="secondary" onClick={onClose}>收起</button></div></div><p>这是当前业务系统自己的账号配置，仅供该系统内部事项共用，不会应用到其他业务系统。</p><div className="credential-form"><label><span>系统账号</span><input value={account} onChange={(event) => setAccount(event.target.value)} autoComplete="username" placeholder="请输入系统账号" /></label><label><span>系统密码</span><input type="password" value={password} onChange={(event) => setPassword(event.target.value)} autoComplete="current-password" placeholder={configured ? '输入新密码可更新配置' : '请输入系统密码'} /></label><button className="primary" disabled={!account.trim() || !password} onClick={() => void save()}>{configured ? '更新并打开登录页' : '保存并打开登录页'}</button></div>{message && <div className="message page-message">{message}</div>}</section>;
 }
 
-function SettingsPage({ license, onOpenDiagnostics }: { license: LicenseStatus; onOpenDiagnostics: () => void }) {
+function SettingsPage({ license, onOpenDiagnostics, onPageSizeSaved }: { license: LicenseStatus; onOpenDiagnostics: () => void; onPageSizeSaved: (size: number) => void }) {
   const access = workspaceAccess(license);
-  const [settings, setSettings] = useState<Record<string, unknown> | null>(null);
+  const [settings, setSettings] = useState<AppSettings | null>(null);
   const [audit, setAudit] = useState<Array<{ id: string; type: string; createdAt: number; systemId?: string }>>([]);
   const [message, setMessage] = useState('');
   const [updateMessage, setUpdateMessage] = useState('');
@@ -1126,8 +1140,17 @@ function SettingsPage({ license, onOpenDiagnostics }: { license: LicenseStatus; 
   const [checkingUpdate, setCheckingUpdate] = useState(false);
   useEffect(() => { setUpdateMessage(''); }, [updateState?.status, updateState?.version, updateState?.checkedAt]);
   const [diagnosticClicks, setDiagnosticClicks] = useState(0);
-  useEffect(() => { void Promise.all([window.desktopApi.settings.get(), window.desktopApi.audit.list()]).then(([s, a]) => { setSettings(s as Record<string, unknown>); setAudit(a as typeof audit); }); }, []);
-  const save = async () => { try { setSettings(await window.desktopApi.settings.update(settings ?? {}) as Record<string, unknown>); setMessage('设置已保存'); } catch (error) { setMessage(error instanceof Error ? error.message : '保存失败'); } };
+  useEffect(() => { void Promise.all([window.desktopApi.settings.get(), window.desktopApi.audit.list()]).then(([s, a]) => { setSettings(s); setAudit(a as typeof audit); }).catch(() => setMessage('读取设置失败，请重新打开设置页面')); }, []);
+  const save = async () => {
+    if (!settings) return;
+    try {
+      const saved = await window.desktopApi.settings.update({
+        ...(access.hasSystems ? { defaultPageSize: settings.defaultPageSize, taskConcurrency: settings.taskConcurrency } : {}),
+        ...(updateState?.kind === 'business' ? {} : { autoCheckUpdates: settings.autoCheckUpdates }),
+      });
+      setSettings(saved); onPageSizeSaved(saved.defaultPageSize); setMessage('设置已保存');
+    } catch (error) { setMessage(error instanceof Error ? error.message : '保存失败'); }
+  };
   const checkUpdates = async () => {
     setUpdateMessage('正在校验更新清单…');
     setCheckingUpdate(true);
@@ -1159,7 +1182,7 @@ function SettingsPage({ license, onOpenDiagnostics }: { license: LicenseStatus; 
     <PageHeader eyebrow="" title="设置" description="调整使用偏好，检查应用更新。" />
     {message && <div className="message page-message" role="status">{message}</div>}
     <div className="settings-grid">
-      <section className="panel settings-card runtime-settings"><h3>使用偏好</h3>{settings && <div className="settings-form">{access.hasSystems && <><label><span>默认每页数量</span><input type="number" value={Number(settings.defaultPageSize)} onChange={(e) => setSettings({ ...settings, defaultPageSize: Number(e.target.value) })}/></label><label><span>任务并发数</span><input type="number" value={Number(settings.taskConcurrency)} onChange={(e) => setSettings({ ...settings, taskConcurrency: Number(e.target.value) })}/></label></>}{updateState?.kind === 'business' ? <p className="muted">启动时检查业务更新；确认存在新版本后，更新完成才能进入应用。无法联网且尚未确认新版时，可使用已校验的本地版本。</p> : <label className="check-row"><input type="checkbox" checked={Boolean(settings.autoCheckUpdates)} onChange={(e) => setSettings({ ...settings, autoCheckUpdates: e.target.checked })}/><span>自动检查并下载更新</span></label>}<button className="primary" onClick={save}>保存设置</button></div>}</section>
+      <section className="panel settings-card runtime-settings"><h3>使用偏好</h3>{settings && <div className="settings-form">{access.hasSystems && <><label><span>默认每页数量</span><input type="number" min={10} max={500} step={1} value={settings.defaultPageSize} onChange={(e) => setSettings({ ...settings, defaultPageSize: Number(e.target.value) })}/></label><label><span>任务并发数</span><input type="number" min={1} max={10} step={1} value={settings.taskConcurrency} onChange={(e) => setSettings({ ...settings, taskConcurrency: Number(e.target.value) })}/></label></>}{updateState?.kind === 'business' ? <p className="muted">启动时检查业务更新；确认存在新版本后，更新完成才能进入应用。无法联网且尚未确认新版时，可使用已校验的本地版本。</p> : <label className="check-row"><input type="checkbox" checked={Boolean(settings.autoCheckUpdates)} onChange={(e) => setSettings({ ...settings, autoCheckUpdates: e.target.checked })}/><span>自动检查并下载更新</span></label>}<button className="primary" onClick={save}>保存设置</button></div>}</section>
       <UpdateStatus state={updateState} checking={checkingUpdate} message={updateMessage} onCheck={() => void checkUpdates()} onInstall={() => void installUpdate()} />
     </div>
     <section className="panel audit-card"><div className="panel-head"><h3>最近操作记录</h3><span className="muted">仅保存在本机</span></div><div className="audit-list">{audit.filter(event => !event.systemId || access.canOpenSystem(event.systemId)).slice(0, 20).map((event) => <div key={event.id}><span>{event.type}</span><strong>{event.systemId ? shortSystemName(event.systemId) : '平台'}</strong><time>{new Date(event.createdAt).toLocaleString()}</time></div>)}{!audit.some(event => !event.systemId || access.canOpenSystem(event.systemId)) && <div className="empty">暂无操作记录</div>}</div></section>

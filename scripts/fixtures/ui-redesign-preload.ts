@@ -17,6 +17,7 @@ contextBridge.exposeInMainWorld('desktopApi', {
   exports: group('exports', ['openFolder']),
   settings: group('settings', ['get', 'update']),
   credentials: group('credentials', ['status', 'save']),
+  practitionerNumbers: group('practitionerNumbers', ['get', 'save']),
   audit: group('audit', ['list']),
   diagnostics: group('diagnostics', ['list', 'openFolder', 'export', 'report']),
   updates: {
