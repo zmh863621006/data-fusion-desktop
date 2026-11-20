@@ -323,6 +323,30 @@ async function verifyLicenseComponentFilter() {
   await clickText('重置');
 }
 
+async function verifyDisabledCustomerLicense() {
+  await route('overview');
+  bootstrap.customers[0].enabled = 0;
+  await clickText('刷新', '.admin-topbar button');
+  await until(() => dom(`document.querySelector('.overview-licenses [data-row-key="fixture-license"]')?.innerText.includes('客户已停用')`), 'disabled customer in overview');
+  assert.equal(await dom(`[...document.querySelectorAll('.ant-statistic')].find(node => node.querySelector('.ant-statistic-title')?.textContent === '有效授权')?.querySelector('.ant-statistic-content-value')?.textContent`), '0'); checks++;
+  await route('licenses');
+  for (const [status, visible] of [['有效', false], ['客户已停用', true]] as const) {
+    await dom(`document.querySelector('.ant-pro-table-search input[id$="status"]').closest('.ant-select-selector').dispatchEvent(new MouseEvent('mousedown',{bubbles:true,cancelable:true}))`);
+    await until(() => dom(`[...document.querySelectorAll('.ant-select-item-option-content')].some(node=>node.textContent === ${JSON.stringify(status)} && node.getBoundingClientRect().width)`), 'license status options');
+    await clickText(status, '.ant-select-item-option-content');
+    await dom(`document.querySelector('.ant-pro-table-search form, form.ant-pro-query-filter').requestSubmit()`);
+    await until(() => dom(`Boolean(document.querySelector('tr[data-row-key="fixture-license"]')) === ${visible}`), 'customer status filter');
+    checks++;
+  }
+  await drawer('详情', 'disabled-customer-license');
+  assert.equal(await dom(`document.querySelector('.ant-drawer-open').innerText.includes('客户已停用')`), true);
+  assert.equal(await dom(`[...document.querySelectorAll('.ant-drawer-open button')].some(button => /调整授权|续期|补发/.test(button.textContent))`), false); checks++;
+  await closeDrawer(); await clickText('重置');
+  bootstrap.customers[0].enabled = 1;
+  await clickText('刷新', '.admin-topbar button');
+  await until(() => dom(`document.querySelector('tr[data-row-key="fixture-license"] .ant-tag-success')?.textContent === '有效'`), 'reenabled customer license');
+}
+
 async function verifyScopeEditing() {
   await route('licenses');
   await clickText('签发授权');
@@ -445,7 +469,7 @@ async function run() {
     for (const label of ['后台账号', '我的登录会话', '登录安全日志']) { await clickText(label, '.security-tabs [role="tab"]'); await verifyBounds(`security-${label}-${width}`); }
     await modal('修改我的密码', `password-change-${width}`); await modal('新增账号', `account-create-${width}`);
   }
-  main.setContentSize(1440, 1000);await verifyLicenseComponentFilter();await verifyScopeEditing();await verifyReleaseTargets();await verifyReleasePublishing();await verifyBusinessUpdates();await route('overview');
+  main.setContentSize(1440, 1000);await verifyLicenseComponentFilter();await verifyDisabledCustomerLicense();await verifyScopeEditing();await verifyReleaseTargets();await verifyReleasePublishing();await verifyBusinessUpdates();await route('overview');
   await dom(`document.querySelector('.ant-pro-sider-collapsed-button')?.click()`); await settle();
   assert.equal(await dom(`Boolean(document.querySelector('.ant-layout-sider-collapsed'))`), true); checks++;
   await verifyBounds('sidebar-collapsed'); await screenshot('sidebar-collapsed');

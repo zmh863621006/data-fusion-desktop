@@ -43,13 +43,16 @@ function parseGrant(value: unknown): LicenseGrant {
   if (value.deviceId !== undefined && (typeof value.deviceId !== 'string' || !/^[a-f0-9]{64}$/.test(value.deviceId))) {
     throw new Error('授权设备信息无效');
   }
-  if (value.allowedMatters !== undefined) {
+  if (value.allowedMatters != null) {
     if (!isRecord(value.allowedMatters) || Object.entries(value.allowedMatters).some(
-      ([systemId, matters]) => !/^[a-z0-9][a-z0-9-]*$/.test(systemId) || !validIds(matters),
+      ([systemId, matters]) => !/^[a-z0-9][a-z0-9-]*$/.test(systemId) || (matters !== null && !validIds(matters)),
     )) throw new Error('授权事项范围无效');
   }
   if (value.allowedTools !== undefined && !validIds(value.allowedTools)) throw new Error('授权工具范围无效');
-  return value as unknown as LicenseGrant;
+  // Older signed grants used null for all matters. An explicit empty list grants none.
+  const allowedMatters = value.allowedMatters == null ? undefined
+    : Object.fromEntries(Object.entries(value.allowedMatters).filter(([, ids]) => ids !== null));
+  return { ...value, allowedMatters } as unknown as LicenseGrant;
 }
 
 export function verifySignedLicense(envelope: SignedLicenseEnvelope, publicKeyPem: string, options: { allowExpiredForRefresh?: boolean } = {}): LicenseGrant {

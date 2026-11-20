@@ -127,9 +127,24 @@ export function LoginPage({ onSuccess, initialError }: { onSuccess: (data: Boots
   </main>;
 }
 
+const licenseStatusLabels = { active: '有效', revoked: '已停用', expired: '已过期', customerDisabled: '客户已停用' } as const;
+
+function useLicenseStatus(customers: CustomerRecord[]) {
+  const disabledCustomers = useMemo(() => new Set(customers.filter(customer => !customer.enabled).map(customer => customer.id)), [customers]);
+  return (license: LicenseRecord): keyof typeof licenseStatusLabels => {
+    if (license.status === 'revoked') return 'revoked';
+    if (disabledCustomers.has(license.customer_id)) return 'customerDisabled';
+    return license.expires_at <= Date.now() ? 'expired' : 'active';
+  };
+}
+function LicenseStatusTag({ status }: { status: keyof typeof licenseStatusLabels }) {
+  return <Tag color={status === 'active' ? 'success' : 'default'}>{licenseStatusLabels[status]}</Tag>;
+}
+
 function Overview({ data, onNavigate }: { data: BootstrapData; onNavigate: (page: PageKey) => void }) {
-  const activeLicenses = data.licenses.filter((item) => item.status === 'active' && item.expires_at > Date.now());
-  const activeDevices = data.devices.filter((item) => item.status === 'active');
+  const statusOf = useLicenseStatus(data.customers);
+  const activeLicenses = data.licenses.filter(item => statusOf(item) === 'active');
+  const activeDevices = data.devices.filter(item => item.status === 'active');
   const stats = [
     { title: '客户', value: data.customers.length, icon: <TeamOutlined />, color: 'neutral' },
     { title: '有效授权', value: activeLicenses.length, icon: <KeyOutlined />, color: 'neutral' },
@@ -145,7 +160,7 @@ function Overview({ data, onNavigate }: { data: BootstrapData; onNavigate: (page
         { title: '授权范围', width: '38%', render: (_, row) => [...jsonArray(row.allowed_systems_json), ...jsonArray(row.allowed_tools_json)].map(id => names.get(id) ?? id).join('、') || '—' },
         { title: '方式', dataIndex: 'mode', width: 85, render: (_, row) => <Tag color={row.mode === 'online' ? 'blue' : 'gold'}>{row.mode === 'online' ? '在线' : '离线'}</Tag> },
         { title: '有效期至', dataIndex: 'expires_at', width: 120, render: (_, row) => dateOnly(row.expires_at) },
-        { title: '状态', dataIndex: 'status', width: 90, render: (_, row) => <Tag color={row.status === 'active' && row.expires_at > Date.now() ? 'success' : 'default'}>{row.status === 'active' && row.expires_at > Date.now() ? '有效' : '已失效'}</Tag> },
+        { title: '状态', dataIndex: 'status', width: 110, render: (_, row) => <LicenseStatusTag status={statusOf(row)} /> },
       ]} /></Card>
     <Card title="授权与版本说明" bordered={false} className="overview-notes"><div className="overview-note-grid">
       <div className="model-item"><CloudServerOutlined /><div><strong>在线激活</strong><span>激活码绑定设备，在线校验与自动更新</span></div></div>
@@ -194,13 +209,15 @@ function LicensesPage({ data, reload }: { data: BootstrapData; reload: () => Pro
   const canManage = data.user?.role !== 'viewer';
   const { message, modal } = AntApp.useApp();
   const [open, setOpen] = useState(false);
-  const [selected, setSelected] = useState<LicenseRecord | null>(null);
+  const [selectedId, setSelectedId] = useState<string | null>(null);
+  const selected = data.licenses.find(license => license.id === selectedId);
   const [renewing, setRenewing] = useState<LicenseRecord | null>(null);
   const [scopeEditing, setScopeEditing] = useState<LicenseRecord | null>(null);
   const [filters, setFilters] = useState<Record<string, unknown>>({});
   const systemMap = useMemo(() => new Map(data.systems.map((item) => [item.id, item.name])), [data.systems]);
   const matterMap = useMemo(() => new Map(data.matters.map((item) => [`${item.system_id}:${item.id}`, item.name])), [data.matters]);
-  const statusOf = (row: LicenseRecord) => row.status === 'revoked' ? 'revoked' : row.expires_at <= Date.now() ? 'expired' : 'active';
+  const statusOf = useLicenseStatus(data.customers);
+  const selectedStatus = selected && statusOf(selected);
   const componentOptions = useMemo(() => {
     const names = new Map<string, string>();
     for (const item of data.systems) names.set('system:' + item.id, item.name);
@@ -223,18 +240,18 @@ function LicensesPage({ data, reload }: { data: BootstrapData; reload: () => Pro
     { title: '授权系统 / 工具', dataIndex: 'allowed_systems_json', search: false, render: (_, row) => <Space size={[0, 4]} wrap>{jsonArray(row.allowed_systems_json).map((id) => <Tag key={id}>{systemMap.get(id) ?? id}</Tag>)}{jsonArray(row.allowed_tools_json).map(id => <Tag color="purple" key={`tool:${id}`}>{data.tools?.find(tool => tool.id === id)?.name ?? id}</Tag>)}</Space> },
     { title: '设备数', dataIndex: 'max_devices', width: 85, search: false },
     { title: '有效期至', dataIndex: 'expires_at', width: 125, valueType: 'date', search: false, render: (_, row) => dateOnly(row.expires_at) },
-    { title: '状态', dataIndex: 'status', width: 90, valueEnum: { active: '有效', revoked: '已停用', expired: '已过期' }, render: (_, row) => <Tag color={statusOf(row) === 'active' ? 'success' : 'default'}>{statusOf(row) === 'active' ? '有效' : statusOf(row) === 'revoked' ? '已停用' : '已过期'}</Tag> },
-    { title: '操作', valueType: 'option', width: 150, render: (_, row) => <Space><Button type="link" icon={<EyeOutlined />} onClick={() => setSelected(row)}>详情</Button>{canManage && row.status === 'active' && <Popconfirm title="确定停用该授权？" description="其下在线设备将在下次校验时失效。" onConfirm={async () => { await adminApi.revokeLicense(row.id); message.success('授权已停用'); await reload(); }}><Button danger type="link">停用</Button></Popconfirm>}</Space> },
+    { title: '状态', dataIndex: 'status', width: 110, valueEnum: licenseStatusLabels, render: (_, row) => <LicenseStatusTag status={statusOf(row)} /> },
+    { title: '操作', valueType: 'option', width: 150, render: (_, row) => <Space><Button type="link" icon={<EyeOutlined />} onClick={() => setSelectedId(row.id)}>详情</Button>{canManage && row.status === 'active' && <Popconfirm title="确定停用该授权？" description="其下在线设备将在下次校验时失效。" onConfirm={async () => { await adminApi.revokeLicense(row.id); message.success('授权已停用'); await reload(); }}><Button danger type="link">停用</Button></Popconfirm>}</Space> },
   ];
   const showKey = (value: string, offline: boolean) => modal.info({
     width: 720, title: offline ? '离线许可证已生成' : '在线激活码已生成',
     content: <div className="key-result"><Typography.Paragraph type="secondary">密钥只在本次操作中展示，请立即保存并安全交付。</Typography.Paragraph><Input.TextArea value={value} autoSize={{ minRows: 4, maxRows: 10 }} readOnly /><Button icon={<KeyOutlined />} onClick={async () => { await navigator.clipboard.writeText(value); message.success('密钥已复制'); }}>复制密钥</Button></div>,
   });
   return <PageContainer title="授权管理" subTitle="签发在线激活码或绑定设备的离线许可证">
-    {scopeEditing && canManage && <LicenseScopeEditor key={scopeEditing.id} license={scopeEditing} data={data} onClose={() => setScopeEditing(null)} onSaved={async () => { setSelected(null); await reload(); }} />}
+    {scopeEditing && canManage && <LicenseScopeEditor key={scopeEditing.id} license={scopeEditing} data={data} onClose={() => setScopeEditing(null)} onSaved={async () => { setSelectedId(null); await reload(); }} />}
     <ModalForm<{ expiresDate: string }> title="授权续期" open={Boolean(renewing)} onOpenChange={(value) => { if (!value) setRenewing(null); }} modalProps={{ destroyOnClose: true }} onFinish={async (values) => {
       if (!renewing) return false;
-      try { await adminApi.renewLicense(renewing.id, dayjs(values.expiresDate).endOf('day').valueOf()); message.success(renewing.mode === 'offline' ? '已续期，请补发许可证并在客户端重新导入' : '已续期，客户端下次在线校验生效'); setSelected(null); await reload(); return true; } catch { return false; }
+      try { await adminApi.renewLicense(renewing.id, dayjs(values.expiresDate).endOf('day').valueOf()); message.success(renewing.mode === 'offline' ? '已续期，请补发许可证并在客户端重新导入' : '已续期，客户端下次在线校验生效'); setSelectedId(null); await reload(); return true; } catch { return false; }
     }}><ProFormDatePicker name="expiresDate" label="新的截止日期" rules={[{ required: true }]} /></ModalForm>
     <ProTable<LicenseRecord> rowKey="id" headerTitle="全部授权" dataSource={filteredRows} columns={columns} search={adminTableSearch} onSubmit={(values) => setFilters(values)} onReset={() => setFilters({})} pagination={{ pageSize: 10 }} options={{ reload }} scroll={{ x: 1050 }} toolBarRender={() => canManage ? [<Button type="primary" icon={<PlusOutlined />} key="new" onClick={() => setOpen(true)}>签发授权</Button>] : []} />
     <ModalForm<LicenseValues> title="签发授权" width={720} open={open} onOpenChange={setOpen} modalProps={{ destroyOnClose: true, keyboard: false, maskClosable: false }} initialValues={{ mode: 'online', scope: emptyScope, maxDevices: 1, allowExport: true, allowAutoSync: false, allowAutoUpdate: true }} onFinish={async (values) => {
@@ -252,11 +269,11 @@ function LicensesPage({ data, reload }: { data: BootstrapData; reload: () => Pro
       <ProFormDependency name={['mode']}>{({ mode }) => mode === 'offline' ? <ProFormText name="deviceId" label="离线设备码" fieldProps={{ maxLength: 64, showCount: true }} rules={[{ required: true }, { pattern: /^[a-f0-9]{64}$/, message: '请输入 64 位小写设备码' }]} /> : null}</ProFormDependency>
       <Row gutter={16}><Col span={8}><ProFormSwitch name="allowExport" label="允许导出" /></Col><Col span={8}><ProFormSwitch name="allowAutoSync" label="允许自动同步" /></Col><Col span={8}><ProFormDependency name={['mode']}>{({ mode }) => mode === 'online' ? <ProFormSwitch name="allowAutoUpdate" label="允许自动更新" /> : null}</ProFormDependency></Col></Row>
     </ModalForm>
-    <Drawer width={620} className="license-details-drawer" title="授权详情" open={Boolean(selected)} onClose={() => setSelected(null)} extra={selected?.status === 'active' && data.user?.role !== 'viewer' ? <Space wrap>
-      <Button icon={<EditOutlined />} disabled={selected.expires_at <= Date.now()} title={selected.expires_at <= Date.now() ? '请先续期授权' : undefined} onClick={() => setScopeEditing(selected)}>调整授权</Button>
+    <Drawer width={620} className="license-details-drawer" title="授权详情" open={Boolean(selected)} onClose={() => setSelectedId(null)} extra={selected && (selectedStatus === 'active' || selectedStatus === 'expired') && canManage ? <Space wrap>
+      <Button icon={<EditOutlined />} disabled={selectedStatus === 'expired'} title={selectedStatus === 'expired' ? '请先续期授权' : undefined} onClick={() => setScopeEditing(selected)}>调整授权</Button>
       <Button onClick={() => setRenewing(selected)}>续期</Button>
-      {selected.mode === 'online' ? <Popconfirm title="生成新激活码？" description="未使用的旧码将失效；已激活设备不受影响。设备满额时请先到设备管理停用旧设备。" onConfirm={async () => { try { const result = await adminApi.issueCode(selected.id); showKey(result.activationCode, false); await reload(); } catch {} }}><Button>补发/追加激活码</Button></Popconfirm>
-        : <Button onClick={async () => { try { const result = await adminApi.offlineKey(selected.id); showKey(result.offlineKey, true); } catch {} }}>补发离线许可证</Button>}
+      {selected.mode === 'online' ? <Popconfirm title="生成新激活码？" description="未使用的旧码将失效；已激活设备不受影响。设备满额时请先到设备管理停用旧设备。" onConfirm={async () => { try { const result = await adminApi.issueCode(selected.id); showKey(result.activationCode, false); await reload(); } catch {} }}><Button disabled={selectedStatus !== 'active'}>补发/追加激活码</Button></Popconfirm>
+        : <Button disabled={selectedStatus !== 'active'} onClick={async () => { try { const result = await adminApi.offlineKey(selected.id); showKey(result.offlineKey, true); } catch {} }}>补发离线许可证</Button>}
     </Space> : undefined}>{selected && <Descriptions bordered column={1} size="small" items={[
       { key: 'customer', label: '客户单位', children: selected.customer_name },
       { key: 'mode', label: '激活方式', children: selected.mode === 'online' ? '在线激活' : '离线激活' },
@@ -266,7 +283,7 @@ function LicensesPage({ data, reload }: { data: BootstrapData; reload: () => Pro
       { key: 'devices', label: '最大设备数', children: selected.max_devices },
       { key: 'features', label: '功能权限', children: <Space wrap>{selected.allow_export ? <Tag color="green">数据导出</Tag> : null}{selected.allow_auto_sync ? <Tag color="green">自动同步</Tag> : null}{selected.allow_auto_update ? <Tag color="green">自动更新</Tag> : null}</Space> },
       { key: 'expires', label: '有效期至', children: dateTime(selected.expires_at) },
-      { key: 'status', label: '当前状态', children: statusOf(selected) === 'active' ? '有效' : statusOf(selected) === 'expired' ? '已过期' : '已停用' },
+      { key: 'status', label: '当前状态', children: <LicenseStatusTag status={statusOf(selected)} /> },
       { key: 'id', label: '授权 ID', children: <Typography.Text copyable>{selected.id}</Typography.Text> },
     ]} />}</Drawer>
   </PageContainer>;

@@ -4,20 +4,20 @@ function reject(message, status = 400, code = 'LICENSE_SCOPE_INVALID') {
   throw Object.assign(new Error(message), { status, code });
 }
 
-function identifiers(value, label) {
-  if (!Array.isArray(value) || value.length > 500 || value.some(id => typeof id !== 'string' || !id.trim() || id.length > 200)) reject(`${label}格式无效`);
+function identifiers(value, label, maxCount = 500) {
+  if (!Array.isArray(value) || value.length > maxCount || value.some(id => typeof id !== 'string' || !id.trim() || id.length > 200)) reject(`${label}格式无效`);
   return [...new Set(value)];
 }
 
 function matters(value, legacy = false) {
   if (legacy && value === null) return null;
-  if (!object(value) || Object.keys(value).length > 100) reject('授权事项格式无效');
+  if (!object(value) || (!legacy && Object.keys(value).length > 100)) reject('授权事项格式无效');
   const entries = [];
   for (const [systemId, selected] of Object.entries(value)) {
     if (!systemId.trim() || systemId.length > 200) reject('业务系统标识无效');
     // In older signed grants a null/missing entry meant all matters, not none.
     if (legacy && selected === null) continue;
-    entries.push([systemId, identifiers(selected, '业务事项')]);
+    entries.push([systemId, identifiers(selected, '业务事项', legacy ? Infinity : 500)]);
   }
   return Object.fromEntries(entries);
 }
@@ -25,8 +25,8 @@ function matters(value, legacy = false) {
 export function storedLicenseScope(license) {
   try {
     return {
-      allowedSystems: identifiers(JSON.parse(license.allowed_systems_json), '已有业务系统'),
-      allowedTools: identifiers(JSON.parse(license.allowed_tools_json ?? '[]'), '已有授权工具'),
+      allowedSystems: identifiers(JSON.parse(license.allowed_systems_json), '已有业务系统', Infinity),
+      allowedTools: identifiers(JSON.parse(license.allowed_tools_json ?? '[]'), '已有授权工具', Infinity),
       allowedMatters: matters(license.allowed_matters_json == null ? null : JSON.parse(license.allowed_matters_json), true),
     };
   } catch {
@@ -48,8 +48,8 @@ export function prepareLicenseScope(database, toolCatalog, license, body) {
     || Object.keys(expected).some(key => !['allowedSystems', 'allowedTools', 'allowedMatters'].includes(key))) reject('缺少原授权范围，请刷新后重试');
   const before = storedLicenseScope(license);
   const normalizedExpected = {
-    allowedSystems: identifiers(expected.allowedSystems, '原业务系统'),
-    allowedTools: identifiers(expected.allowedTools, '原授权工具'),
+    allowedSystems: identifiers(expected.allowedSystems, '原业务系统', Infinity),
+    allowedTools: identifiers(expected.allowedTools, '原授权工具', Infinity),
     allowedMatters: matters(expected.allowedMatters, true),
   };
   if (canonical(before) !== canonical(normalizedExpected)) reject('授权范围已被其他操作修改，请刷新后重新调整', 409, 'LICENSE_SCOPE_CONFLICT');

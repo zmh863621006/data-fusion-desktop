@@ -108,6 +108,30 @@ test('scope changes preserve license identity, features, devices and activation 
   assert.equal(Object.hasOwn(f.grant(withdrawn.body).allowedMatters, B), false);
 });
 
+test('legacy all-matter grants refresh and resolve enterprises only for actual matters in the granted system', async t => {
+  const f = await fixture(t), deviceId = 'f'.repeat(64), matterId = f.matters[0];
+  const license = await f.license({ allowedSystems: [B], allowedMatters: { [B]: [matterId] } });
+  const writeScope = f.db.prepare('UPDATE licenses SET allowed_matters_json=? WHERE id=?');
+  const resolveItem = (proof, requestedMatter = matterId, systemId = B) => f.api('/api/enterprises/resolve',
+    { deviceId, proof, systemId, matterId: requestedMatter, items: [{ name: '本地授权测试单位' }] }, { cookie: '' });
+  for (const stored of [null, 'null', '{}', JSON.stringify({ [B]: null })]) {
+    writeScope.run(stored, license.id);
+    const activation = await f.activate(license.activationCode, deviceId);
+    assert.equal(activation.status, 200);
+    const refresh = await f.refresh(license.id, deviceId, activation.body);
+    assert.equal(refresh.status, 200);
+    const scope = f.grant(refresh.body).allowedMatters;
+    assert.equal(scope?.[B], undefined);
+    assert.notEqual(scope, null);
+    assert.equal((await resolveItem(refresh.body)).status, 200);
+    assert.equal((await resolveItem(refresh.body, MATTER_A)).status, 403);
+    assert.equal((await resolveItem(refresh.body, 'oversize-transport-return', 'oversize-transport')).status, 403);
+    writeScope.run(JSON.stringify({ [B]: [] }), license.id);
+    assert.equal((await resolveItem(refresh.body)).status, 403);
+    assert.deepEqual(f.grant((await f.refresh(license.id, deviceId, refresh.body)).body).allowedMatters[B], []);
+  }
+});
+
 test('scope can change selected matters and become tools-only without recreating the license', async t => {
   const f = await fixture(t), l = await f.license({ ...both(f.matters[0]), allowedMatters: { [A]: [MATTER_A], [B]: f.matters.slice(0, 2) } });
   const active = await f.activate(l.activationCode, '4'.repeat(64)); assert.equal(active.status, 200);

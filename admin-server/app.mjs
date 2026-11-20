@@ -3,7 +3,7 @@ import { promisify } from 'node:util';
 import { isIP } from 'node:net';
 import { createSecurity, strongPassword, PASSWORD_HINT } from './security.mjs';
 import { retireRememberedLogins } from './remember-login.mjs';
-import { prepareLicenseScope } from './license-scope.mjs';
+import { prepareLicenseScope, storedLicenseScope } from './license-scope.mjs';
 import { createEnterpriseStore, aliyunProvider } from './enterprises.mjs';
 import { createUpdateReleases } from './update-releases.mjs';
 import { createBusinessReleases } from './business-releases.mjs';
@@ -114,7 +114,7 @@ transaction(() => {
   // This legacy permission meant all government return matters. Preserve that scope.
   for (const license of database.prepare('SELECT id,allowed_matters_json FROM licenses WHERE allowed_matters_json IS NOT NULL').all()) {
     const allowed = JSON.parse(license.allowed_matters_json);
-    if (allowed['government-info']?.includes('double-publicity-return')) {
+    if (Array.isArray(allowed?.['government-info']) && allowed['government-info'].includes('double-publicity-return')) {
       allowed['government-info'] = [...new Set([...allowed['government-info'].filter((id) => id !== 'double-publicity-return'), ...governmentMatters.map((m) => m.id)])];
       database.prepare('UPDATE licenses SET allowed_matters_json=? WHERE id=?').run(JSON.stringify(allowed), license.id);
     }
@@ -244,14 +244,16 @@ const signedEnvelope = (grant) => {
   return { payload: payloadBytes.toString('base64url'), signature: sign('RSA-SHA256', payloadBytes, privateKey).toString('base64url'), algorithm: 'RSA-SHA256' };
 };
 const offlineKey = (grant) => `DFL1.${Buffer.from(JSON.stringify(signedEnvelope(grant))).toString('base64url')}`;
-const licenseGrant = (license, customer, deviceId) => ({
-  licenseId: license.id, customerId: customer.id, customerName: customer.name, activationMode: license.mode,
-  issuedAt: Date.now(), expiresAt: license.expires_at, allowedSystems: JSON.parse(license.allowed_systems_json),
-  allowedMatters: license.allowed_matters_json ? JSON.parse(license.allowed_matters_json) : undefined,
-  allowedTools: JSON.parse(license.allowed_tools_json ?? '[]'),
-  maxDevices: license.max_devices, deviceId, allowExport: Boolean(license.allow_export),
-  allowAutoSync: Boolean(license.allow_auto_sync), allowAutoUpdate: license.mode === 'online' && Boolean(license.allow_auto_update),
-});
+const licenseGrant = (license, customer, deviceId) => {
+  const scope = storedLicenseScope(license);
+  return {
+    licenseId: license.id, customerId: customer.id, customerName: customer.name, activationMode: license.mode,
+    issuedAt: Date.now(), expiresAt: license.expires_at, allowedSystems: scope.allowedSystems,
+    allowedMatters: scope.allowedMatters ?? undefined, allowedTools: scope.allowedTools,
+    maxDevices: license.max_devices, deviceId, allowExport: Boolean(license.allow_export),
+    allowAutoSync: Boolean(license.allow_auto_sync), allowAutoUpdate: license.mode === 'online' && Boolean(license.allow_auto_update),
+  };
+};
 const all = (sql, ...params) => database.prepare(sql).all(...params);
 const audit = (user, action, targetType, targetId, metadata) => database.prepare('INSERT INTO admin_audit_events(id,user_id,username,action,target_type,target_id,metadata_json,created_at) VALUES(?,?,?,?,?,?,?,?)')
   .run(randomUUID(), user.id, user.username, action, targetType ?? null, targetId ?? null, metadata ? JSON.stringify(metadata) : null, Date.now());
@@ -298,11 +300,15 @@ async function api(request, response, url) {
     const licensed = database.prepare(`SELECT l.* FROM licenses l JOIN customers c ON c.id=l.customer_id JOIN devices d ON d.license_id=l.id
       WHERE l.id=? AND d.device_id=? AND d.status='active' AND c.enabled=1 AND l.status='active' AND l.expires_at>?`).get(String(grant.licenseId), String(body.deviceId), Date.now());
     const systemId = body.systemId, matterId = body.matterId;
-    const allowedSystem = licensed && ['government-info','oversize-transport','online-car-permit','shenzhen-hazardous-chemicals'].includes(systemId)
-      && JSON.parse(licensed.allowed_systems_json).includes(systemId)
-      && JSON.parse(licensed.allowed_matters_json ?? '{}')[systemId]?.includes(matterId);
-    const allowedTool = licensed && systemId === 'health-publicity' && matterId === 'word-to-publicity'
-      && JSON.parse(licensed.allowed_tools_json ?? '[]').includes('health-publicity');
+    const scope = licensed && storedLicenseScope(licensed);
+    const selected = scope?.allowedMatters?.[systemId];
+    const allowedSystem = scope && ['government-info','oversize-transport','online-car-permit','shenzhen-hazardous-chemicals'].includes(systemId)
+      && scope.allowedSystems.includes(systemId) && typeof matterId === 'string'
+      && (selected === undefined
+        ? Boolean(database.prepare('SELECT 1 FROM system_matters WHERE system_id=? AND id=?').get(systemId, matterId))
+        : selected.includes(matterId));
+    const allowedTool = scope && systemId === 'health-publicity' && matterId === 'word-to-publicity'
+      && scope.allowedTools.includes('health-publicity');
     if (!allowedSystem && !allowedTool) return json(response, 403, { error: '没有该事项的企业补全权限' });
     if (!Array.isArray(body.items) || !body.items.length || body.items.length > 100) return json(response, 400, { error: '单次最多提交 100 家企业' });
     security.limit(`enterprise-items:${grant.licenseId}:${body.deviceId}`,5000,60_000,body.items.length);
