@@ -24,6 +24,7 @@ export const oversizeTransportPlugin: BusinessSystemPlugin = {
   description: '通过公路路政平台登录大件运输3.0，回流惠州许可双公示数据。', loginMode: 'embedded', auth,
   loginPage: { url: OVERSIZE_PAGE_URL, partition: OVERSIZE_PARTITION, allowedOrigin: new URL(OVERSIZE_PAGE_URL).origin,
     additionalAllowedOrigins: [OVERSIZE_API_ORIGIN], credentialPaths: ['/appLzxt/login'],
+    onLoginPageChange: (visible) => client.setPortalLoginVisible(visible),
     credentialFields: { account: 'input#username, input#account, input.login_username, input.login_userName, input[placeholder*="用户名"], input[placeholder*="账号"]', password: 'input[type="password"]' },
     browserAuth: { localStorageKeys: [OVERSIZE_PORTAL_TOKEN_KEY], accept: (values) => client.acceptPortalStorage(values) } },
   workspaceMode: 'return-ledger', supportsCredentialConfiguration: true,
@@ -39,7 +40,8 @@ export const oversizeTransportPlugin: BusinessSystemPlugin = {
   }],
   async initialize() {
     observeBrowserAuth({ partition: OVERSIZE_PARTITION, urlPattern: OVERSIZE_API_ORIGIN + '/gddj/api/*',
-      header: 'token', accept: (value) => client.acceptBrowserToken(value), clear: () => client.clearSession() });
+      header: 'token', credentialGeneration: () => client.browserAuthGeneration(),
+      accept: (value) => client.acceptBrowserToken(value), clear: () => client.clearSession() });
     await auth.getState();
   }, getSessionState: () => auth.getState(),
 };

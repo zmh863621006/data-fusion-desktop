@@ -24,6 +24,7 @@ interface Entry {
   storage: Record<string, string>;
   generation: number;
   suppressed: boolean;
+  awaitingApiLogin?: boolean;
   fingerprint?: string;
   checkedAt: number;
   state?: SessionState;
@@ -110,10 +111,18 @@ export class SessionRecoveryService {
     if (this.stopping) return entry.state ?? { status: 'logged-out', systemId: id };
     if (entry.pending) return entry.pending;
     const generation = entry.generation;
+    const currentState = (): SessionState => entry.state ?? { status: 'logged-out', systemId: id };
     const work = async (): Promise<SessionState> => {
       let snapshot: SavedSession;
       try { snapshot = await this.snapshot(entry); }
-      catch { return { status: 'unverified', systemId: id, message: '会话暂时无法读取，已保存的信息未清除' }; }
+      catch {
+        if (entry.generation !== generation || entry.awaitingApiLogin) return currentState();
+        return { status: 'unverified', systemId: id, message: '会话暂时无法读取，已保存的信息未清除' };
+      }
+      if (entry.generation !== generation) return currentState();
+      const hasApi = snapshot.api && Object.keys(snapshot.api).length > 0;
+      if (entry.awaitingApiLogin && !hasApi) return currentState();
+      entry.awaitingApiLogin = false;
       const fingerprint = createHash('sha256').update(JSON.stringify({ api: snapshot.api,
         cookies: snapshot.cookies.map(({ name, value, domain, path }) => ({ name, value, domain, path })) })).digest('hex');
       // A failed check before login must not mask the same cookie becoming authenticated.
@@ -121,20 +130,20 @@ export class SessionRecoveryService {
       if (!options.force && entry.state && fingerprint === entry.fingerprint && Date.now() - entry.checkedAt < cacheMs) return entry.state;
       if (entry.fingerprint !== fingerprint) entry.suppressed = false;
       let state: SessionState;
-      const hasApi = snapshot.api && Object.keys(snapshot.api).length > 0;
       if (!hasApi && !snapshot.cookies.length && !entry.saved) state = { status: 'logged-out', systemId: id };
       else {
         try {
           const verified = await entry.plugin.sessionRecovery!.validate(AbortSignal.timeout(10_000));
           state = { status: 'authenticated', systemId: id, ...verified };
         } catch (error) {
+          if (entry.generation !== generation) return currentState();
           this.verificationWarning(entry, error);
           state = error instanceof AppError && error.code === 'SESSION_EXPIRED'
             ? { status: 'expired', systemId: id, message: '原系统会话已失效，请重新登录' }
             : { status: 'unverified', systemId: id, message: '暂时无法验证登录，已保留会话；请检查网络或打开原系统确认' };
         }
       }
-      if (entry.generation !== generation) return entry.state ?? { status: 'logged-out', systemId: id };
+      if (entry.generation !== generation) return currentState();
       entry.state = state; entry.fingerprint = fingerprint; entry.checkedAt = Date.now();
       if (state.status === 'authenticated') {
         entry.suppressed = false;
@@ -147,7 +156,7 @@ export class SessionRecoveryService {
         entry.suppressed = true; entry.saved = undefined;
         await this.vault.delete(this.key(id)).catch(() => this.storageWarning(id));
       }
-      return state;
+      return entry.generation === generation ? state : currentState();
     };
     entry.pending = work().finally(() => { entry.pending = undefined; });
     return entry.pending;
@@ -156,9 +165,9 @@ export class SessionRecoveryService {
   async capture(id: string): Promise<void> {
     const entry = this.entries.get(id);
     if (!entry) return;
+    const generation = entry.generation;
     const work = entry.writes.then(async () => {
-      if (entry.suppressed) return;
-      const generation = entry.generation;
+      if (entry.suppressed || entry.generation !== generation) return;
       const saved = await this.snapshot(entry);
       if (entry.generation !== generation || entry.suppressed) return;
       // Do not overwrite a complete saved API session with a partial/empty read.
@@ -180,14 +189,18 @@ export class SessionRecoveryService {
     await this.capture(id);
   }
 
-  async forget(id: string): Promise<void> {
+  async forget(id: string, { awaitApiLogin = false } = {}): Promise<void> {
     const entry = this.entries.get(id);
-    if (entry) {
-      entry.generation++; entry.saved = undefined; entry.storage = {}; entry.suppressed = true;
-      entry.state = { status: 'logged-out', systemId: id }; entry.checkedAt = 0;
-      // Any later fresh login is validated again. A pending pre-logout validation cannot restore it.
-    }
-    await this.vault.delete(this.key(id));
+    if (!entry) return this.vault.delete(this.key(id));
+    entry.generation++; entry.saved = undefined; entry.storage = {}; entry.suppressed = true;
+    entry.state = { status: 'logged-out', systemId: id }; entry.checkedAt = 0;
+    entry.fingerprint = undefined;
+    // For token-based browser sign-out, leftover cookies cannot revive the old session.
+    entry.awaitingApiLogin = awaitApiLogin;
+    // Delete after any in-progress write and before a fresh login can write its own snapshot.
+    const deletion = entry.writes.then(() => this.vault.delete(this.key(id)));
+    entry.writes = deletion.catch(() => {});
+    await deletion;
   }
 
   async recoverableSystems(allowedSystems: string[]): Promise<string[]> {

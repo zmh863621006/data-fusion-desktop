@@ -92,6 +92,51 @@ describe('persistent source system tabs', () => {
     expect(vi.mocked(window.webContents.send).mock.calls.some(([channel]) => channel === IPC_CHANNELS.systemSessionChanged)).toBe(false);
     controller.close();
   });
+  it('reports sign-out on the configured top-level login page and ignores an in-flight authenticated result', async () => {
+    vi.useFakeTimers();
+    const controller = new LoginTabController(); const window = windowMock(); const source = plugin('a');
+    const onLoginPageChange = vi.fn(), accept = vi.fn(), forget = vi.fn(async () => {}), save = vi.fn(async () => {});
+    source.loginPage!.onLoginPageChange = onLoginPageChange;
+    source.loginPage!.additionalAllowedOrigins = ['https://subsystem.example'];
+    source.loginPage!.browserAuth = { localStorageKeys: ['token'], accept };
+    let finish!: (state: { status: 'authenticated'; systemId: string }) => void;
+    const authenticated = { status: 'authenticated' as const, systemId: 'a' };
+    source.getSessionState = vi.fn(async () => authenticated)
+      .mockImplementationOnce(() => new Promise(resolve => { finish = resolve; }));
+    controller.configurePersistence({ load: () => ({}), save, forget });
+    controller.open(window, source, null, { url: 'https://a.example/home' });
+    const contents = mocks.views[0].webContents;
+    contents.executeJavaScript.mockResolvedValue({ token: 'fixture-token' });
+    contents.emit('did-navigate', {}, contents.url, 200);
+    await vi.advanceTimersByTimeAsync(0);
+    expect(source.getSessionState).toHaveBeenCalledOnce();
+    expect(accept).toHaveBeenCalledOnce();
+
+    contents.emit('did-navigate-in-page', {}, 'https://a.example/login', false);
+    contents.emit('did-navigate', {}, 'https://subsystem.example/login', 200);
+    contents.emit('did-navigate', {}, 'https://a.example/login-history', 200);
+    contents.emit('did-navigate', {}, 'https://a.example/login', 503);
+    expect(forget).not.toHaveBeenCalled();
+
+    contents.url = 'https://a.example/login/?next=home';
+    contents.emit('did-navigate', {}, contents.url, 200);
+    expect(onLoginPageChange.mock.calls).toEqual([[false], [true]]);
+    expect(forget).toHaveBeenCalledExactlyOnceWith('a');
+    expect(window.webContents.send).toHaveBeenCalledWith(IPC_CHANNELS.systemSessionChanged, expect.objectContaining({ systemId: 'a', status: 'logged-out' }));
+    finish(authenticated);
+    await vi.advanceTimersByTimeAsync(10_000);
+    await controller.flushSessionStorage();
+    expect(save).not.toHaveBeenCalled();
+    expect(accept).toHaveBeenCalledOnce();
+    expect(window.webContents.send).not.toHaveBeenCalledWith(IPC_CHANNELS.systemSessionChanged, expect.objectContaining(authenticated));
+
+    contents.url = 'https://a.example/home';
+    contents.emit('did-navigate-in-page', {}, contents.url, true);
+    await vi.advanceTimersByTimeAsync(0);
+    expect(onLoginPageChange).toHaveBeenLastCalledWith(false);
+    expect(window.webContents.send).toHaveBeenCalledWith(IPC_CHANNELS.systemSessionChanged, expect.objectContaining(authenticated));
+    controller.close();
+  });
   it('opens only same-origin restored homepages in background without stealing the active tab', () => {
     const controller = new LoginTabController(); const window = windowMock();
     controller.open(window, plugin('a'));

@@ -2,6 +2,7 @@ import { BrowserWindow, WebContentsView, BrowserView } from 'electron';
 import { sourceOrigins, type BusinessSystemPlugin } from '../core/plugins/types';
 import type { SystemCredentials } from './credential-store';
 import type { SourceTab, SourceTabsState } from '../core/session/source-tabs';
+import type { SessionState } from '../core/session/types';
 import { IPC_CHANNELS } from '../core/ipc/channels';
 
 const BROWSER_CHROME_HEIGHT = 104;
@@ -12,11 +13,12 @@ function modernSourceViews(): boolean {
 }
 export type SourcePage = Pick<BusinessSystemPlugin, 'id' | 'name' | 'loginPage'> & Partial<Pick<BusinessSystemPlugin, 'getSessionState'>>;
 type Tab = { view: WebContentsView | BrowserView; summary: SourceTab; credentials: SystemCredentials | null; allowedOrigin: string; credentialFields?: { account: string; password: string };
-  plugin: SourcePage; persistStorage: boolean; checkingSession?: boolean };
+  plugin: SourcePage; persistStorage: boolean; checkingSession?: boolean; onLoginPage?: boolean; sessionRevision: number };
 
 interface BrowserStoragePersistence {
   load(systemId: string): Record<string, string>;
   save(systemId: string, value: unknown): Promise<void>;
+  forget?(systemId: string): Promise<void>;
 }
 
 /** One live WebContents per system or publication platform. Hiding preserves its page and history. */
@@ -45,11 +47,14 @@ export class LoginTabController {
   }
 
   private async captureStorage(tab: Tab): Promise<void> {
-    if (!tab.persistStorage || !this.persistence || tab.view.webContents.isDestroyed()) return;
+    if (!tab.persistStorage || !this.persistence || tab.onLoginPage || tab.view.webContents.isDestroyed()) return;
+    const revision = tab.sessionRevision;
     try {
       if (new URL(tab.view.webContents.getURL()).origin !== tab.allowedOrigin) return;
       const storage = await tab.view.webContents.executeJavaScript(`location.origin === ${JSON.stringify(tab.allowedOrigin)} ? Object.fromEntries(Object.entries(sessionStorage)) : null`);
-      if (storage && typeof storage === 'object' && !Array.isArray(storage)) await this.persistence.save(tab.summary.systemId, storage);
+      if (tab.sessionRevision === revision && storage && typeof storage === 'object' && !Array.isArray(storage)) {
+        await this.persistence.save(tab.summary.systemId, storage);
+      }
     } catch { console.warn('原系统页面会话存储暂未保存', { systemId: tab.summary.systemId }); }
   }
 
@@ -58,8 +63,9 @@ export class LoginTabController {
   }
 
   private async checkSession(tab: Tab): Promise<void> {
-    if (!tab.plugin.getSessionState || tab.checkingSession || this.tabs.get(tab.summary.systemId) !== tab) return;
+    if (!tab.plugin.getSessionState || tab.onLoginPage || tab.checkingSession || this.tabs.get(tab.summary.systemId) !== tab) return;
     tab.checkingSession = true;
+    const revision = tab.sessionRevision;
     try {
       const page = tab.plugin.loginPage;
       if (page?.browserAuth && !tab.view.webContents.isDestroyed()
@@ -71,18 +77,26 @@ export class LoginTabController {
             ...${JSON.stringify(page.browserAuth.sessionStorageKeys ?? [])}.map(key => [key, sessionStorage.getItem(key)])
           ].filter(([, value]) => typeof value === 'string'));
         })()`);
+        if (tab.sessionRevision !== revision || this.tabs.get(tab.summary.systemId) !== tab) return;
         if (captured && typeof captured === 'object' && !Array.isArray(captured)) page.browserAuth.accept(captured);
       }
       const state = await tab.plugin.getSessionState();
-      if (this.tabs.get(tab.summary.systemId) !== tab || !this.window || this.window.isDestroyed() || this.window.webContents.isDestroyed()) return;
-      // Push only the status DTO, never a plugin, cookie or API credential.
-      this.window.webContents.send(IPC_CHANNELS.systemSessionChanged, {
-        systemId: tab.summary.systemId, status: state.status, displayName: state.displayName,
-        expiresAt: state.expiresAt, message: state.message,
-      });
+      if (tab.sessionRevision === revision) this.publishSession(tab, state);
     } catch {
       console.warn('原系统自动登录检测暂未完成', { systemId: tab.summary.systemId });
-    } finally { tab.checkingSession = false; }
+    } finally {
+      tab.checkingSession = false;
+      if (tab.sessionRevision !== revision) void this.checkSession(tab);
+    }
+  }
+
+  private publishSession(tab: Tab, state: SessionState): void {
+    if (this.tabs.get(tab.summary.systemId) !== tab || !this.window || this.window.isDestroyed() || this.window.webContents.isDestroyed()) return;
+    // Push only the status DTO, never a plugin, cookie or API credential.
+    this.window.webContents.send(IPC_CHANNELS.systemSessionChanged, {
+      systemId: tab.summary.systemId, status: state.status, displayName: state.displayName,
+      expiresAt: state.expiresAt, message: state.message,
+    });
   }
 
   open(window: BrowserWindow, plugin: SourcePage, credentials: SystemCredentials | null = null, options: { url?: string; background?: boolean; persistStorage?: boolean } = {}): void {
@@ -118,7 +132,7 @@ export class LoginTabController {
     const view = new SourceView({
       webPreferences: { partition: loginPage.partition, contextIsolation: true, nodeIntegration: false, sandbox: true },
     });
-    const tab: Tab = { view, credentials, plugin, persistStorage: options.persistStorage !== false, allowedOrigin: loginPage.allowedOrigin, credentialFields: loginPage.credentialFields, summary: {
+    const tab: Tab = { view, credentials, plugin, persistStorage: options.persistStorage !== false, allowedOrigin: loginPage.allowedOrigin, credentialFields: loginPage.credentialFields, sessionRevision: 0, summary: {
       systemId: plugin.id, systemName: plugin.name, displayUrl: this.displayUrl(loginPage.url), loading: true,
     } };
     this.tabs.set(plugin.id, tab);
@@ -135,9 +149,30 @@ export class LoginTabController {
       tab.summary.displayUrl = this.displayUrl(view.webContents.getURL() || loginPage.url);
       this.publish();
     };
-    const observe = (_event: unknown, url: string) => { loginPage.onNavigate?.(url); update(); void this.checkSession(tab); };
-    view.webContents.on('did-navigate', observe);
-    view.webContents.on('did-navigate-in-page', observe);
+    const loginPath = new URL(loginPage.url).pathname.replace(/\/$/, '');
+    const observe = (url: string, successfulMainFrame: boolean) => {
+      if (this.tabs.get(plugin.id) !== tab) return;
+      if (successfulMainFrame && loginPage.onLoginPageChange && allowed(url)) {
+        const page = new URL(url);
+        const visible = page.origin === loginPage.allowedOrigin && page.pathname.replace(/\/$/, '') === loginPath;
+        if (visible !== tab.onLoginPage) {
+          tab.onLoginPage = visible;
+          tab.sessionRevision++;
+          loginPage.onLoginPageChange(visible);
+          if (visible) {
+            void this.persistence?.forget?.(plugin.id).catch(() => {
+              console.warn('原系统会话快照暂未清除', { systemId: plugin.id });
+            });
+            this.publishSession(tab, { systemId: plugin.id, status: 'logged-out' });
+          }
+        }
+      }
+      loginPage.onNavigate?.(url);
+      update();
+      void this.checkSession(tab);
+    };
+    view.webContents.on('did-navigate', (_event, url, status) => observe(url, !(status >= 400)));
+    view.webContents.on('did-navigate-in-page', (_event, url, isMainFrame) => observe(url, isMainFrame));
     view.webContents.on('did-start-loading', () => { tab.summary.loading = true; tab.summary.error = undefined; update(); });
     view.webContents.on('did-stop-loading', () => { tab.summary.loading = false; update(); });
     view.webContents.on('did-fail-load', (_event, code, description, _url, isMainFrame) => {
@@ -167,8 +202,9 @@ export class LoginTabController {
     view.webContents.on('did-finish-load', () => { void this.checkSession(tab); });
     view.webContents.on('did-finish-load', () => { void (async () => {
       // Never copy the portal's sessionStorage into a cross-origin SSO destination.
-      if (tab.persistStorage && !storageRestored && this.persistence && new URL(view.webContents.getURL()).origin === loginPage.allowedOrigin) {
+      if (tab.persistStorage && !tab.onLoginPage && !storageRestored && this.persistence && new URL(view.webContents.getURL()).origin === loginPage.allowedOrigin) {
         storageRestored = true;
+        const revision = tab.sessionRevision;
         const saved = this.persistence.load(plugin.id);
         if (Object.keys(saved).length) {
           const changed = await view.webContents.executeJavaScript(`(() => {
@@ -179,7 +215,7 @@ export class LoginTabController {
             }
             return changed;
           })()`);
-          if (changed && !view.webContents.isDestroyed()) {
+          if (changed && tab.sessionRevision === revision && !view.webContents.isDestroyed()) {
             await view.webContents.loadURL(targetUrl);
             return;
           }

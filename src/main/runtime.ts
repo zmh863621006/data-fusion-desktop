@@ -214,6 +214,7 @@ export class AppRuntime {
     loginTabController.configurePersistence({
       load: (id) => this.sessionRecovery!.storage(id),
       save: (id, value) => this.sessionRecovery!.saveStorage(id, value),
+      forget: (id) => this.sessionRecovery!.forget(id, { awaitApiLogin: true }),
     });
     this.licenseMonitor = new OnlineLicenseMonitor(() => this.license!.refreshOnline());
     this.licenseMonitor.start();

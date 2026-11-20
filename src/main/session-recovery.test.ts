@@ -212,6 +212,41 @@ describe('encrypted browser and API session recovery coordination', () => {
     expect(store.values.has(key)).toBe(true);
   });
 
+  it('stays logged out after returning to the portal login page even if browser cookies remain', async () => {
+    const store = vault(); const client = fixture();
+    const service = new SessionRecoveryService(store, () => browser([cookie]));
+    await service.register(client.plugin);
+    expect(await client.plugin.getSessionState()).toMatchObject({ status: 'authenticated' });
+    client.state.token = null;
+    await service.forget('a', { awaitApiLogin: true });
+    expect(await client.plugin.getSessionState({ force: true })).toMatchObject({ status: 'logged-out' });
+    expect(client.validate).toHaveBeenCalledOnce();
+    await service.capture('a');
+    expect(store.values.has(key)).toBe(false);
+
+    client.state.token = 'fresh-token';
+    expect(await client.plugin.getSessionState()).toMatchObject({ status: 'authenticated' });
+    expect(JSON.parse(store.values.get(key)!).api).toEqual({ token: 'fresh-token' });
+  });
+
+  it('clears a snapshot whose authenticated write was already in progress when the user signed out', async () => {
+    const store = vault(); const client = fixture();
+    const service = new SessionRecoveryService(store, () => browser());
+    await service.register(client.plugin);
+    let finish!: () => void;
+    store.set.mockImplementationOnce((id, value) => new Promise(resolve => {
+      finish = () => { store.values.set(id, value); resolve(); };
+    }));
+    const checking = client.plugin.getSessionState();
+    await vi.waitFor(() => expect(finish).toBeDefined());
+    client.state.token = null;
+    const forgetting = service.forget('a', { awaitApiLogin: true });
+    finish();
+    expect(await checking).toMatchObject({ status: 'logged-out' });
+    await forgetting;
+    expect(store.values.has(key)).toBe(false);
+  });
+
   it('tolerates unavailable secure storage without claiming to persist plaintext', async () => {
     vi.spyOn(console, 'warn').mockImplementation(() => {});
     const store = vault(); store.get.mockRejectedValue(new Error('vault unavailable')); store.set.mockRejectedValue(new Error('vault unavailable'));

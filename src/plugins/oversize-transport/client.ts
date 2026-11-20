@@ -33,6 +33,7 @@ export class OversizeTransportClient {
   private portalToken = '';
   private expiresAt?: number;
   private generation = 0;
+  private portalLoginVisible = false;
 
   // Account/password remain in the existing encrypted credential store and original login tab.
   configureCredentials(_credentials: { account: string; password: string } | null): void { this.clearSession(); }
@@ -46,7 +47,13 @@ export class OversizeTransportClient {
     this.token = tokenValue(value.token); this.portalToken = tokenValue(value.portalToken); this.expiresAt = 0;
     // An old /bis JSESSIONID cannot authenticate to 3.0.
   }
+  setPortalLoginVisible(visible: boolean): void {
+    this.portalLoginVisible = visible;
+    if (visible) this.clearSession();
+  }
+  browserAuthGeneration(): number | null { return this.portalLoginVisible ? null : this.generation; }
   acceptPortalStorage(values: Record<string, string>): void {
+    if (this.portalLoginVisible) return;
     const token = portalTokenFromStorage(values);
     if (token && token !== this.portalToken) { this.generation++; this.portalToken = token; this.token = ''; this.expiresAt = 0; }
   }

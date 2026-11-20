@@ -46,6 +46,25 @@ describe('browser session to API session bridge', () => {
     api.before({ id: 1, requestHeaders: {} }, vi.fn()); api.completed(response);
     expect(api.accept).not.toHaveBeenCalled();
   });
+  it('ignores responses from before and during browser sign-out', () => {
+    let generation: number | null = 1;
+    const accept = vi.fn(), clear = vi.fn();
+    observeBrowserAuth({ partition: 'persist:test', urlPattern: 'https://test.example/api/*', header: 'token', accept, clear,
+      credentialGeneration: () => generation });
+    const before = mocks.webRequest.onBeforeSendHeaders.mock.calls[0][1], completed = mocks.webRequest.onCompleted.mock.calls[0][1];
+    before({ id: 1, requestHeaders: { Token: 'old' } }, vi.fn());
+    before({ id: 2, requestHeaders: { Token: 'old' } }, vi.fn());
+    generation = null;
+    before({ id: 3, requestHeaders: { Token: 'old' } }, vi.fn());
+    generation = 2;
+    completed(response);
+    completed({ ...response, id: 2, statusCode: 401 });
+    completed({ ...response, id: 3 });
+    expect(accept).not.toHaveBeenCalled(); expect(clear).not.toHaveBeenCalled();
+    before({ id: 4, requestHeaders: { Token: 'fresh' } }, vi.fn());
+    completed({ ...response, id: 4 });
+    expect(accept).toHaveBeenCalledExactlyOnceWith('fresh');
+  });
   it('allows a system-specific authenticated landing page predicate', () => {
     const accept = vi.fn();
     observeBrowserAuth({ partition: 'persist:test', urlPattern: 'https://test.example/*', header: 'cookie', accept, clear: vi.fn(),

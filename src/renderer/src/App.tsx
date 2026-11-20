@@ -411,8 +411,9 @@ function Workspace({ license }: { license: LicenseStatus }) {
         // grant. Re-read local authorization before probing the old system.
         const currentLicense = await window.desktopApi.license.status() as LicenseStatus;
         if (disposed || !workspaceAccess(currentLicense).canOpenSystem(sessionSystemId)) return;
+        const revision = sessionEvents.current.get(sessionSystemId)?.revision;
         const session = await window.desktopApi.systems.session(sessionSystemId) as SessionState;
-        if (!disposed) {
+        if (!disposed && revision === sessionEvents.current.get(sessionSystemId)?.revision) {
           setSystems((current) => current.map((system) => (
             system.id === sessionSystemId ? { ...system, session } : system
           )));
@@ -468,7 +469,10 @@ function Workspace({ license }: { license: LicenseStatus }) {
     if (!id) return;
     setCheckingLogin(true);
     try {
-      const state = await window.desktopApi.systems.session(id, true) as SessionState;
+      const revision = sessionEvents.current.get(id)?.revision;
+      const checked = await window.desktopApi.systems.session(id, true) as SessionState;
+      const event = sessionEvents.current.get(id);
+      const state = event && event.revision !== revision ? event.session : checked;
       setSystems((current) => current.map((system) => system.id === id ? { ...system, session: state } : system));
       await activateSourceTab(null);
       setMessage(state.status === 'authenticated' ? '已识别登录，原系统页面已保留，可随时切换核对' : state.message ?? '原系统页面已保留，请在标签页中完成登录');
@@ -595,7 +599,7 @@ function Workspace({ license }: { license: LicenseStatus }) {
             <button className="browser-icon-button" title="刷新" aria-label="刷新原系统" onClick={() => void window.desktopApi.systems.reloadLogin(loginTab.systemId)}><AppIcon name="refresh" size={18} /></button>
             <div className="browser-address" title={loginTab.error ?? loginTab.displayUrl}><span>{loginTab.error ?? loginTab.displayUrl}</span></div>
             {publicationTab ? <button className="detect-login-button" onClick={() => void activateSourceTab(null)}>返回回流数据</button> : <>
-              <span className={`login-detection ${sourceSession?.status === 'authenticated' ? 'success' : ''}`} title={sourceSession?.message}><i />{sourceSession?.status === 'authenticated' ? '已识别登录' : sourceSession?.status === 'unverified' ? '会话待验证' : '待检测登录'}</span>
+              <span className={`login-detection ${sourceSession?.status === 'authenticated' ? 'success' : ''}`} title={sourceSession?.message}><i />{sourceSession?.status === 'authenticated' ? '已识别登录' : sourceSession?.status === 'unverified' ? '会话待验证' : sourceSession?.status === 'logged-out' ? '未登录' : '待检测登录'}</span>
               <button className="detect-login-button" disabled={checkingLogin} onClick={() => void returnFromLogin()}>{checkingLogin ? '正在检测登录…' : '检测登录并返回工作台'}</button>
             </>}
           </div>

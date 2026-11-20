@@ -11,6 +11,7 @@ import { queryOversizeTransport } from '../src/plugins/oversize-transport/query'
 
 // Isolated local fixtures only. No production credentials, profile, or government APIs.
 const portalToken = '11111111-1111-1111-1111-111111111111';
+const freshPortalToken = '33333333-3333-3333-3333-333333333333';
 const apiToken = '22222222-2222-2222-2222-222222222222';
 const vault = new Map<string, string>();
 const controller = new LoginTabController();
@@ -30,7 +31,7 @@ const api = createServer((req, res) => {
   }
   res.setHeader('content-type', 'application/json');
   if (url.pathname.endsWith('/sso/login')) {
-    ssoCalls++; assert.equal(url.searchParams.get('token'), portalToken);
+    ssoCalls++; assert.equal(url.searchParams.get('token'), ssoCalls === 1 ? portalToken : freshPortalToken);
     res.end(JSON.stringify({ code: 0, isSuccess: true, data: { token: apiToken } })); return;
   }
   if (url.pathname.endsWith('/selectRequest')) {
@@ -53,11 +54,13 @@ const api = createServer((req, res) => {
 const portal = createServer((req, res) => {
   res.setHeader('content-type', 'text/html; charset=utf-8');
   if (req.url?.startsWith('/appLzxt/login')) {
+    const token = req.url.includes('logout') ? freshPortalToken : portalToken;
     res.end(`<form><input id="username" placeholder="用户名"><input type="password"><input id="captcha" placeholder="验证码"><button type="button" id="login">模拟用户完成登录</button></form><script>
-      document.querySelector('#login').onclick=()=>{localStorage.setItem('${OVERSIZE_PORTAL_TOKEN_KEY}',JSON.stringify({value:'${portalToken}'}));location.href='/appLzxt/manage/home'};
+      document.querySelector('#login').onclick=()=>{localStorage.setItem('${OVERSIZE_PORTAL_TOKEN_KEY}',JSON.stringify({value:'${token}'}));location.href='/appLzxt/manage/home'};
       </script>`); return;
   }
-  res.end(`<h1>已登录的路政平台测试首页</h1><button id="subsystem" onclick="window.open('${apiOrigin}/GDDJ/')">大件运输3.0升级版</button>`);
+  res.end(`<h1>已登录的路政平台测试首页</h1><button id="subsystem" onclick="window.open('${apiOrigin}/GDDJ/')">大件运输3.0升级版</button>
+    <a id="logout" href="/appLzxt/login?logout">退出登录</a>`);
 });
 async function until(check: () => Promise<unknown> | unknown, label: string) {
   const end = Date.now() + 15000;
@@ -81,6 +84,7 @@ async function run() {
   const plugin: BusinessSystemPlugin = { ...oversizeTransportPlugin,
     loginPage: { ...oversizeTransportPlugin.loginPage!, url: portalOrigin + '/appLzxt/login', allowedOrigin: portalOrigin,
       additionalAllowedOrigins: [apiOrigin], partition,
+      onLoginPageChange: visible => client.setPortalLoginVisible(visible),
       browserAuth: { localStorageKeys: [OVERSIZE_PORTAL_TOKEN_KEY], accept: values => client.acceptPortalStorage(values) } },
     sessionRecovery: { snapshot: () => client.exportSession(), restore: value => client.restoreSession(value),
       validate: signal => client.validateSession(signal), homeUrl: () => portalOrigin + '/appLzxt/manage/home' },
@@ -89,7 +93,10 @@ async function run() {
   const recovery = new SessionRecoveryService({ get: async key => vault.get(key) ?? null, set: async (key, value) => { vault.set(key, value); },
     delete: async key => { vault.delete(key); }, flush: async () => {} });
   await recovery.register(plugin);
-  observeBrowserAuth({ partition, urlPattern: apiOrigin + '/gddj/api/*', header: 'token', accept: value => client.acceptBrowserToken(value), clear: () => client.clearSession() });
+  controller.configurePersistence({ load: id => recovery.storage(id), save: (id, values) => recovery.saveStorage(id, values),
+    forget: id => recovery.forget(id, { awaitApiLogin: true }) });
+  observeBrowserAuth({ partition, urlPattern: apiOrigin + '/gddj/api/*', header: 'token',
+    credentialGeneration: () => client.browserAuthGeneration(), accept: value => client.acceptBrowserToken(value), clear: () => client.clearSession() });
   window = new BrowserWindow({ show: false, width: 1440, height: 900 }); await window.loadURL('data:text/html,<h1>本地隔离测试</h1>');
   controller.open(window, plugin, { account: 'fixture-account', password: 'fixture-password' });
   await until(() => webContents.getAllWebContents().find(page => page.getURL() === plugin.loginPage!.url), 'login tab');
@@ -114,9 +121,23 @@ async function run() {
   const reopened = new OversizeTransportClient(); reopened.restoreSession(saved.api);
   assert.equal(reopened.isAuthenticated(), false); await reopened.validateSession(AbortSignal.timeout(5000));
   assert.equal(reopened.isAuthenticated(), true);
+  assert.equal(controller.back(plugin.id), true);
+  await until(() => source.getURL() === portalOrigin + '/appLzxt/manage/home' && !source.isLoading(), 'return to portal');
+  // The backend still accepts the old fixture tokens and the login page retains localStorage.
+  await source.executeJavaScript('document.querySelector("#logout").click()');
+  await until(() => source.getURL().endsWith('/appLzxt/login?logout') && !source.isLoading()
+    && !client.isAuthenticated() && !vault.size, 'portal logout and snapshot deletion');
+  assert.equal((await plugin.getSessionState({ force: true })).status, 'logged-out');
+  assert.equal(ssoCalls, 1);
+  await until(() => source.executeJavaScript('document.querySelector("#username")?.value === "fixture-account"'), 'saved account after portal logout');
+  await source.executeJavaScript('document.querySelector("#login").click()');
+  await until(() => client.isAuthenticated() && recovery.canRestore(plugin.id), 'fresh login after portal logout');
+  assert.equal((await plugin.getSessionState()).status, 'authenticated');
+  assert.equal(ssoCalls, 2);
   await recovery.flush(); controller.close(); window.destroy();
   console.log(JSON.stringify({ ok: true, credentialAutofill: true, captchaUntouched: true, ssoCalls, listCalls, applicationCalls, sourceCreditCode: true,
-    returnedRows: result.total, originalTabRetained: true, crossOriginCredentialsIsolated: true, sessionRecovered: true }));
+    returnedRows: result.total, originalTabRetained: true, crossOriginCredentialsIsolated: true, sessionRecovered: true,
+    portalLogoutRecognized: true, loginRestoredAfterLogout: true }));
 }
 run().then(() => { globalThis.fetch = originalFetch; api.close(); portal.close(); app.quit(); }).catch(error => {
   console.error(error); controller.close(); window?.destroy(); api.close(); portal.close(); app.exit(1);

@@ -24,6 +24,8 @@ export interface BusinessSystemPlugin {
     browserAuth?: { localStorageKeys: string[]; sessionStorageKeys?: string[]; accept(values: Record<string, string>): void };
     /** Explicit selectors for legacy login forms with nonstandard field names. */
     credentialFields?: { account: string; password: string };
+    /** Opt in when returning to the configured portal login path confirms sign-out. */
+    onLoginPageChange?: (visible: boolean) => void;
     onNavigate?: (url: string) => void;
   };
   matters: BusinessMatter[];
