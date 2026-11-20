@@ -25,6 +25,8 @@ const bootstrap = {
   user: { id: 'fixture-admin', username: 'fixture-admin', role: 'admin' }, systems,
   tools: [{ id: 'health-publicity', name: '卫健局双公示工具', version: '1.0.0' }],
   matters: [{ id: 'fixture-matter', system_id: 'government-info', name: '界面测试事项', department_name: '水务局', enabled: 1, created_at: now },
+    { id: 'fixture-water', system_id: 'government-info', name: '水务许可', department_name: '水务局', enabled: 1, created_at: now },
+    { id: 'fixture-urban', system_id: 'government-info', name: '城管许可', department_name: '城管局', enabled: 1, created_at: now },
     { id: 'fixture-market', system_id: 'market-access', name: '市场测试事项', department_name: '业务事项', enabled: 1, created_at: now }],
   customers: [{ id: 'fixture-customer', name: '示例区政务服务中心（仅供本地界面测试）', contact: '测试联系人 138****0001', enabled: 1, created_at: now }],
   licenses: [{ id: 'fixture-license', customer_id: 'fixture-customer', customer_name: '示例区政务服务中心', mode: 'online', expires_at: now + 86400000 * 30,
@@ -53,6 +55,7 @@ const blockedRequests: string[] = [];
 const pageErrors: string[] = [];
 const requests: string[] = [];
 const scopeWrites: Array<Record<string, any>> = [];
+const issuedScopes: Array<Record<string, any>> = [];
 let conflictScopeOnce = false;
 const releaseWrites: Array<{ id: string; enabled: boolean }> = [];
 const releaseNotes = '本地虚构上传备注：测试 + 校验 & 发布';
@@ -111,6 +114,12 @@ const server = createServer(async (req, res) => {
       record.enabled = body.enabled ? 1 : 0; record.status = body.enabled ? 'published' : 'disabled';
       if (body.enabled) record.published_at = now;
       return json(200, { ok: true });
+    }
+    if (url.pathname === '/api/admin/licenses' && req.method === 'POST') {
+      assert(authenticated);
+      let body = ''; for await (const chunk of req) body += chunk;
+      issuedScopes.push(JSON.parse(body));
+      return json(201, { id: 'issued-fixture', activationCode: 'LOCAL-TEST' });
     }
     if (url.pathname === '/api/admin/licenses/fixture-license/scope' && req.method === 'POST') {
       assert(authenticated);
@@ -301,25 +310,49 @@ async function closeDrawer() {
   await settle();
 }
 
-async function openScopeSelect(label: string) {
-  assert.equal(await dom(`(() => {const label=[...document.querySelectorAll('.license-scope-modal .ant-form-item-label label')].find(node=>node.textContent.trim()===${JSON.stringify(label)});const target=label?.closest('.ant-form-item')?.querySelector('.ant-select-selector');if(!target)return false;target.dispatchEvent(new MouseEvent('mousedown',{bubbles:true,cancelable:true}));return true;})()`),true,`Open scope selector ${label}`);
-  await settle();
+async function verifyLicenseComponentFilter() {
+  await route('licenses');
+  for (const [label, expectMatch] of [['政务综合信息平台', false], ['卫健局双公示工具', true]] as const) {
+    await dom(`document.querySelector('input[placeholder="搜索系统或工具"], .ant-form-item:has(#component) .ant-select-selector, .ant-form-item:has(input[id$="component"]) .ant-select-selector').dispatchEvent(new MouseEvent('mousedown',{bubbles:true,cancelable:true}))`);
+    await until(() => dom(`[...document.querySelectorAll('.ant-select-item-option-content')].some(node=>node.textContent === ${JSON.stringify(label)} && node.getBoundingClientRect().width > 0)`), 'license filter options');
+    await clickText(label, '.ant-select-item-option-content');
+    await dom(`document.querySelector('.ant-pro-table-search form, form.ant-pro-query-filter').requestSubmit()`);
+    await until(() => dom(`Boolean(document.querySelector('tr[data-row-key="fixture-license"]')) === ${expectMatch}`), 'license filter results');
+    checks++;
+  }
+  await clickText('重置');
 }
 
 async function verifyScopeEditing() {
-  await route('licenses');await drawer('详情','scope-edit-interaction');await clickText('调整授权');
+  await route('licenses');
+  await clickText('签发授权');
+  await until(() => dom(`Boolean(document.querySelector('.ant-modal .scope-picker'))`), 'issuance scope picker');
+  await dom(`document.querySelector('.ant-modal #customerId').closest('.ant-select-selector').dispatchEvent(new MouseEvent('mousedown',{bubbles:true,cancelable:true}))`);
+  await clickText(bootstrap.customers[0].name, '.ant-select-item-option-content');
+  await dom(`document.querySelector('.ant-modal .ant-picker input').click()`);
+  await until(() => dom(`Boolean(document.querySelector('.ant-picker-cell-today'))`), 'date options');
+  await dom(`document.querySelector('.ant-picker-cell-today').click()`);
+  await clickText('政务综合信息平台', '.scope-disclosure');
+  await dom(`document.querySelector('.scope-picker input[aria-label="水务局（全部范围）"]').click()`);
+  await clickText('卫健局双公示工具', '.scope-tools label');
+  await until(() => dom(`document.querySelector('.scope-toolbar').innerText.includes('1 个系统 · 2 个事项 · 1 个工具')`), 'explicit department selection');
+  await clickText('确定', '.ant-modal-footer button');
+  await until(async () => issuedScopes.length === 1, 'new license issued');
+  assert.deepEqual(issuedScopes[0].allowedSystems, ['government-info']);
+  assert.deepEqual(issuedScopes[0].allowedMatters, { 'government-info': ['fixture-matter', 'fixture-water'] });
+  assert.deepEqual(issuedScopes[0].allowedTools, ['health-publicity']);
+  assert.equal(Object.hasOwn(issuedScopes[0], 'scope'), false); checks++;
+  await until(() => dom(`Boolean(document.querySelector('.ant-modal-confirm-btns button'))`), 'issued key dialog');
+  await dom(`document.querySelector('.ant-modal-confirm-btns button').click()`); await settle();
+
+  await drawer('详情','scope-edit-interaction');await clickText('调整授权');
   await until(()=>dom(`Boolean(document.querySelector('.license-scope-modal'))`),'Scope editor');
   assert.equal(await dom(`document.querySelector('.license-scope-modal').innerText.includes('影响此授权绑定的全部设备')`),true);checks++;
-  await openScopeSelect('授权业务系统');
-  assert.equal(await dom(`(() => {const node=[...document.querySelectorAll('.ant-select-item-option-content')].find(node=>node.textContent==='政务综合信息平台'&&node.getBoundingClientRect().width);node?.click();return !!node;})()`),true);checks++;
-  await dom(`(() => {const title=document.querySelector('.license-scope-modal .ant-modal-title');title.dispatchEvent(new MouseEvent('mousedown',{bubbles:true,cancelable:true}));title.click();})()`);await settle();
-  const beforeWrites=scopeWrites.length;
-  await clickText('保存授权范围','.license-scope-modal button');
-  await until(()=>dom(`document.querySelector('.license-scope-modal').innerText.includes('请明确选择至少一个业务事项')`),'new matter selection is required');
-  assert.equal(scopeWrites.length,beforeWrites,'Selecting a new system cannot silently grant all matters');checks++;
-  await openScopeSelect('政务综合信息平台 · 业务事项');
-  assert.equal(await dom(`(() => {const title=[...document.querySelectorAll('.ant-select-tree-title')].find(node=>node.textContent==='界面测试事项'&&node.getBoundingClientRect().width);const checkbox=title?.closest('.ant-select-tree-treenode')?.querySelector('.ant-select-tree-checkbox');checkbox?.click();return !!checkbox;})()`),true);checks++;
-  await dom(`(() => {const title=document.querySelector('.license-scope-modal .ant-modal-title');title.dispatchEvent(new MouseEvent('mousedown',{bubbles:true,cancelable:true}));title.click();})()`);await settle();
+  await clickText('政务综合信息平台', '.license-scope-modal .scope-disclosure');
+  assert.equal(await dom(`document.querySelector('.scope-toolbar').innerText.includes('1 个系统 · 1 个事项')`),true,'Opening a system never grants access');checks++;
+  await setInput('.license-scope-modal input[aria-label="搜索系统、部门或事项"]', '界面测试');
+  await clickText('全选匹配业务', '.license-scope-modal button');
+  assert.equal(await dom(`document.querySelector('.scope-toolbar').innerText.includes('2 个系统 · 2 个事项')`), true, 'Filtered selection excludes hidden siblings');checks++;
   await verifyBounds('scope-explicit-system-add');await screenshot('scope-explicit-system-add');
   const fixed={expiresAt:bootstrap.licenses[0].expires_at,devices:JSON.stringify(bootstrap.devices),maxDevices:bootstrap.licenses[0].max_devices,customerId:bootstrap.licenses[0].customer_id,allowExport:bootstrap.licenses[0].allow_export};
   await clickText('保存授权范围','.license-scope-modal button');
@@ -344,7 +377,7 @@ async function verifyScopeEditing() {
   bootstrap.licenses[0].mode='online';
   await clickText('刷新','.admin-topbar button');
   await drawer('详情','scope-tools-only-detail');await clickText('调整授权');
-  assert.equal(await dom(`(() => {const label=[...document.querySelectorAll('.license-scope-modal .ant-form-item-label label')].find(node=>node.textContent.trim()==='授权业务系统');const target=label?.closest('.ant-form-item')?.querySelector('.ant-select-clear');if(!target)return false;target.dispatchEvent(new MouseEvent('mousedown',{bubbles:true,cancelable:true}));target.click();return true;})()`),true);
+  await clickText('取消全部业务', '.license-scope-modal button');
   await settle();await verifyBounds('scope-tools-only');await screenshot('scope-tools-only');
   await clickText('保存授权范围','.license-scope-modal button');await until(()=>dom(`!document.querySelector('.license-scope-modal')`),'tools-only saved');
   assert.deepEqual(JSON.parse(bootstrap.licenses[0].allowed_systems_json),[]);
@@ -412,7 +445,7 @@ async function run() {
     for (const label of ['后台账号', '我的登录会话', '登录安全日志']) { await clickText(label, '.security-tabs [role="tab"]'); await verifyBounds(`security-${label}-${width}`); }
     await modal('修改我的密码', `password-change-${width}`); await modal('新增账号', `account-create-${width}`);
   }
-  main.setContentSize(1440, 1000);await verifyScopeEditing();await verifyReleaseTargets();await verifyReleasePublishing();await verifyBusinessUpdates();await route('overview');
+  main.setContentSize(1440, 1000);await verifyLicenseComponentFilter();await verifyScopeEditing();await verifyReleaseTargets();await verifyReleasePublishing();await verifyBusinessUpdates();await route('overview');
   await dom(`document.querySelector('.ant-pro-sider-collapsed-button')?.click()`); await settle();
   assert.equal(await dom(`Boolean(document.querySelector('.ant-layout-sider-collapsed'))`), true); checks++;
   await verifyBounds('sidebar-collapsed'); await screenshot('sidebar-collapsed');

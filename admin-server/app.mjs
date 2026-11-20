@@ -475,17 +475,22 @@ async function api(request, response, url) {
   if (request.method === 'POST' && url.pathname === '/api/admin/licenses') {
     const user = requireAdmin(request, response); if (!user) return; const body = await readJson(request);
     const customer = database.prepare('SELECT * FROM customers WHERE id=? AND enabled=1').get(String(body.customerId ?? ''));
-    const systems = Array.isArray(body.allowedSystems) ? body.allowedSystems.filter((id) => typeof id === 'string') : [];
+    const requestedSystems = body.allowedSystems === undefined ? [] : body.allowedSystems;
+    if (!Array.isArray(requestedSystems) || requestedSystems.some(id => typeof id !== 'string')) return json(response, 400, { error: '授权系统无效' });
+    const systems = [...new Set(requestedSystems)];
     const tools = body.allowedTools === undefined ? [] : body.allowedTools;
     const knownTools = new Set(toolCatalog.map(tool => tool.id));
     if (!Array.isArray(tools) || tools.some(id => typeof id !== 'string' || !knownTools.has(id))) return json(response, 400, { error: '授权工具无效' });
     const known = new Set(all('SELECT id FROM systems WHERE enabled=1').map((row) => row.id));
     if (!customer || (!systems.length && !tools.length) || systems.some((id) => !known.has(id))) return json(response, 400, { error: '客户无效，或尚未选择任何业务系统/工具' });
-    const allowedMatters = body.allowedMatters && typeof body.allowedMatters === 'object' && !Array.isArray(body.allowedMatters) ? body.allowedMatters : {};
+    const requestedMatters = body.allowedMatters === undefined ? {} : body.allowedMatters;
+    if (!requestedMatters || typeof requestedMatters !== 'object' || Array.isArray(requestedMatters)) return json(response, 400, { error: '授权事项格式无效' });
+    const allowedMatters = Object.create(null);
     for (const systemId of systems) {
-      const selected = Array.isArray(allowedMatters[systemId]) ? allowedMatters[systemId].filter((id) => typeof id === 'string') : [];
+      const selected = Object.hasOwn(requestedMatters, systemId) ? requestedMatters[systemId] : [];
       const knownMatters = new Set(all('SELECT id FROM system_matters WHERE system_id=? AND enabled=1', systemId).map((row) => row.id));
-      if (knownMatters.size && (!selected.length || selected.some((id) => !knownMatters.has(id)))) return json(response, 400, { error: `系统 ${systemId} 的业务事项授权无效` });
+      if (!Array.isArray(selected) || (knownMatters.size && !selected.length) || selected.some(id => !knownMatters.has(id))) return json(response, 400, { error: `系统 ${systemId} 的业务事项授权无效` });
+      allowedMatters[systemId] = [...new Set(selected)];
     }
     if (body.mode !== 'online' && body.mode !== 'offline') return json(response, 400, { error: '激活模式无效' });
     if (['allowExport','allowAutoSync','allowAutoUpdate'].some((key) => body[key] !== undefined && typeof body[key] !== 'boolean')) return json(response, 400, { error: '功能权限必须为布尔值' });
@@ -494,10 +499,9 @@ async function api(request, response, url) {
     if (!Number.isSafeInteger(maxDevices) || maxDevices < 1 || maxDevices > 100) return json(response, 400, { error: '最大设备数必须为 1–100 的整数' });
     if (body.mode === 'offline' && (maxDevices !== 1 || typeof body.deviceId !== 'string' || !/^[a-f0-9]{64}$/.test(body.deviceId))) return json(response, 400, { error: '离线授权为单设备授权，必须填写完整设备码' });
     // Store only validated systems/matters; do not sign unvalidated extra properties.
-    const normalizedMatters = Object.fromEntries(systems.map((id) => [id, [...new Set(allowedMatters[id] ?? [])]]));
     const result = transaction(() => {
     database.prepare(`INSERT INTO licenses(id,customer_id,mode,expires_at,allowed_systems_json,allowed_matters_json,allowed_tools_json,max_devices,allow_export,allow_auto_sync,allow_auto_update,created_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,?)`)
-      .run(id, customer.id, body.mode, expiresAt, JSON.stringify(systems), JSON.stringify(normalizedMatters), JSON.stringify([...new Set(tools)]), maxDevices, body.allowExport ? 1 : 0, body.allowAutoSync ? 1 : 0, body.mode === 'online' && body.allowAutoUpdate ? 1 : 0, Date.now());
+      .run(id, customer.id, body.mode, expiresAt, JSON.stringify(systems), JSON.stringify(allowedMatters), JSON.stringify([...new Set(tools)]), maxDevices, body.allowExport ? 1 : 0, body.allowAutoSync ? 1 : 0, body.mode === 'online' && body.allowAutoUpdate ? 1 : 0, Date.now());
     const license = database.prepare('SELECT * FROM licenses WHERE id=?').get(id);
     if (body.mode === 'offline') {
       database.prepare('INSERT INTO devices(id,license_id,device_id,activated_at,last_seen_at) VALUES(?,?,?,?,?)').run(randomUUID(), id, body.deviceId, Date.now(), 0);

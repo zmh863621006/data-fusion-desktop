@@ -152,11 +152,27 @@ button, a, input, textarea, select { -webkit-tap-highlight-color: transparent; }
 .key-result button { justify-self: end; }
 .key-result textarea { font-family: ui-monospace, "Cascadia Code", Consolas, monospace; font-size: 12px; }
 .license-scope-content { width: 100%; }
+.scope-picker { min-width: 0; color: #1d1d1f; }
+.scope-toolbar, .scope-branch { display: flex; align-items: center; gap: 8px; }
+.scope-toolbar { justify-content: space-between; flex-wrap: wrap; margin: 6px 0; color: var(--admin-secondary); font-size: 13px; }
+.scope-toolbar .ant-btn { padding-inline: 6px; }
+.scope-systems { max-height: min(34vh, 330px); overflow: auto; border: 1px solid var(--admin-line); border-radius: 10px; }
+.scope-system + .scope-system { border-top: 1px solid var(--admin-line); }
+.scope-branch { min-height: 42px; padding: 2px 12px; }
+.scope-disclosure { display: inline-flex; align-items: center; align-self: stretch; gap: 8px; min-width: 0; flex: 1; padding: 0; border: none; background: transparent; color: inherit; text-align: left; cursor: pointer; }
+.scope-disclosure:disabled { color: inherit; cursor: default; }
+.scope-disclosure .anticon { color: var(--admin-secondary); font-size: 10px; }
+.scope-disclosure:enabled:hover, .scope-disclosure:enabled:focus-visible { color: var(--admin-blue); }
+.scope-count { flex: none; margin-left: auto; font-size: 12px; color: var(--admin-secondary); font-variant-numeric: tabular-nums; }
+.scope-department { margin-left: 21px; border-left: 1px solid var(--admin-line); }
+.scope-leaves { display: grid; gap: 4px; padding: 2px 12px 8px 36px; }
+.scope-leaves .ant-checkbox-wrapper, .scope-tools .ant-checkbox-wrapper { align-items: center; min-height: 36px; }
+.scope-tools { margin: 12px 0 0; padding: 0; border: none; }
+.scope-tools legend { margin: 0; padding: 0; color: #1d1d1f; font-size: 14px; font-weight: 500; }
+.scope-tools .ant-checkbox-wrapper { margin-right: 12px; }
+.scope-no-results { padding: 14px; text-align: center; color: var(--admin-secondary); }
 .license-scope-summary > .ant-typography:first-child { display: block; margin-bottom: 6px; font-size: 16px; }
 .license-scope-summary .ant-typography { margin-bottom: 0; line-height: 1.7; }
-.license-scope-modal .ant-form-item:last-child { margin-bottom: 0; }
-.license-scope-modal .ant-select { width: 100%; }
-.license-scope-modal .ant-form-item-extra { margin-top: 5px; color: var(--admin-secondary); font-size: 12px; line-height: 1.6; }
 .license-details-drawer .ant-drawer-header { flex-wrap: wrap; gap: 14px; }
 .license-details-drawer .ant-drawer-extra { max-width: 100%; }
 

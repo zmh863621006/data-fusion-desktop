@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { legacyScopeSystems, licenseScopeSnapshot, scopeEditorValues, scopeMatterCatalog, scopeUpdatePayload } from './license-scope';
+import { emptyScope, filterScopeDirectory, legacyScopeSystems, licenseScopeSnapshot, scopeDirectory, scopeEditorValues, scopeMatterCatalog, scopeUpdatePayload, selectScopeItems } from './license-scope';
 import type { LicenseRecord, MatterRecord, SystemRecord } from './types';
 
 const license: LicenseRecord = {
@@ -18,6 +18,31 @@ const matters: MatterRecord[] = [
 ];
 
 describe('license scope editor', () => {
+  it('limits department and keyword bulk actions to matching entries across systems and preserves independent tools', () => {
+    const catalog = scopeDirectory({ systems, matters: [
+      ...matters.map(m => ({ ...m, department_name: '水务局' })),
+      { ...matters[0], id: 'other', name: '养护', department_name: '城管局' },
+    ] });
+    const rows = (word: string) => filterScopeDirectory(catalog, word).flatMap(s => s.items);
+    const original = { ...emptyScope, allowedTools: ['tool-a'] };
+    const both = selectScopeItems(original, rows('水务局'), true);
+    expect(both).toEqual({ allowedSystems: ['system-a', 'system-b'], allowedTools: ['tool-a'], allowedMatters: { 'system-a': ['matter-a'], 'system-b': ['matter-b'] } });
+    const one = selectScopeItems(both, rows('事项 B'), false);
+    expect(one.allowedSystems).toEqual(['system-a']);
+    expect(one.allowedMatters).toEqual({ 'system-a': ['matter-a'] });
+    expect(selectScopeItems(one, rows('无匹配项'), true)).toEqual(one);
+    expect(original.allowedSystems).toEqual([]);
+  });
+
+  it('bulk selection preserves but cannot regrant retired items or a disabled historical system', () => {
+    const saved = { allowedSystems: ['system-a', 'retired'], allowedTools: [], allowedMatters: { 'system-a': ['matter-disabled'], retired: ['old'] } };
+    const catalog = scopeDirectory({ systems, matters }, saved);
+    const rows = catalog.flatMap(s => s.items);
+    const none = selectScopeItems(saved, rows, false);
+    const next = selectScopeItems(none, rows, true);
+    expect(next.allowedMatters).toEqual({ 'system-a': ['matter-a'], 'system-b': ['matter-b'] });
+    expect(selectScopeItems(saved, rows, true).allowedMatters).toEqual({ 'system-a': ['matter-disabled', 'matter-a'], retired: ['old'], 'system-b': ['matter-b'] });
+  });
   it('preserves the opened scope separately from editable values', () => {
     const snapshot = licenseScopeSnapshot(license);
     const values = scopeEditorValues(snapshot, matters);

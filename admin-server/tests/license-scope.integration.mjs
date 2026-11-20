@@ -68,6 +68,17 @@ const both = matter => ({ allowedSystems: [A, B], allowedTools: [], allowedMatte
 const onlyA = () => ({ allowedSystems: [A], allowedTools: [], allowedMatters: { [A]: [MATTER_A] } });
 const onlyTool = () => ({ allowedSystems: [], allowedTools: [TOOL], allowedMatters: {} });
 
+test('issuance verifies every granted matter including empty catalogs', async t => {
+  const f = await fixture(t);
+  const body = { customerId: f.customerId, mode: 'online', expiresAt: Date.now() + 86_400_000, ...onlyA() };
+  for (const selected of [[MATTER_A, 7], MATTER_A, null]) {
+    assert.equal((await f.api('/api/admin/licenses', { ...body, allowedMatters: { [A]: selected } })).status, 400);
+  }
+  f.db.prepare('UPDATE system_matters SET enabled=0 WHERE system_id=?').run(A);
+  assert.equal((await f.api('/api/admin/licenses', body)).status, 400);
+  assert.equal(f.db.prepare('SELECT COUNT(*) AS total FROM licenses').get().total, 0);
+});
+
 test('scope changes preserve license identity, features, devices and activation codes; every old device proof refreshes to the current scope', async t => {
   const f = await fixture(t), l = await f.license();
   const one = '1'.repeat(64), two = '2'.repeat(64), three = '3'.repeat(64);

@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type FormEvent } from 'react';
 import {
   App as AntApp, Button, Card, Col, Descriptions, Drawer, Form, Input, Popconfirm, Row,
-  Alert, Result, Space, Spin, Statistic, Tag, Typography, TreeSelect,
+  Alert, Result, Space, Spin, Statistic, Tag, Typography,
 } from 'antd';
 import {
   CloudServerOutlined, CodeSandboxOutlined, CustomerServiceOutlined, DashboardOutlined,
@@ -10,7 +10,7 @@ import {
 } from '@ant-design/icons';
 import {
   ModalForm, PageContainer, ProFormDatePicker, ProFormDependency, ProFormDigit, ProFormSelect,
-  ProFormSwitch, ProFormText, ProFormTextArea, ProFormTreeSelect, ProTable, type ProColumns,
+  ProFormSwitch, ProFormText, ProFormTextArea, ProTable, type ProColumns,
 } from '@ant-design/pro-components';
 import dayjs, { type Dayjs } from 'dayjs';
 import { adminApi, ApiError, loadAdminSession } from './api';
@@ -19,7 +19,8 @@ import { SecurityPage } from './SecurityPage';
 import { EnterprisePage } from './EnterprisePage';
 import { LicenseScopeEditor } from './LicenseScopeEditor';
 import { UpdatesPage } from './UpdatesPage';
-import { licenseScopeSnapshot } from './license-scope';
+import { emptyScope, licenseScopeSnapshot, scopeValidationError, type LicenseScopeValues } from './license-scope';
+import { LicenseScopePicker } from './LicenseScopePicker';
 import { adminTableSearch } from './presentation';
 import type { AuditRecord, BootstrapData, CustomerRecord, DeviceRecord, LicenseRecord, SystemRecord } from './types';
 
@@ -28,8 +29,8 @@ type LoginValues = { username: string; password: string; captcha: string };
 type CustomerValues = { name: string; contact?: string };
 type SystemValues = { name: string; version: string; enabled: boolean };
 type LicenseValues = {
-  customerId: string; mode: 'online' | 'offline'; expiresDate: Dayjs | string; allowedSystems?: string[]; allowedTools?: string[];
-  allowedMatters?: Record<string, string[]>; maxDevices: number; deviceId?: string; allowExport: boolean; allowAutoSync: boolean; allowAutoUpdate: boolean;
+  customerId: string; mode: 'online' | 'offline'; expiresDate: Dayjs | string; scope: LicenseScopeValues;
+  maxDevices: number; deviceId?: string; allowExport: boolean; allowAutoSync: boolean; allowAutoUpdate: boolean;
 };
 
 const dateTime = (value?: number) => value ? new Date(value).toLocaleString('zh-CN', { hour12: false }) : '—';
@@ -200,10 +201,24 @@ function LicensesPage({ data, reload }: { data: BootstrapData; reload: () => Pro
   const systemMap = useMemo(() => new Map(data.systems.map((item) => [item.id, item.name])), [data.systems]);
   const matterMap = useMemo(() => new Map(data.matters.map((item) => [`${item.system_id}:${item.id}`, item.name])), [data.matters]);
   const statusOf = (row: LicenseRecord) => row.status === 'revoked' ? 'revoked' : row.expires_at <= Date.now() ? 'expired' : 'active';
+  const componentOptions = useMemo(() => {
+    const names = new Map<string, string>();
+    for (const item of data.systems) names.set('system:' + item.id, item.name);
+    for (const item of data.tools ?? []) names.set('tool:' + item.id, item.name);
+    for (const license of data.licenses) {
+      for (const id of jsonArray(license.allowed_systems_json)) if (!names.has('system:' + id)) names.set('system:' + id, id);
+      for (const id of jsonArray(license.allowed_tools_json)) if (!names.has('tool:' + id)) names.set('tool:' + id, id);
+    }
+    return Array.from(names, ([value, label]) => ({ value, label }));
+  }, [data.systems, data.tools, data.licenses]);
   const filteredRows = data.licenses.filter((row) => contains(row.customer_name, filters.customer_name) && (!filters.mode || row.mode === filters.mode)
+    && (!filters.component || jsonArray(row.allowed_systems_json).some(id => filters.component === 'system:' + id)
+      || jsonArray(row.allowed_tools_json).some(id => filters.component === 'tool:' + id))
     && (!filters.status || statusOf(row) === filters.status));
   const columns: ProColumns<LicenseRecord>[] = [
     { title: '客户', dataIndex: 'customer_name', ellipsis: true },
+    { title: '授权系统 / 工具', dataIndex: 'component', hideInTable: true, valueType: 'select',
+      fieldProps: { options: componentOptions, showSearch: true, optionFilterProp: 'label', allowClear: true, placeholder: '搜索系统或工具' } },
     { title: '激活方式', dataIndex: 'mode', width: 105, valueEnum: { online: { text: '在线', status: 'Processing' }, offline: { text: '离线', status: 'Warning' } } },
     { title: '授权系统 / 工具', dataIndex: 'allowed_systems_json', search: false, render: (_, row) => <Space size={[0, 4]} wrap>{jsonArray(row.allowed_systems_json).map((id) => <Tag key={id}>{systemMap.get(id) ?? id}</Tag>)}{jsonArray(row.allowed_tools_json).map(id => <Tag color="purple" key={`tool:${id}`}>{data.tools?.find(tool => tool.id === id)?.name ?? id}</Tag>)}</Space> },
     { title: '设备数', dataIndex: 'max_devices', width: 85, search: false },
@@ -222,24 +237,18 @@ function LicensesPage({ data, reload }: { data: BootstrapData; reload: () => Pro
       try { await adminApi.renewLicense(renewing.id, dayjs(values.expiresDate).endOf('day').valueOf()); message.success(renewing.mode === 'offline' ? '已续期，请补发许可证并在客户端重新导入' : '已续期，客户端下次在线校验生效'); setSelected(null); await reload(); return true; } catch { return false; }
     }}><ProFormDatePicker name="expiresDate" label="新的截止日期" rules={[{ required: true }]} /></ModalForm>
     <ProTable<LicenseRecord> rowKey="id" headerTitle="全部授权" dataSource={filteredRows} columns={columns} search={adminTableSearch} onSubmit={(values) => setFilters(values)} onReset={() => setFilters({})} pagination={{ pageSize: 10 }} options={{ reload }} scroll={{ x: 1050 }} toolBarRender={() => canManage ? [<Button type="primary" icon={<PlusOutlined />} key="new" onClick={() => setOpen(true)}>签发授权</Button>] : []} />
-    <ModalForm<LicenseValues> title="签发授权" width={720} open={open} onOpenChange={setOpen} modalProps={{ destroyOnClose: true, keyboard: false, maskClosable: false }} initialValues={{ mode: 'online', maxDevices: 1, allowExport: true, allowAutoSync: false, allowAutoUpdate: true }} onFinish={async (values) => {
-      if (!values.allowedSystems?.length && !values.allowedTools?.length) { message.error('请至少选择一个业务系统或工具'); return false; }
+    <ModalForm<LicenseValues> title="签发授权" width={720} open={open} onOpenChange={setOpen} modalProps={{ destroyOnClose: true, keyboard: false, maskClosable: false }} initialValues={{ mode: 'online', scope: emptyScope, maxDevices: 1, allowExport: true, allowAutoSync: false, allowAutoUpdate: true }} onFinish={async (values) => {
+      const { scope, ...settings } = values;
       const dateValue = dayjs.isDayjs(values.expiresDate) ? values.expiresDate : dayjs(values.expiresDate);
-      const result = await adminApi.createLicense({ ...values, allowedSystems: values.allowedSystems ?? [], allowedTools: values.allowedTools ?? [], maxDevices: values.mode === 'offline' ? 1 : values.maxDevices, expiresAt: dateValue.endOf('day').valueOf(), allowAutoUpdate: values.mode === 'online' && values.allowAutoUpdate });
+      const result = await adminApi.createLicense({ ...settings, ...scope, maxDevices: values.mode === 'offline' ? 1 : values.maxDevices, expiresAt: dateValue.endOf('day').valueOf(), allowAutoUpdate: values.mode === 'online' && values.allowAutoUpdate });
       await reload(); message.success('授权已生成'); showKey(result.activationCode ?? result.offlineKey ?? '', values.mode === 'offline'); return true;
     }}>
       <Row gutter={16}><Col xs={24} sm={12}><ProFormSelect name="customerId" label="客户单位" options={data.customers.filter((item) => item.enabled).map((item) => ({ label: item.name, value: item.id }))} rules={[{ required: true }]} /></Col><Col xs={24} sm={12}><ProFormSelect name="mode" label="激活方式" options={[{ label: '在线激活', value: 'online' }, { label: '离线激活', value: 'offline' }]} rules={[{ required: true }]} /></Col></Row>
       <Row gutter={16}><Col xs={24} sm={12}><ProFormDatePicker name="expiresDate" label="授权有效期" width="md" fieldProps={{ disabledDate: (current: Dayjs) => current && current < dayjs().startOf('day') }} rules={[{ required: true }]} /></Col><Col xs={24} sm={12}><ProFormDependency name={['mode']}>{({ mode }) => mode === 'offline' ? <Typography.Paragraph>离线授权固定绑定 1 台设备</Typography.Paragraph> : <ProFormDigit name="maxDevices" label="最大设备数" fieldProps={{ precision: 0 }} min={1} max={100} width="md" rules={[{ required: true }]} />}</ProFormDependency></Col></Row>
-      <ProFormSelect name="allowedSystems" label="授权业务系统（仅使用工具时可不选）" mode="multiple" options={data.systems.filter((item) => item.enabled).map((item) => ({ label: item.name, value: item.id }))} />
-      <ProFormSelect name="allowedTools" label="授权工具（可单独授权，无需业务系统）" mode="multiple" options={(data.tools ?? []).map(item => ({ label: item.name, value: item.id }))} />
-      <ProFormDependency name={['allowedSystems']}>{({ allowedSystems }) => <>{(Array.isArray(allowedSystems) ? allowedSystems : []).map((systemId: string) => {
-        const matters = data.matters.filter((item) => item.system_id === systemId && item.enabled);
-        const groups = [...new Set(matters.map((item) => item.department_name ?? '业务事项'))];
-        const treeData = groups.map((group) => ({ title: group, value: `group:${group}`, selectable: false,
-          children: matters.filter((item) => (item.department_name ?? '业务事项') === group).map((item) => ({ title: item.name, value: item.id })) }));
-        return matters.length ? <ProFormTreeSelect key={systemId} name={['allowedMatters', systemId]} label={systemMap.get(systemId) ?? systemId}
-          fieldProps={{ treeData, treeCheckable: true, showCheckedStrategy: TreeSelect.SHOW_CHILD, maxTagCount: 2, maxTagTextLength: 20 }} rules={[{ required: true, message: '请选择至少一个业务事项' }]} /> : null;
-      })}</>}</ProFormDependency>
+      <Form.Item name="scope" label="授权范围" rules={[{ validator: async (_, value) => {
+        const error = scopeValidationError(value ?? emptyScope, data.matters);
+        if (error) throw new Error(error);
+      } }]}><LicenseScopePicker data={data} /></Form.Item>
       <ProFormDependency name={['mode']}>{({ mode }) => mode === 'offline' ? <ProFormText name="deviceId" label="离线设备码" fieldProps={{ maxLength: 64, showCount: true }} rules={[{ required: true }, { pattern: /^[a-f0-9]{64}$/, message: '请输入 64 位小写设备码' }]} /> : null}</ProFormDependency>
       <Row gutter={16}><Col span={8}><ProFormSwitch name="allowExport" label="允许导出" /></Col><Col span={8}><ProFormSwitch name="allowAutoSync" label="允许自动同步" /></Col><Col span={8}><ProFormDependency name={['mode']}>{({ mode }) => mode === 'online' ? <ProFormSwitch name="allowAutoUpdate" label="允许自动更新" /> : null}</ProFormDependency></Col></Row>
     </ModalForm>
