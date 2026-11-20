@@ -2,6 +2,7 @@ import ExcelJS from 'exceljs';
 import JSZip from 'jszip';
 import descriptor from './nanshan-template.json';
 import governmentMatters from '../../plugins/government-info/matter-catalog.json';
+import { HAZCHEM_MATTERS, HAZCHEM_SYSTEM_ID } from '../../plugins/shenzhen-hazardous-chemicals/catalog';
 import type { StoredRecord } from '../storage/types';
 import { exportFieldValue, validateExport, type ExportFieldIssue, type ExportValidation } from './validation';
 
@@ -25,6 +26,7 @@ export const NANSHAN_PERMIT_COLUMNS = [
 ] as const;
 const WATER_NAME = '深圳市南山区水务局', WATER_CODE = '11440305MB2D27962K';
 const waterMatters = new Set(governmentMatters.filter(matter => matter.departmentId === 'water-affairs').map(matter => matter.id));
+const hazardousPermitMatters = new Set(HAZCHEM_MATTERS.filter(matter => matter.departmentId === 'hazardous-chemicals').map(matter => matter.id));
 const authorities: Record<string, string> = { xkXkjg: WATER_NAME, xkXkjgdm: WATER_CODE, xkLydw: WATER_NAME, xkLydwdm: WATER_CODE };
 const dateKeys = new Set(['xkJdrq','xkYxqz','xkYxqzi']);
 const labels = new Map<string,string>(NANSHAN_PERMIT_COLUMNS);
@@ -32,6 +34,13 @@ const text = (value: unknown): string => typeof value === 'string' ? value.trim(
 
 /** Projection only: never change the stored record or copy the teacher's education bureau. */
 export function nanshanValue(record: StoredRecord, key: string): string {
+  if (record.systemId === HAZCHEM_SYSTEM_ID) {
+    if (key === 'xkFrZjlx' || key === 'xkFrZjhm') return '';
+    if (hazardousPermitMatters.has(record.matterId)) {
+      if (key === 'xkXkws') return '危险化学品经营许可证';
+      if (key === 'xkWsh') return text(exportFieldValue(record, 'xkXkbh'));
+    }
+  }
   let value = text(exportFieldValue(record, key));
   if (Object.hasOwn(authorities, key) && record.systemId === 'government-info') {
     if (waterMatters.has(record.matterId)) return authorities[key];

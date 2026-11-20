@@ -1,7 +1,7 @@
 import { session } from 'electron';
 import { AppError } from '../../core/errors/app-error';
 import { RequestGate } from '../../core/network/request-policy';
-import { HAZCHEM_ORIGIN, HAZCHEM_PARTITION, HAZCHEM_SERVICES, type HazardousMatter } from './catalog';
+import { HAZCHEM_ORIGIN, HAZCHEM_PARTITION, HAZCHEM_SERVICES, HAZCHEM_SYSTEM_NAME, type HazardousMatter } from './catalog';
 
 type Row = Record<string, unknown>;
 export interface HazardousClientOptions { fetcher?: (url: string, init: RequestInit) => Promise<Response>; now?: () => number; minimumIntervalMs?: number }
@@ -83,7 +83,7 @@ export class HazardousClient implements HazardousTransport {
     if (!this.validation) this.validation = (async () => {
       const body = await this.request(HAZCHEM_SERVICES.done, this.doneParams(1, 1), signal);
       rows(body); if (!Number.isSafeInteger(Number(body.total)) || Number(body.total) < 0) throw invalid('危化品会话校验未返回有效列表');
-      this.validatedAt = this.now(); return { displayName: '深圳危化品系统会话' };
+      this.validatedAt = this.now(); return { displayName: `${HAZCHEM_SYSTEM_NAME}会话` };
     })().finally(() => { this.validation = undefined; });
     return this.validation;
   }

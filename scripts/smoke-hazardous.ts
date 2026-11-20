@@ -96,7 +96,7 @@ void app.whenReady().then(async () => {
   window.webContents.on('console-message', event => { if (event.level === 'error') errors.push(event.message); });
   await window.loadFile(resolve('out/renderer/index.html'));
   await until(`document.querySelectorAll('.system-nav-toggle').length===1`);
-  assert.equal(await evaluate(`document.querySelector('.system-nav-toggle').innerText.includes('深圳危化品')`), true);
+  assert.equal(await evaluate(`document.querySelector('.system-nav-toggle').innerText.includes('危化品管理')`), true);
   assert.equal(await evaluate(`document.querySelector('.sidebar').innerText.includes('市场准入')`), false);
   await evaluate(`document.querySelector('.system-nav-toggle').click()`);
   await until(`Boolean(document.querySelector('.one-click-panel'))`);
@@ -124,7 +124,7 @@ void app.whenReady().then(async () => {
   authorized = false; await window.reload();
   await until(`document.querySelectorAll('.system-nav-toggle').length===1`);
   assert.equal(await evaluate(`document.querySelector('.system-nav-toggle').innerText.includes('市场准入')`), true);
-  assert.equal(await evaluate(`document.body.innerText.includes('深圳危化品')`), false);
+  assert.equal(await evaluate(`document.body.innerText.includes('危化品管理')`), false);
   await capture('unlicensed-hidden-1180', 1180, 780);
   assert.deepEqual(blocked, [], 'Renderer must not make any source or backend network request');
   assert.deepEqual(errors, [], 'No renderer errors');

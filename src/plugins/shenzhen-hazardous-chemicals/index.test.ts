@@ -4,6 +4,7 @@ import { validatePluginContract } from '../../core/plugins/types';
 import { createShenzhenHazardousPlugin } from './index';
 it('registers five grouped matters with optional explicit decision-date filters and portal session storage capture', () => {
   const p = createShenzhenHazardousPlugin(); expect(() => validatePluginContract(p)).not.toThrow(); expect(p.matters).toHaveLength(5);
+  expect(p.name).toBe('危化品管理');
   expect(p.loginPage?.browserAuth?.sessionStorageKeys).toEqual(['Authorization', 'userId']); expect(p.loginPage?.url).toBe('https://szwh.yjgl.sz.gov.cn/iHome/#/login');
   expect(p.matters.every(m => m.uniqueKey.join() === 'sourceSerial')).toBe(true); expect(p.matters.every(m => !m.getDetail)).toBe(true);
 });

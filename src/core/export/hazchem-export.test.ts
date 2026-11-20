@@ -52,6 +52,25 @@ describe('hazardous chemicals publication exports', () => {
     expect(validateProvincialPermit([configured]).invalid).toBe(0);
     expect(nanshanValue(configured, 'xkXkjgdm')).toBe('11440305MB2D288348');
     expect(configured.data.xkXkjg).toBe('深圳市南山区应急管理局');
+    const typeWithoutNumber = { ...configured, data: { ...configured.data, xkFrZjlx: '居民身份证', xkFrZjhm: '' } };
+    expect(validateNanshanPermit([typeWithoutNumber]).invalid).toBe(0);
+  });
+
+  it('uses the permit name and permit number for Nanshan decision columns on all four business-permit matters', () => {
+    for (const id of ['new', 'renewal', 'change', 'cancel']) {
+      const record = { ...permit, matterId: `hazchem-business-${id}` };
+      expect(nanshanValue(record, 'xkXkws')).toBe('危险化学品经营许可证');
+      expect(nanshanValue(record, 'xkWsh')).toBe('000001');
+      expect(provincialValue(record, 'xkXkws')).toBe('行政许可决定书');
+      expect(provincialValue(record, 'xkWsh')).toBe('示例字001');
+    }
+    const filing = { ...permit, matterId: 'hazchem-precursor-filing' };
+    expect(nanshanValue(filing, 'xkXkws')).toBe('行政许可决定书');
+    expect(nanshanValue(filing, 'xkWsh')).toBe('示例字001');
+    const missingNumber = { ...permit, data: { ...permit.data, xkXkbh: '' } };
+    expect(nanshanValue(missingNumber, 'xkWsh')).toBe('');
+    expect(validateNanshanPermit([missingNumber]).issues[0].fields.map(field => field.key)).toContain('xkWsh');
+    expect(permit.data.xkWsh).toBe('示例字001');
   });
 
   it('exports the provincial 24-column workbook and the separate Nanshan 31-column workbook with useful missing-field notes', async () => {
@@ -64,10 +83,19 @@ describe('hazardous chemicals publication exports', () => {
     expect(provincialSheet.columnCount).toBe(24);
     expect(provincialSheet.getCell('V5').value).toBe('深圳市南山区应急管理局');
     const nanshan = join(dir, '南山.xlsx'), confirm = vi.fn(async () => true);
-    expect(await service.export(nanshan, 'xlsx', [permit], confirm, undefined, 'nanshan')).toMatchObject({ warningCount: 1, missingRequiredCount: 1 });
+    const withRepresentativeId = { ...permit, data: { ...permit.data, xkFrZjlx: '居民身份证', xkFrZjhm: 'TEST-REPRESENTATIVE-ID' } };
+    expect(await service.export(nanshan, 'xlsx', [withRepresentativeId], confirm, undefined, 'nanshan')).toMatchObject({ warningCount: 1, missingRequiredCount: 1 });
     expect(confirm).toHaveBeenCalledOnce();
     const sheet = (await new ExcelJS.Workbook().xlsx.readFile(nanshan)).getWorksheet(NANSHAN_PERMIT_SHEET)!;
     expect(sheet.columnCount).toBe(31);
+    expect(sheet.getCell('I2').value).toBe('示例法人');
+    expect(sheet.getCell('J2').value).toBeNull();
+    expect(sheet.getCell('K2').value).toBeNull();
+    expect(sheet.getCell('N1').value).toBe('行政许可决定文书名称');
+    expect(sheet.getCell('O1').value).toBe('行政许可决定文书号');
+    expect(sheet.getCell('N2').value).toBe('危险化学品经营许可证');
+    expect(sheet.getCell('O2').value).toBe('000001');
+    expect(sheet.getCell('R2').value).toBe('000001');
     expect(sheet.getCell('AA2').value).toBe('深圳市南山区应急管理局');
     expect(sheet.getCell('AB2').value).toBeNull();
     expect(sheet.getCell('AD2').value).toBeNull();

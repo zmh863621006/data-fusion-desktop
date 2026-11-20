@@ -14,7 +14,7 @@ export function parseGovernmentExportTarget(value: unknown): GovernmentExportTar
 export function assertGovernmentExportTarget(target: GovernmentExportTarget | undefined, format: string, systems: string[]): void {
   parseGovernmentExportTarget(target);
   if (target && (format !== 'xlsx' || !systems.length || new Set(systems).size !== 1 || systems.some(system => !supportsGovernmentExport(system)))) {
-    throw new Error('省执法和南山模板仅支持政务综合信息或深圳危化品系统的单系统 Excel 导出');
+    throw new Error('省执法和南山模板仅支持政务综合信息或危化品管理的单系统 Excel 导出');
   }
 }
 

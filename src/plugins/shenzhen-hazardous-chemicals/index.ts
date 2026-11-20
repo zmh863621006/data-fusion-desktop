@@ -1,6 +1,6 @@
 import type { BusinessSystemPlugin } from '../../core/plugins/types';
 import type { SessionState } from '../../core/session/types';
-import { HAZCHEM_HOME_URL, HAZCHEM_LOGIN_URL, HAZCHEM_MATTERS, HAZCHEM_ORIGIN, HAZCHEM_PARTITION, HAZCHEM_SYSTEM_ID } from './catalog';
+import { HAZCHEM_HOME_URL, HAZCHEM_LOGIN_URL, HAZCHEM_MATTERS, HAZCHEM_ORIGIN, HAZCHEM_PARTITION, HAZCHEM_SYSTEM_ID, HAZCHEM_SYSTEM_NAME } from './catalog';
 import { HazardousClient, type HazardousClientOptions } from './client';
 import { queryHazardous } from './query';
 
@@ -8,11 +8,11 @@ export function createShenzhenHazardousPlugin(options: HazardousClientOptions = 
   const client = new HazardousClient(options);
   const state = async (): Promise<SessionState> => {
     if (client.needsValidation()) await client.validateSession().catch(() => {});
-    return client.verified() ? { systemId: HAZCHEM_SYSTEM_ID, status: 'authenticated', displayName: '深圳危化品系统会话' }
+    return client.verified() ? { systemId: HAZCHEM_SYSTEM_ID, status: 'authenticated', displayName: `${HAZCHEM_SYSTEM_NAME}会话` }
       : { systemId: HAZCHEM_SYSTEM_ID, status: client.hasSession() ? 'unverified' : 'logged-out', message: client.hasSession() ? '会话校验尚未完成，请检查原系统页面' : undefined };
   };
   return {
-    id: HAZCHEM_SYSTEM_ID, name: '深圳市危险化学品安全生产风险监测预警系统', version: '0.1.0',
+    id: HAZCHEM_SYSTEM_ID, name: HAZCHEM_SYSTEM_NAME, version: '0.1.0',
     description: '筛选流程结束的已办业务，按流水号关联制证数据，生成省执法和南山双公示。',
     workspaceMode: 'return-ledger', loginMode: 'embedded', supportsCredentialConfiguration: true,
     loginPage: { url: HAZCHEM_LOGIN_URL, allowedOrigin: HAZCHEM_ORIGIN, partition: HAZCHEM_PARTITION,

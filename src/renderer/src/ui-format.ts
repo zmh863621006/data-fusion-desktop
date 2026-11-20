@@ -1,4 +1,5 @@
 import { publicationPlatform } from '../../core/publication/platforms';
+import { HAZCHEM_SYSTEM_ID, HAZCHEM_SYSTEM_NAME } from '../../plugins/shenzhen-hazardous-chemicals/catalog';
 
 export const taskStatusLabel = (status: string): string => ({ queued: '排队中', running: '进行中', completed: '已完成', failed: '失败', cancelled: '已取消' })[status] ?? status;
 
@@ -6,7 +7,7 @@ const systemNames: Record<string, string> = {
   'market-access': '市场准入', 'government-info': '政务综合',
   'transport-practitioner': '道路运输从业人员', 'oversize-transport': '大件运输', 'online-car-permit': '网约车车证',
   'guangdong-hrss': '广东人社一体化',
-  'shenzhen-hazardous-chemicals': '深圳危化品',
+  [HAZCHEM_SYSTEM_ID]: HAZCHEM_SYSTEM_NAME,
 };
 const descriptions: Record<string, string> = {
   'market-access': '市场主体设立、变更等业务记录', 'government-info': '跨部门事项回流与证照字段核对',

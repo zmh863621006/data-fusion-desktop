@@ -100,7 +100,9 @@ seedSystem.run('transport-practitioner', '广东省道路运输从业人员管�
 seedSystem.run('oversize-transport', '广东省交通运输厅大件运输许可系统', '0.1.0', now);
 seedSystem.run('online-car-permit', '网络预约出租汽车运输证系统', '0.1.0', now);
 seedSystem.run('guangdong-hrss', '广东省集中式人力资源和社会保障一体化门户系统', '0.1.0', now);
-seedSystem.run('shenzhen-hazardous-chemicals', '深圳市危险化学品安全生产风险监测预警系统', '0.1.0', now);
+database.prepare(`INSERT INTO systems(id,name,version,created_at) VALUES(?,?,?,?)
+  ON CONFLICT(id) DO UPDATE SET name=excluded.name WHERE systems.name=?`)
+  .run('shenzhen-hazardous-chemicals', '危化品管理', '0.1.0', now, '深圳市危险化学品安全生产风险监测预警系统');
 const seedMatter = database.prepare('INSERT OR IGNORE INTO system_matters(id,system_id,name,created_at) VALUES(?,?,?,?)');
 seedMatter.run('business-application-query', 'market-access', '业务办理查询', now);
 transaction(() => {

@@ -1,6 +1,7 @@
 import catalog from './matter-catalog.json';
 
 export const HAZCHEM_SYSTEM_ID = 'shenzhen-hazardous-chemicals';
+export const HAZCHEM_SYSTEM_NAME = '危化品管理';
 export const HAZCHEM_ORIGIN = 'https://szwh.yjgl.sz.gov.cn';
 export const HAZCHEM_LOGIN_URL = HAZCHEM_ORIGIN + '/iHome/#/login';
 export const HAZCHEM_HOME_URL = HAZCHEM_ORIGIN + '/iHome/';

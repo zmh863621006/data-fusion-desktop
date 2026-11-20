@@ -8,6 +8,7 @@ import { configureOversizeTransportCredentials, oversizeTransportPlugin } from '
 import { configureOnlineCarPermitCredentials, onlineCarPermitPlugin } from '../plugins/online-car-permit';
 import { createGuangdongHrssPlugin } from '../plugins/guangdong-hrss';
 import { createShenzhenHazardousPlugin } from '../plugins/shenzhen-hazardous-chemicals';
+import { HAZCHEM_SYSTEM_ID, HAZCHEM_SYSTEM_NAME } from '../plugins/shenzhen-hazardous-chemicals/catalog';
 import { buildHrssDashboard } from '../core/hrss/dashboard';
 import { NodeSqliteDriver } from '../core/storage/database';
 import { SqliteLocalRepository } from '../core/storage/sqlite-repository';
@@ -63,7 +64,7 @@ b1oByVzE+8Uj5k4ApNg1P0JX3kxWn0qhcUFtRxsMO/nPAgMBAAE=
 
 const builtinModules = [
   {
-    id: 'shenzhen-hazardous-chemicals', name: '深圳市危险化学品安全生产风险监测预警系统', version: '0.1.0', publisher: '数据融合助手',
+    id: HAZCHEM_SYSTEM_ID, name: HAZCHEM_SYSTEM_NAME, version: '0.1.0', publisher: '数据融合助手',
     description: '已办流程结束记录关联制证数据，生成省执法和南山双公示',
   },
   {

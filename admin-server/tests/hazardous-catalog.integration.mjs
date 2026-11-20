@@ -49,7 +49,7 @@ test('hazardous catalog exposes five ordered matters with independent system aut
   const f = await fixture(t);
   assert.equal((await f.api('/api/admin/bootstrap', undefined, false)).status, 401);
   const bootstrap = (await f.api('/api/admin/bootstrap')).body;
-  assert.equal(bootstrap.systems.find(system => system.id === SYSTEM)?.name, '深圳市危险化学品安全生产风险监测预警系统');
+  assert.equal(bootstrap.systems.find(system => system.id === SYSTEM)?.name, '危化品管理');
   const matters = bootstrap.matters.filter(matter => matter.system_id === SYSTEM);
   assert.equal(matters.length, 5);
   assert.equal(new Set(matters.map(matter => matter.id)).size, 5);
@@ -122,13 +122,13 @@ test('repeated hazardous registration preserves existing license scope and disab
     db.prepare(`INSERT INTO licenses(id,customer_id,mode,expires_at,allowed_systems_json,allowed_matters_json,created_at)
       VALUES('existing','original','online',?,'["market-access"]','{"market-access":["business-application-query"]}',1)`).run(Date.now() + 86_400_000);
     const previous = { ...db.prepare("SELECT * FROM licenses WHERE id='existing'").get() };
-    db.prepare('UPDATE systems SET enabled=0 WHERE id=?').run(SYSTEM);
+    db.prepare('UPDATE systems SET name=?, enabled=0 WHERE id=?').run('深圳市危险化学品安全生产风险监测预警系统', SYSTEM);
     db.prepare('UPDATE system_matters SET enabled=0 WHERE system_id=? AND id=?').run(SYSTEM, catalog[0].id);
     db.close(); db = undefined;
     await boot(); await boot();
     db = new DatabaseSync(dataPath, { readOnly: true });
     assert.deepEqual({ ...db.prepare("SELECT * FROM licenses WHERE id='existing'").get() }, previous);
-    assert.equal(db.prepare('SELECT enabled FROM systems WHERE id=?').get(SYSTEM).enabled, 0);
+    assert.deepEqual({ ...db.prepare('SELECT name, enabled FROM systems WHERE id=?').get(SYSTEM) }, { name: '危化品管理', enabled: 0 });
     assert.equal(db.prepare('SELECT enabled FROM system_matters WHERE system_id=? AND id=?').get(SYSTEM, catalog[0].id).enabled, 0);
     assert.equal(db.prepare('SELECT count(*) count FROM system_matters WHERE system_id=?').get(SYSTEM).count, 5);
     db.close(); db = undefined;
