@@ -8,7 +8,7 @@ import { parseSettingsPatch } from '../src/core/ipc/validation';
 import type { UpdatePresentationState } from '../src/renderer/src/UpdateStatus';
 import { PUBLICATION_PLATFORMS, publicationPlatform } from '../src/core/publication/platforms';
 import { createSpecialEquipmentPlugin } from '../src/plugins/guangdong-special-equipment';
-import { EQUIPMENT_SYSTEM_ID, PERSONNEL_ASSESSMENT, USE_REGISTRATION } from '../src/plugins/guangdong-special-equipment/catalog';
+import { PERSONNEL_ASSESSMENT, USE_REGISTRATION } from '../src/plugins/guangdong-special-equipment/catalog';
 import { createFoodDrugPlugin } from '../src/plugins/guangdong-food-drug';
 import { FOOD_PRODUCTION, MEDICAL_DEVICE_OPERATION } from '../src/plugins/guangdong-food-drug/catalog';
 
@@ -977,9 +977,10 @@ async function run() {
   await runViewport(1440, 900); await runViewport(1180, 720);
   assertAuthorizedReads(0, 'Complete authorization regression');
   assert.equal(errors.length, 0, `Renderer errors: ${errors.join('\n')}`); assert.equal(blockedRequests.length, 0, `UI tried to access external resources: ${blockedRequests.join(', ')}`);
-  assert(localRecordQueries.every(query => typeof query.systemId === 'string' && typeof query.matterId === 'string'
-    && (query.systemId === EQUIPMENT_SYSTEM_ID ? equipment.matters.some(matter => matter.id === query.matterId)
-      : query.matterId.startsWith(`${query.systemId}-matter-`))), `Every local record read must retain matching system/matter scope: ${JSON.stringify(localRecordQueries)}`);
+  const knownSystems = [...ids, ...licenseSystems.map(system => system.id)];
+  assert(localRecordQueries.every(query => typeof query.systemId === 'string' && knownSystems.includes(query.systemId)
+    && matters(query.systemId).some(matter => matter.id === query.matterId)),
+  `Every local record read must retain matching system/matter scope: ${JSON.stringify(localRecordQueries)}`);
   assert.equal(actualFontSamples.length, coverage.length, 'Each screenshot must include an actual-platform-font sample');
   await writeFile(join(outputDirectory, 'report.json'), JSON.stringify({ status: 'pass', coverage, visualMetrics, actualFontSamples, localRecordQueries, queryContexts, calls: Object.fromEntries(calls), invocations, errors, blockedRequests,
     captureMethod: 'Test window only: showInactive, wait 300 ms, Chromium Page.captureScreenshot fromSurface=false, hide',
