@@ -20,6 +20,8 @@ import hrssMatters from '../src/plugins/guangdong-hrss/matter-catalog.json' with
 import hazardousMatters from '../src/plugins/shenzhen-hazardous-chemicals/matter-catalog.json' with { type: 'json' };
 import equipmentCatalog from '../src/plugins/guangdong-special-equipment/matter-catalog.json' with { type: 'json' };
 import foodDrugCatalog from '../src/plugins/guangdong-food-drug/matter-catalog.json' with { type: 'json' };
+import populationCatalog from '../src/plugins/guangdong-population/matter-catalog.json' with { type: 'json' };
+import shenzhenServicesCatalog from '../src/plugins/shenzhen-integrated-services/matter-catalog.json' with { type: 'json' };
 import toolCatalog from '../src/core/tools/catalog.json' with { type: 'json' };
 
 export function createAdminServer(options = {}) {
@@ -128,7 +130,7 @@ seedMatter.run('oversize-transport-return', 'oversize-transport', '大件运输�
 seedMatter.run('online-car-permit-return', 'online-car-permit', '网约车车证', now);
 transaction(() => {
   const seedOrderedMatter = database.prepare('INSERT OR IGNORE INTO system_matters(id,system_id,name,matter_order,created_at) VALUES(?,?,?,?,?)');
-  for (const catalog of [equipmentCatalog, foodDrugCatalog]) {
+  for (const catalog of [equipmentCatalog, foodDrugCatalog, populationCatalog, shenzhenServicesCatalog]) {
     seedSystem.run(catalog.id, catalog.name, catalog.version, now);
     for (const [order, matter] of catalog.matters.entries()) seedOrderedMatter.run(matter.id, catalog.id, matter.name, order, now);
   }
@@ -136,6 +138,20 @@ transaction(() => {
 // Human-resources lists are an independent component. Adding its catalog never
 // expands an existing customer's signed scope or enables enterprise enrichment.
 transaction(() => {
+  const existingSubdistrict = database.prepare("SELECT 1 FROM system_matters WHERE system_id='guangdong-hrss' AND department_id='subdistrict-office' LIMIT 1").get();
+  if (!existingSubdistrict) {
+    const existingIds = hrssMatters.filter(matter => matter.departmentId !== 'subdistrict-office').map(matter => matter.id);
+    const pin = database.prepare('UPDATE licenses SET allowed_matters_json=? WHERE id=?');
+    // Older HRSS grants without an explicit matter list covered the original catalog.
+    for (const license of database.prepare('SELECT id,allowed_systems_json,allowed_matters_json FROM licenses').all()) {
+      let scope;
+      try { scope = storedLicenseScope(license); }
+      catch { continue; } // Malformed legacy grants are rejected when used.
+      if (scope.allowedSystems.includes('guangdong-hrss') && !Object.hasOwn(scope.allowedMatters ?? {}, 'guangdong-hrss')) {
+        pin.run(JSON.stringify({ ...scope.allowedMatters, 'guangdong-hrss': existingIds }), license.id);
+      }
+    }
+  }
   const upsert = database.prepare(`INSERT INTO system_matters(id,system_id,name,department_id,department_name,department_order,matter_order,created_at)
     VALUES(?,'guangdong-hrss',?,?,?,?,?,?) ON CONFLICT(system_id,id) DO UPDATE SET name=excluded.name,
     department_id=excluded.department_id,department_name=excluded.department_name,department_order=excluded.department_order,matter_order=excluded.matter_order`);

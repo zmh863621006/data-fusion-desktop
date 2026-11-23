@@ -124,12 +124,13 @@ void app.whenReady().then(async () => {
   await evaluate(`document.querySelector('.system-nav-toggle').click()`);
   await waitFor("Boolean(document.querySelector('.one-click-panel'))");
   assert.equal(await evaluate("document.querySelectorAll('.return-date-fields input').length"), 2);
-  assert.equal(await evaluate("document.querySelector('.return-matter-field select').options.length"), 18);
+  assert.equal(await evaluate("document.querySelector('.return-matter-field select').options.length"), 22);
   for (const matter of plugin.matters) {
     await selectMatter(matter.id);
     assert.equal(await evaluate("document.querySelectorAll('.return-date-fields input[type=date]').length"), 2);
-    const expected = matter.id === 'unemployment' ? '日期筛选已生效' : '日期筛选待接入';
-    assert.equal(await evaluate("document.querySelector('.hrss-date-condition strong').textContent"), expected);
+    const expected = matter.dateFilter?.mode === 'applied' ? '日期筛选已生效'
+      : matter.dateFilter?.mode === 'pending' ? '日期筛选待接入' : undefined;
+    assert.equal(await evaluate("document.querySelector('.hrss-date-condition strong')?.textContent"), expected);
   }
   await selectMatter(pendingRow.matterId);
   await evaluate(`(()=>{const inputs=document.querySelectorAll('.return-date-fields input');for(const [i,value] of ['2026-10-01','2026-10-31'].entries()){Object.getOwnPropertyDescriptor(HTMLInputElement.prototype,'value').set.call(inputs[i],value);inputs[i].dispatchEvent(new Event('input',{bubbles:true}));inputs[i].dispatchEvent(new Event('change',{bubbles:true}));}})()`);
@@ -190,7 +191,7 @@ void app.whenReady().then(async () => {
   assert.equal(await evaluate(batchSelect + '.value'), 'hrss-archived-55', 'An older selected batch remains pinned when reading a newer page');
   window.setContentSize(1180, 780); await capture('05-small-workbench');
   assert.equal(errors.length, 0, errors.join('\n'));
-  await writeFile(join(output, 'report.json'), JSON.stringify({ passed: true, matterCount: 18, dateControls: 18, pendingDateFilters: 17, checks: ['list-only-metadata', 'date-schema', 'pending-date-status', 'pending-batch-not-effective-range', 'masked-ledger', 'managed-export-folder', 'native-fullscreen', 'escape-preserves-workbench', 'return-task', 'batch-snapshot'], invocationCount: invocations.length }, null, 2));
+  await writeFile(join(output, 'report.json'), JSON.stringify({ passed: true, matterCount: 22, dateControls: 22, pendingDateFilters: 17, checks: ['list-only-metadata', 'date-schema', 'pending-date-status', 'pending-batch-not-effective-range', 'masked-ledger', 'managed-export-folder', 'native-fullscreen', 'escape-preserves-workbench', 'return-task', 'batch-snapshot'], invocationCount: invocations.length }, null, 2));
   console.log('PASS: HRSS local UI integration; evidence: ' + output);
   app.exit(0);
 }).catch(error => { console.error(error); app.exit(1); });

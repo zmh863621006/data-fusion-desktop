@@ -1,0 +1,8 @@
+{
+  "id": "guangdong-population",
+  "name": "广东全员人口统筹管理统一登录平台",
+  "version": "0.1.0",
+  "matters": [
+    { "id": "birth-registration", "name": "生育登记" }
+  ]
+}

@@ -1,10 +1,12 @@
 import type { BusinessSystemPlugin } from '../../core/plugins/types';
+import type { BusinessMatter } from '../../core/query/types';
 import type { AuthAdapter, SessionState } from '../../core/session/types';
 import { observeBrowserAuthMany } from '../../main/browser-auth';
 import { HrssClient, type HrssClientOptions } from './client';
-import { HRSS_HOME_URL, HRSS_LOGIN_URL, HRSS_MATTER_DEFINITIONS, HRSS_ORIGIN, HRSS_PARTITION, HRSS_SYSTEM_ID } from './catalog';
+import { HRSS_HOME_URL, HRSS_LOGIN_URL, HRSS_MATTER_DEFINITIONS, HRSS_ORIGIN, HRSS_PARTITION, HRSS_SUBDISTRICT_MATTERS, HRSS_SYSTEM_ID } from './catalog';
 import { queryHrssLedger } from './query';
 import { hrssDateFilter, hrssDefaultDateFilters } from '../../core/hrss/date-filters';
+import { createCatalogMatter } from '../../core/query/catalog-matter';
 
 export { HRSS_SYSTEM_ID, HRSS_MATTER_DEFINITIONS, HRSS_MATTER_BY_ID } from './catalog';
 export { HrssClient } from './client';
@@ -20,10 +22,10 @@ export function createGuangdongHrssPlugin(options:HrssClientOptions={}):Business
   let initialized=false;
   return {
     id:HRSS_SYSTEM_ID,name:'广东省集中式人力资源和社会保障一体化门户系统',version:'0.1.0',
-    description:'按原项目列表字段回流18类人社台账。',workspaceMode:'list-ledger',loginMode:'embedded',auth,
+    description:'就业、补贴和街道办业务台账。',workspaceMode:'list-ledger',loginMode:'embedded',auth,
     loginPage:{url:HRSS_LOGIN_URL,partition:HRSS_PARTITION,allowedOrigin:HRSS_ORIGIN},
     sessionRecovery:{snapshot:()=>client.exportSession(),restore:value=>client.restoreSession(value),validate:signal=>client.validateSession(signal),homeUrl:()=>HRSS_HOME_URL},
-    matters:HRSS_MATTER_DEFINITIONS.map(definition=>({
+    matters:[...HRSS_MATTER_DEFINITIONS.map<BusinessMatter>(definition=>({
       id:definition.id,name:definition.name,departmentId:definition.departmentId,departmentName:definition.departmentName,departmentOrder:definition.departmentOrder,matterOrder:definition.matterOrder,
       description:'提取原站列表字段；缺失字段保留为空。',executionMode:'one-click-return' as const,
       dateFilter:hrssDateFilter(definition.id),
@@ -32,7 +34,7 @@ export function createGuangdongHrssPlugin(options:HrssClientOptions={}):Business
       uniqueKey:['recordKey'],listColumns:definition.columns.map(({key,label,sensitive})=>({key,label,sensitive})),
       createDefaultContext:()=>({page:1,pageSize:200,filters:hrssDefaultDateFilters(definition.id,(options.now??Date.now)())}),
       query:context=>queryHrssLedger(client,definition,context,(options.now??Date.now)()),
-    })),
+    })), ...HRSS_SUBDISTRICT_MATTERS.map(matter => createCatalogMatter(matter, options.now))],
     async initialize(){
       if(!initialized){
         observeBrowserAuthMany(HRSS_PARTITION,[

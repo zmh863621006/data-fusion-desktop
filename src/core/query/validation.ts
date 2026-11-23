@@ -1,5 +1,5 @@
 import { AppError } from '../errors/app-error';
-import type { QueryFieldSchema } from './types';
+import type { BusinessMatter, QueryFieldSchema } from './types';
 
 export function validateFilters(schema: QueryFieldSchema[], filters: Record<string, unknown>): void {
   const errors: string[] = [];
@@ -48,4 +48,12 @@ export function validateFilters(schema: QueryFieldSchema[], filters: Record<stri
   }
 
   if (errors.length) throw new AppError('QUERY_INVALID', errors.join('；'), { errors });
+}
+
+export function rejectUnavailableMatterQuery(): never {
+  throw new AppError('QUERY_INVALID', '当前事项暂时无法回流');
+}
+
+export function assertMatterQueryAvailable(matter: Pick<BusinessMatter, 'queryAvailable'>): void {
+  if (matter.queryAvailable === false) rejectUnavailableMatterQuery();
 }

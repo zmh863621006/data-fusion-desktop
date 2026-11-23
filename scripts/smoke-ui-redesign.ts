@@ -11,6 +11,8 @@ import { createSpecialEquipmentPlugin } from '../src/plugins/guangdong-special-e
 import { PERSONNEL_ASSESSMENT, USE_REGISTRATION } from '../src/plugins/guangdong-special-equipment/catalog';
 import { createFoodDrugPlugin } from '../src/plugins/guangdong-food-drug';
 import { FOOD_PRODUCTION, MEDICAL_DEVICE_OPERATION } from '../src/plugins/guangdong-food-drug/catalog';
+import { createGuangdongHrssPlugin } from '../src/plugins/guangdong-hrss';
+import { catalogOnlySystems, createCatalogOnlySystem } from '../src/plugins/catalog-only-systems';
 
 // UI-only regression: a fresh profile, an in-memory fixture, no app runtime or
 // SQLite imports, no real credentials, and all network traffic blocked.
@@ -21,7 +23,7 @@ let window: BrowserWindow | undefined;
 let profile = '';
 let outputDirectory = '';
 let failureReason = '';
-type Scenario = 'inactive' | 'active' | 'no-tool' | 'tools-only' | 'single-system' | 'active-empty' | 'equipment-only' | 'food-drug-only';
+type Scenario = 'inactive' | 'active' | 'no-tool' | 'tools-only' | 'single-system' | 'active-empty' | 'equipment-only' | 'food-drug-only' | 'additional-catalogs';
 let scenario: Scenario = 'inactive';
 let scopeAfterManualRefresh: Scenario | undefined;
 let scenarioEpoch = 0;
@@ -62,25 +64,30 @@ function publishUpdate(state: UpdatePresentationState) {
 
 const equipment = createSpecialEquipmentPlugin({ now: () => now });
 const foodDrug = createFoodDrugPlugin({ now: () => now });
-const licenseSystems = [equipment, foodDrug];
+const hrss = createGuangdongHrssPlugin({ now: () => now });
+const streetMatters = hrss.matters.filter(matter => matter.departmentId === 'subdistrict-office');
+const additionalSystems = catalogOnlySystems.map(createCatalogOnlySystem);
+const licenseSystems = [equipment, foodDrug, hrss, ...additionalSystems];
 const licenseComponents = licenseSystems.map(({ id, name, version, description, workspaceMode }) =>
   ({ id, name, version, description, workspaceMode, kind: 'system', authorized: true }));
 function allowedSystems() {
   if (scenario === 'equipment-only') return [equipment.id];
   if (scenario === 'food-drug-only') return [foodDrug.id];
+  if (scenario === 'additional-catalogs') return [hrss.id, ...additionalSystems.map(system => system.id)];
   return scenario === 'tools-only' || scenario === 'active-empty' || scenario === 'inactive' ? [] : scenario === 'single-system' ? [ids[1]] : ids;
 }
 function allowedTools() { return scenario === 'active' || scenario === 'tools-only' ? ['health-publicity'] : []; }
 function grant() {
   return { licenseId: 'ui-only-fixture', customerName: '界面测试客户（示例）', expiresAt: now + 365 * 86400000,
     allowedSystems: allowedSystems(), allowedTools: allowedTools(),
-    ...(numberScope && { allowedMatters: { 'transport-practitioner': numberScope } }),
+    ...(scenario === 'additional-catalogs' ? { allowedMatters: { [hrss.id]: streetMatters.map(matter => matter.id) } }
+      : numberScope ? { allowedMatters: { 'transport-practitioner': numberScope } } : {}),
     allowExport, allowAutoSync: true, allowAutoUpdate: false, activationMode: 'online' };
 }
 function license() { return { state: scenario === 'inactive' ? 'inactive' : 'active', deviceId: 'ui-fixture-device-000000000000', grant: scenario === 'inactive' ? undefined : grant() }; }
 function matters(systemId: string) {
   const plugin = licenseSystems.find(system => system.id === systemId);
-  if (plugin) return plugin.matters.map(({ query, createDefaultContext, ...matter }) => ({
+  if (plugin) return plugin.matters.map(({ query, queryAvailable, createDefaultContext, ...matter }) => ({
     ...matter, defaultFilters: createDefaultContext?.().filters,
   }));
   return (systemId === ids[0] ? ['水务局', '城管局', '其他'] : ['业务事项']).map((departmentName, index) => ({
@@ -160,7 +167,11 @@ async function invoke(method: string, ...args: any[]) {
       queryContexts.push({ systemId: args[0], matterId: args[1], context });
       return marketQuery ? marketQuery(context) : { rows: [recordData], total: 1, page: context.page, pageSize: context.pageSize };
     }
-    case 'matters.run': return { taskId: `${args[0]}-batch-0` };
+    case 'matters.run': {
+      const matter = licenseSystems.find(system => system.id === args[0])?.matters.find(item => item.id === args[1]);
+      if (matter?.queryAvailable === false) throw new Error('当前事项暂时无法回流');
+      return { taskId: `${args[0]}-batch-0` };
+    }
     case 'tasks.list': return tasks();
     case 'tasks.page': {
       const scope = args[0];
@@ -185,6 +196,7 @@ async function invoke(method: string, ...args: any[]) {
     case 'exports.openFolder': return true;
     case 'records.list': {
       const query = args[0] ?? {}; localRecordQueries.push({ ...query });
+      if (scenario === 'additional-catalogs') return { rows: [], total: 0 };
       if (query.pageSize === 10) return { rows: Array.from({ length: 10 }, (_, index) => ({ ...record(query.systemId, query.matterId), recordKey: `fixture-local-preview-${index + 1}`, data: { ...recordData, xkXdrMc: `本地示例机构 ${index + 1}` } })), total: 10 };
       return { rows: [record(query.systemId, query.matterId)], total: 1 };
     }
@@ -966,6 +978,31 @@ async function verifyFoodDrugWorkspace() {
   await verifyCollectionExportButtons(foodDrug.id, FOOD_PRODUCTION.id);
 }
 
+async function verifyAdditionalCatalogs() {
+  await reload('additional-catalogs');
+  await until('document.querySelectorAll(".system-nav-toggle").length === 3');
+  for (const system of [hrss, ...additionalSystems]) {
+    await dom(`[...document.querySelectorAll('.system-nav-toggle')].find(button=>button.title===${JSON.stringify(system.name)}).click()`);
+    const expected = (system === hrss ? streetMatters : system.matters).map(matter => matter.name);
+    await until(`JSON.stringify([...document.querySelectorAll('.return-matter-field select option')].map(item=>item.textContent))===${JSON.stringify(JSON.stringify(expected))}`);
+    assert.equal(await dom('document.querySelectorAll(".return-date-fields input[type=date]").length'), 2);
+    assert.equal(await dom('document.querySelector("main").innerText.includes("待接入")'), false);
+    assert.equal(await dom('document.querySelector(".session-box").textContent.includes("全屏数据看板")'), system === hrss);
+    if (system === hrss) {
+      await dom(`[...document.querySelectorAll('.department-nav-title')].find(button=>button.textContent.includes('街道办')).click()`);
+      assert.deepEqual(await dom(`[...document.querySelectorAll('.department-subnav .matter-subnav button')].map(item=>item.textContent)`), expected);
+      await click('.one-click-panel .run-return-button');
+      await until(`document.querySelector('main > .page-message')?.textContent.includes('当前事项暂时无法回流')`);
+      assert.equal(await dom('document.querySelector("main").innerText.includes("回流任务已创建")'), false);
+    }
+    await button('回流数据', '.matter-workspace-tabs');
+    await until('document.querySelector(".hrss-ledger-footer")?.textContent.includes("共 0 条列表记录")');
+    const last = localRecordQueries.at(-1);
+    assert.equal(last?.systemId, system.id);
+    assert((system === hrss ? streetMatters : system.matters).some(matter => matter.id === last?.matterId));
+  }
+}
+
 async function run() {
   profile = process.env.DATA_FUSION_UI_TEST_PROFILE || await mkdtemp(join(tmpdir(), 'fusion-ui-redesign-')); app.setPath('userData', profile);
   await app.whenReady();
@@ -980,6 +1017,7 @@ async function run() {
   await verifyAuthorizationInfo();
   await verifyEquipmentWorkspace();
   await verifyFoodDrugWorkspace();
+  await verifyAdditionalCatalogs();
   await runViewport(1440, 900); await runViewport(1180, 720);
   assertAuthorizedReads(0, 'Complete authorization regression');
   assert.equal(errors.length, 0, `Renderer errors: ${errors.join('\n')}`); assert.equal(blockedRequests.length, 0, `UI tried to access external resources: ${blockedRequests.join(', ')}`);

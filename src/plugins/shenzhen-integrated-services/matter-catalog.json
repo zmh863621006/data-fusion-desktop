@@ -1,0 +1,17 @@
+{
+  "id": "shenzhen-integrated-services",
+  "name": "深圳市一体化经办平台",
+  "version": "0.1.0",
+  "matters": [
+    { "id": "poverty-alleviation-one-time-employment-subsidy", "name": "吸纳脱贫人口一次性就业补贴" },
+    { "id": "poverty-alleviation-post-subsidy", "name": "吸纳脱贫人口岗位补贴" },
+    { "id": "poverty-alleviation-social-insurance-subsidy", "name": "吸纳脱贫人口社保补贴" },
+    { "id": "employee-housekeeping-enterprise-filing", "name": "员工制家政服务企业备案" },
+    { "id": "employee-housekeeping-hiring-subsidy", "name": "员工制家政服务企业吸纳就业补贴" },
+    { "id": "housekeeping-commercial-insurance-subsidy", "name": "家政服务企业商业保险补贴" },
+    { "id": "employee-housekeeping-social-insurance-subsidy", "name": "员工制家政服务企业社保补贴" },
+    { "id": "small-enterprise-social-insurance-subsidy", "name": "小微企业社保补贴" },
+    { "id": "hkmotw-youth-internship-subsidy", "name": "港澳台青年实习补助" },
+    { "id": "hkmo-youth-startup-matching-grant", "name": "港澳青年初创企业配套资助" }
+  ]
+}

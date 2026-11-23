@@ -12,15 +12,18 @@ const plugin = createGuangdongHrssPlugin({ now: () => Date.parse('2026-11-05T01:
 const frame = {}, event = { sender: { id: 7, mainFrame: frame }, senderFrame: frame };
 beforeEach(() => { vi.clearAllMocks(); f.handlers.clear(); registerIpcHandlers(() => 7); });
 
-it('serializes both date controls and explicit integration status for every authorized HRSS matter', async () => {
+it('serializes date controls for all HRSS matters and date behavior only for connected matters', async () => {
   const matters = await f.handlers.get(IPC_CHANNELS.mattersList)!(event, 'guangdong-hrss');
-  expect(matters).toHaveLength(18); expect(() => structuredClone(matters)).not.toThrow();
-  expect(matters.every((matter: any) => matter.querySchema.length === 2 && matter.dateFilter)).toBe(true);
-  expect(matters.filter((matter: any) => matter.dateFilter.mode === 'pending')).toHaveLength(17);
+  expect(matters).toHaveLength(22); expect(() => structuredClone(matters)).not.toThrow();
+  expect(matters.every((matter: any) => matter.querySchema.length === 2)).toBe(true);
+  expect(matters.filter((matter: any) => matter.dateFilter?.mode === 'pending')).toHaveLength(17);
+  const streetMatters = matters.filter((matter: any) => matter.departmentId === 'subdistrict-office');
+  expect(streetMatters).toHaveLength(4);
+  expect(streetMatters.every((matter: any) => !('dateFilter' in matter))).toBe(true);
 });
 
-it('saves pending selected dates separately from effective remote ranges for all 18 tasks', async () => {
-  for (const matter of plugin.matters) {
+it('saves selected dates separately from effective remote ranges for the 18 connected matters', async () => {
+  for (const matter of plugin.matters.filter(item => item.queryAvailable !== false)) {
     await f.handlers.get(IPC_CHANNELS.matterRun)!(event, plugin.id, matter.id, { page: 1, pageSize: 200,
       filters: { startDate: '2026-10-01', endDate: '2026-10-31' } });
     const metadata = f.run.mock.lastCall![2] as { details: Record<string, unknown> };
@@ -31,6 +34,7 @@ it('saves pending selected dates separately from effective remote ranges for all
       expect(metadata.details).not.toHaveProperty('startDate'); expect(metadata.details).not.toHaveProperty('endDate');
     }
   }
+  expect(f.run).toHaveBeenCalledTimes(18);
 });
 
 it('rejects bad date ranges and caller-supplied integration flags before creating a task', async () => {

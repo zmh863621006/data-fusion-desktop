@@ -3,6 +3,7 @@ vi.mock('electron', () => ({ BrowserWindow: class {}, session: {}, safeStorage: 
 import { AppRuntime } from './runtime';
 import type { LicenseGrant } from '../core/license/types';
 import tools from '../core/tools/catalog.json';
+import { catalogOnlySystems, createCatalogOnlySystem } from '../plugins/catalog-only-systems';
 
 const grant = (systems: string[], allowedTools: string[] = []): LicenseGrant => ({
   licenseId: 'catalog-fixture', expiresAt: Date.now() + 60_000, allowedSystems: systems, allowedTools,
@@ -28,6 +29,14 @@ describe('licensed component discovery', () => {
     vi.spyOn(runtime, 'currentGrant').mockResolvedValue(grant(['government-info']));
     expect((await runtime.listComponents()).map(item => item.kind)).toEqual(['system']);
     await expect(runtime.healthTool()).rejects.toThrow('LICENSE_TOOL_DENIED');
+  });
+  it('lists each new portal as a standalone component only when it is granted', async () => {
+    const runtime = new AppRuntime();
+    for (const system of catalogOnlySystems) runtime.plugins.register(createCatalogOnlySystem(system));
+    const [population, shenzhen] = catalogOnlySystems;
+    vi.spyOn(runtime, 'currentGrant').mockResolvedValueOnce(grant([population.id])).mockResolvedValueOnce(grant([shenzhen.id]));
+    expect(await runtime.listComponents()).toMatchObject([{ id: population.id, name: population.name, workspaceMode: 'list-ledger' }]);
+    expect(await runtime.listComponents()).toMatchObject([{ id: shenzhen.id, name: shenzhen.name, workspaceMode: 'list-ledger' }]);
   });
   it.each([null, { ...grant(['government-info'], ['health-publicity']), expiresAt: 0 }])('hides every component for absent or expired credentials', async value => {
     const runtime = new AppRuntime();vi.spyOn(runtime, 'currentGrant').mockResolvedValue(value);

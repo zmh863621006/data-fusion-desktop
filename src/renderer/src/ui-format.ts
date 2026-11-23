@@ -9,6 +9,8 @@ const systemNames: Record<string, string> = {
   'market-access': '市场准入', 'government-info': '政务综合',
   'transport-practitioner': '道路运输从业人员', 'oversize-transport': '大件运输', 'online-car-permit': '网约车车证',
   'guangdong-hrss': '广东人社一体化',
+  'guangdong-population': '全员人口',
+  'shenzhen-integrated-services': '深圳一体化',
   [HAZCHEM_SYSTEM_ID]: HAZCHEM_SYSTEM_NAME,
   [EQUIPMENT_SYSTEM_ID]: '特种设备监管',
   [FOOD_DRUG_SYSTEM_ID]: '智慧食药监',

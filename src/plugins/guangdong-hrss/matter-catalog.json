@@ -16,5 +16,9 @@
   {"id":"youth-internship-unit","name":"青年见习单位申报","departmentId":"internships","departmentName":"青年就业见习","departmentOrder":3,"matterOrder":2},
   {"id":"graduate-tracking-service","name":"高校毕业生实名登记跟踪服务","departmentId":"tracking","departmentName":"重点群体跟踪服务","departmentOrder":4,"matterOrder":1},
   {"id":"difficult-tracking-service","name":"就业困难人员跟踪服务","departmentId":"tracking","departmentName":"重点群体跟踪服务","departmentOrder":4,"matterOrder":2},
-  {"id":"unemployment-tracking-service","name":"失业人员跟踪服务","departmentId":"tracking","departmentName":"重点群体跟踪服务","departmentOrder":4,"matterOrder":3}
+  {"id":"unemployment-tracking-service","name":"失业人员跟踪服务","departmentId":"tracking","departmentName":"重点群体跟踪服务","departmentOrder":4,"matterOrder":3},
+  {"id":"enterprise-hiring-difficult-personnel-subsidy","name":"企业招用困难人员补贴","departmentId":"subdistrict-office","departmentName":"街道办","departmentOrder":5,"matterOrder":1},
+  {"id":"enterprise-hiring-difficult-personnel-post-subsidy","name":"企业招用困难人员岗位补贴","departmentId":"subdistrict-office","departmentName":"街道办","departmentOrder":5,"matterOrder":2},
+  {"id":"startup-training","name":"创业培训","departmentId":"subdistrict-office","departmentName":"街道办","departmentOrder":5,"matterOrder":3},
+  {"id":"retired-military-employment-subsidy","name":"吸纳退役军人就业补贴","departmentId":"subdistrict-office","departmentName":"街道办","departmentOrder":5,"matterOrder":4}
 ]

@@ -38,6 +38,8 @@ import { UpdateService, runtimeUpdateTarget, type UpdateArtifact, type DownloadP
 import { buildRecordKey } from '../core/sync/engine';
 import type { TaskContext } from '../core/tasks/engine';
 import type { QueryContext } from '../core/query/types';
+import { assertMatterQueryAvailable } from '../core/query/validation';
+import { catalogOnlySystems, createCatalogOnlySystem } from '../plugins/catalog-only-systems';
 import type { StoredRecord } from '../core/storage/types';
 import { SecureCredentialStore } from './credential-store';
 import { SecureSessionStore } from './session-store';
@@ -103,6 +105,7 @@ const builtinModules = [
     id: 'guangdong-hrss', name: '广东省集中式人力资源和社会保障一体化门户系统', version: '0.1.0', publisher: '数据融合助手',
     description: '就业服务与补贴列表回流、本地业务台账及全屏数据看板',
   },
+  ...catalogOnlySystems.map(({ id, name, version, description }) => ({ id, name, version, description, publisher: '数据融合助手' })),
 ];
 
 interface PendingSyncPreview {
@@ -215,6 +218,7 @@ export class AppRuntime {
     this.plugins.register(createShenzhenHazardousPlugin());
     this.plugins.register(createSpecialEquipmentPlugin());
     this.plugins.register(createFoodDrugPlugin());
+    for (const definition of catalogOnlySystems) this.plugins.register(createCatalogOnlySystem(definition));
     const plugins = this.plugins.list();
     const sources = plugins.flatMap(({ id, loginPage }) => [
       ...(loginPage ? [{ partition: loginPage.partition, origins: sourceOrigins(loginPage) }] : []),
@@ -489,6 +493,7 @@ export class AppRuntime {
     const matter = plugin?.matters.find((item) => item.id === matterId);
     await this.requireLicense(systemId, matterId);
     if (!plugin || !matter || !this.syncEngine || !this.platformStore) throw new Error('数据回流模块未就绪');
+    assertMatterQueryAvailable(matter);
     if (matter.executionMode !== 'one-click-return' || !matter.createDefaultContext) throw new Error('该业务事项不支持一键回流');
     if ((await plugin.getSessionState()).status !== 'authenticated') throw new Error('请先登录该业务系统');
     await plugin.auth.getSessionForRequest();
@@ -681,6 +686,7 @@ export class AppRuntime {
     const matter = plugin?.matters.find((item) => item.id === matterId);
     await this.requireLicense(systemId, matterId);
     if (!plugin || !matter || !this.syncEngine) throw new Error('同步模块未就绪');
+    assertMatterQueryAvailable(matter);
     if ((await plugin.getSessionState()).status !== 'authenticated') throw new Error('请先登录该业务系统');
 
     const enriched = this.enterpriseService ? await this.enterpriseService.enrich(systemId, matterId, rows) : rows;

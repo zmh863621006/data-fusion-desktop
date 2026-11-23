@@ -2,7 +2,7 @@ import { BrowserWindow, clipboard, dialog, ipcMain, shell, type IpcMainInvokeEve
 import { appRuntime } from './runtime';
 import { IPC_CHANNELS } from '../core/ipc/channels';
 import { parseIdentifier, parseLocalRecordQuery, parseQueryContext, parseRows, parseSettingsPatch, parseTaskHistoryQuery } from '../core/ipc/validation';
-import { validateFilters } from '../core/query/validation';
+import { assertMatterQueryAvailable, validateFilters } from '../core/query/validation';
 import { readFile } from 'node:fs/promises';
 import { loginTabController } from './login-tab';
 import { operationalLog } from './operational-log';
@@ -480,6 +480,7 @@ export function registerIpcHandlers(getTrustedWebContentsId: () => number | unde
     await appRuntime.requireLicense(systemId, matterId);
     const matter = plugin.matters.find((item) => item.id === matterId);
     if (!matter) throw new Error(`Unknown matter: ${matterId}`);
+    assertMatterQueryAvailable(matter);
     const queryContext = parseQueryContext(contextInput);
     validateFilters(matter.querySchema, queryContext.filters);
     const dateDetails = systemId === 'guangdong-hrss' ? hrssReturnDateDetails(matterId, queryContext.filters) : {
@@ -511,6 +512,7 @@ export function registerIpcHandlers(getTrustedWebContentsId: () => number | unde
       if (systemId === 'guangdong-hrss') throw new Error('请使用人社列表回流任务，以保证批次完整保存');
       const matter = plugin.matters.find((item) => item.id === matterId);
       if (!matter) throw new Error(`Unknown matter: ${matterId}`);
+      assertMatterQueryAvailable(matter);
       validateFilters(matter.querySchema, context.filters);
       const task = await appRuntime.tasks.run(
         `查询：${plugin.name} / ${matter.name}`,

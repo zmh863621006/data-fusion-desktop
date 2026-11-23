@@ -44,6 +44,17 @@ describe('verifySignedLicense', () => {
     expect(() => verifySignedLicense(malformed.envelope, malformed.publicKey)).toThrow('授权事项范围无效');
   });
 
+  it('keeps the 18 previously covered HRSS matters on an old offline wildcard grant', () => {
+    const { envelope, publicKey } = signedEnvelope({ activationMode: 'offline', allowedSystems: ['guangdong-hrss', 'demo-system'] });
+    const grant = verifySignedLicense(envelope, publicKey);
+    expect(grant.allowedMatters?.['guangdong-hrss']).toHaveLength(18);
+    expect(() => assertSystemLicensed(grant, 'guangdong-hrss', 'unemployment')).not.toThrow();
+    expect(() => assertSystemLicensed(grant, 'guangdong-hrss', 'startup-training')).toThrow('LICENSE_MATTER_DENIED');
+    expect(() => assertSystemLicensed(grant, 'demo-system', 'existing-matter')).not.toThrow();
+    const explicit = signedEnvelope({ allowedSystems: ['guangdong-hrss'], allowedMatters: { 'guangdong-hrss': ['startup-training'] } });
+    expect(verifySignedLicense(explicit.envelope, explicit.publicKey).allowedMatters?.['guangdong-hrss']).toEqual(['startup-training']);
+  });
+
   it('rejects payload tampering', () => {
     const { envelope, publicKey } = signedEnvelope();
     envelope.payload = Buffer.from(JSON.stringify({ licenseId: 'stolen' })).toString('base64url');

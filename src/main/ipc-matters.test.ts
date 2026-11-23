@@ -5,6 +5,7 @@ const fixtures = vi.hoisted(() => ({
   handlers: new Map<string, (...args: any[]) => Promise<unknown>>(),
   plugins: new Map<string, BusinessSystemPlugin>(),
   requireLicense: vi.fn(),
+  tasksRun: vi.fn(),
 }));
 vi.mock('electron', () => ({
   BrowserWindow: class {}, session: {},
@@ -12,6 +13,7 @@ vi.mock('electron', () => ({
 }));
 vi.mock('./runtime', () => ({ appRuntime: {
   plugins: { get: (id: string) => fixtures.plugins.get(id) }, requireLicense: fixtures.requireLicense,
+  tasks: { run: fixtures.tasksRun },
 } }));
 import { registerIpcHandlers } from './ipc';
 import { IPC_CHANNELS } from '../core/ipc/channels';
@@ -20,8 +22,11 @@ import { marketAccessPlugin } from '../plugins/market-access';
 import { transportPractitionerPlugin } from '../plugins/transport-practitioner';
 import { oversizeTransportPlugin } from '../plugins/oversize-transport';
 import { onlineCarPermitPlugin } from '../plugins/online-car-permit';
+import { createGuangdongHrssPlugin } from '../plugins/guangdong-hrss';
+import { catalogOnlySystems, createCatalogOnlySystem } from '../plugins/catalog-only-systems';
 
-const plugins = [governmentInfoPlugin, marketAccessPlugin, transportPractitionerPlugin, oversizeTransportPlugin, onlineCarPermitPlugin];
+const addedCatalogs = [createGuangdongHrssPlugin(), ...catalogOnlySystems.map(createCatalogOnlySystem)];
+const plugins = [governmentInfoPlugin, marketAccessPlugin, transportPractitionerPlugin, oversizeTransportPlugin, onlineCarPermitPlugin, ...addedCatalogs];
 const frame = {};
 const trustedEvent = { sender: { id: 7, mainFrame: frame }, senderFrame: frame };
 const list = (id: string, event = trustedEvent) => fixtures.handlers.get(IPC_CHANNELS.mattersList)!(event, id) as Promise<Array<Record<string, unknown>>>;
@@ -29,6 +34,7 @@ const list = (id: string, event = trustedEvent) => fixtures.handlers.get(IPC_CHA
 describe('matter menu IPC serialization boundary', () => {
   beforeEach(() => {
     fixtures.handlers.clear(); fixtures.plugins.clear(); fixtures.requireLicense.mockReset();
+    fixtures.tasksRun.mockReset();
     plugins.forEach((plugin) => fixtures.plugins.set(plugin.id, plugin));
     fixtures.requireLicense.mockResolvedValue({ allowedSystems: plugins.map((plugin) => plugin.id) });
     registerIpcHandlers(() => 7);
@@ -40,7 +46,7 @@ describe('matter menu IPC serialization boundary', () => {
     expect(() => structuredClone(payload)).not.toThrow();
     expect(JSON.parse(JSON.stringify(payload)).map((matter: { id: string }) => matter.id)).toEqual(plugin.matters.map((matter) => matter.id));
     for (const matter of payload) {
-      for (const key of ['query', 'getDetail', 'createDefaultContext', 'mergeRecord']) expect(matter).not.toHaveProperty(key);
+      for (const key of ['query', 'getDetail', 'createDefaultContext', 'mergeRecord', 'queryAvailable']) expect(matter).not.toHaveProperty(key);
     }
   });
 
@@ -70,6 +76,23 @@ describe('matter menu IPC serialization boundary', () => {
     const allowed = 'precursor-chemicals-filing-cancellation';
     fixtures.requireLicense.mockResolvedValue({ allowedMatters: { 'government-info': [allowed] } });
     expect((await list('government-info')).map((matter) => matter.id)).toEqual([allowed]);
+  });
+
+  it('lists the 15 additional matters as regular entries and rejects runs before creating a task', async () => {
+    let count = 0;
+    const run = fixtures.handlers.get(IPC_CHANNELS.matterRun)!;
+    for (const plugin of addedCatalogs) {
+      const added = plugin.matters.filter(matter => matter.queryAvailable === false);
+      const menu = await list(plugin.id);
+      for (const matter of added) {
+        count++;
+        expect(menu.find(item => item.id === matter.id)).toMatchObject({ name: matter.name, executionMode: 'one-click-return' });
+        expect(menu.find(item => item.id === matter.id)).not.toHaveProperty('dateFilter');
+        await expect(run(trustedEvent, plugin.id, matter.id, matter.createDefaultContext!())).rejects.toThrow('当前事项暂时无法回流');
+      }
+    }
+    expect(count).toBe(15);
+    expect(fixtures.tasksRun).not.toHaveBeenCalled();
   });
 
   it('continues to reject untrusted page requests', async () => {

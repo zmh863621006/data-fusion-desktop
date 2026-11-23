@@ -56,6 +56,8 @@ export interface BusinessMatter<T = Record<string, unknown>> {
   dateFilter?: { mode: 'applied' | 'pending'; message: string };
   /** One-click matters hide query controls and execute with business-defined defaults. */
   executionMode?: 'interactive-query' | 'one-click-return';
+  /** A catalogued matter can be browsed before its remote query is available. */
+  queryAvailable?: false;
   createDefaultContext?(): QueryContext;
 
   /** Fields that uniquely identify one business record locally. */

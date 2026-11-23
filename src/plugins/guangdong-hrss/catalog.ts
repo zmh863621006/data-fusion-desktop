@@ -56,5 +56,8 @@ const profiles: Record<string, Pick<HrssMatterDefinition,'columns'|'sources'>> =
 };
 for (const [id,type] of [['graduate-tracking-service','101'],['difficult-tracking-service','102'],['unemployment-tracking-service','103']]) profiles[id]={columns:tracking,sources:[{id:type,path:'/employment/business-tracking/rest/v1/servicetrack/service/subject/manage/queryList',method:'POST',pagination:'tracking',params:{aab301:'163374',bdz30b:'01',bdzz78:'01',bdca42:type,bdzz27List:['01','02','03'],labelType:'all',mergeType:'SERVICE_SUBJECT',serviceSubjectRange:'02'},identity:[['peopleNumber'],['cardNumber']]}]};
 
-export const HRSS_MATTER_DEFINITIONS: HrssMatterDefinition[] = catalog.map(meta=>({ ...meta,...profiles[meta.id], columns:[f('listSource','列表来源'),...profiles[meta.id].columns] }));
+export const HRSS_SUBDISTRICT_MATTERS = catalog.filter(meta => meta.departmentId === 'subdistrict-office');
+export const HRSS_MATTER_DEFINITIONS: HrssMatterDefinition[] = catalog
+  .filter(meta => meta.departmentId !== 'subdistrict-office')
+  .map(meta=>({ ...meta,...profiles[meta.id], columns:[f('listSource','列表来源'),...profiles[meta.id].columns] }));
 export const HRSS_MATTER_BY_ID = new Map(HRSS_MATTER_DEFINITIONS.map(definition=>[definition.id,definition]));

@@ -541,14 +541,17 @@ function Workspace({ license, onLicenseChanged }: { license: LicenseStatus; onLi
 
   function runOneClickReturn() {
     if (!selectedMatter || !access.canOpenMatter(selectedSystemId, selectedMatterId)) return;
-    setMessage('回流任务已创建，可在当前事项的回流任务中查看进度');
+    const generation = ++queryGeneration.current;
+    setMessage('正在发起数据回流，可在回流任务中查看进度。');
     setMatterSection('tasks');
     void window.desktopApi.matters.run(selectedSystemId, selectedMatterId, {
       page: 1,
       pageSize: 200,
       filters,
+    }).then(() => {
+      if (generation === queryGeneration.current) setMessage('数据回流完成，可在回流任务中查看结果。');
     }).catch((error) => {
-      setMessage(error instanceof Error ? error.message : '数据回流失败');
+      if (generation === queryGeneration.current) setMessage(error instanceof Error ? error.message : '数据回流失败');
     });
   }
 
@@ -635,7 +638,7 @@ function Workspace({ license, onLicenseChanged }: { license: LicenseStatus; onLi
             {selectedMatter && <p className="workspace-subtitle">{selectedMatter.departmentName ? `${selectedMatter.departmentName} / ` : ''}{selectedMatter.name}</p>}
           </div>
           <div className="session-box">
-            {selectedSystem?.workspaceMode === 'list-ledger' && <button className="secondary" onClick={() => { void window.desktopApi.hrss.openDashboard().catch(error => setMessage(error instanceof Error ? error.message : '无法打开数据看板')); }}><AppIcon name="dashboard" size={18} />全屏数据看板</button>}
+            {selectedSystemId === 'guangdong-hrss' && <button className="secondary" onClick={() => { void window.desktopApi.hrss.openDashboard().catch(error => setMessage(error instanceof Error ? error.message : '无法打开数据看板')); }}><AppIcon name="dashboard" size={18} />全屏数据看板</button>}
             <span className={`dot ${selectedSystem?.session.status === 'authenticated' ? 'online' : ''}`} />
             <span className={selectedSystem?.session.status === 'authenticated' ? 'session-verified' : ''} title={selectedSystem?.session.message}>{selectedSystem?.session.status === 'authenticated' ? '会话已验证' : sessionLabel(selectedSystem?.session)}</span>
             <button className="secondary" onClick={() => void login()} disabled={loading || !selectedSystemId}>
@@ -656,7 +659,7 @@ function Workspace({ license, onLicenseChanged }: { license: LicenseStatus; onLi
         </nav>}
         {selectedMatter?.executionMode === 'one-click-return' && message && <div className="message page-message">{message}</div>}
 
-        {!selectedMatter ? <div className="panel empty" role="status">{message || (matterSystemId === selectedSystemId ? '当前系统暂无可用业务事项。' : '正在加载业务事项…')}</div> : ['return-ledger', 'list-ledger'].includes(selectedSystem?.workspaceMode ?? '') && matterSection === 'tasks' ? <TaskCenterPage pageSize={defaultPageSize} key={`${selectedSystemId}/${selectedMatterId}`} systemId={selectedSystemId} matterId={selectedMatterId} matterName={selectedMatter?.name} onViewBatch={(batchId) => { setSelectedDataBatchId(batchId); setMatterSection('data'); }} /> : selectedSystem?.workspaceMode === 'list-ledger' && matterSection === 'data' ? <HrssLedgerPage defaultPageSize={defaultPageSize} key={selectedMatterId} matterId={selectedMatterId} matterName={selectedMatter.name} columns={selectedMatter.listColumns ?? []} batchId={selectedDataBatchId} onBatchChange={setSelectedDataBatchId} allowExport={license.grant?.allowExport} /> : selectedSystem?.workspaceMode === 'return-ledger' && matterSection === 'data' ? <LocalDataPage defaultPageSize={defaultPageSize} allowExport={Boolean(license.grant?.allowExport)} key={`${selectedSystemId}/${selectedMatterId}`} systemId={selectedSystemId} matterId={selectedMatterId} matterName={selectedMatter?.name} selectedBatchId={selectedDataBatchId} onBatchChange={setSelectedDataBatchId} onOpenPublication={openPublication} openingPublication={openingPublication} /> : <>
+        {!selectedMatter ? <div className="panel empty" role="status">{message || (matterSystemId === selectedSystemId ? '当前系统暂无可用业务事项。' : '正在加载业务事项…')}</div> : ['return-ledger', 'list-ledger'].includes(selectedSystem?.workspaceMode ?? '') && matterSection === 'tasks' ? <TaskCenterPage pageSize={defaultPageSize} key={`${selectedSystemId}/${selectedMatterId}`} systemId={selectedSystemId} matterId={selectedMatterId} matterName={selectedMatter?.name} onViewBatch={(batchId) => { setSelectedDataBatchId(batchId); setMatterSection('data'); }} /> : selectedSystem?.workspaceMode === 'list-ledger' && matterSection === 'data' ? <HrssLedgerPage systemId={selectedSystemId} defaultPageSize={defaultPageSize} key={`${selectedSystemId}/${selectedMatterId}`} matterId={selectedMatterId} matterName={selectedMatter.name} columns={selectedMatter.listColumns ?? []} batchId={selectedDataBatchId} onBatchChange={setSelectedDataBatchId} allowExport={license.grant?.allowExport} /> : selectedSystem?.workspaceMode === 'return-ledger' && matterSection === 'data' ? <LocalDataPage defaultPageSize={defaultPageSize} allowExport={Boolean(license.grant?.allowExport)} key={`${selectedSystemId}/${selectedMatterId}`} systemId={selectedSystemId} matterId={selectedMatterId} matterName={selectedMatter?.name} selectedBatchId={selectedDataBatchId} onBatchChange={setSelectedDataBatchId} onOpenPublication={openPublication} openingPublication={openingPublication} /> : <>
 
         {selectedMatter?.executionMode === 'one-click-return' ? (
           <>
@@ -689,16 +692,16 @@ function Workspace({ license, onLicenseChanged }: { license: LicenseStatus; onLi
               </div>
               {selectedMatter.dateFilter && <HrssDateNotice condition={selectedMatter.dateFilter} />}
               <div className="one-click-flow" aria-label="回流处理流程"><span><b>1</b>自动提取</span><i>→</i><span><b>2</b>按事项规则筛选</span><i>→</i><span><b>3</b>去重保存</span><i>→</i><span><b>4</b>查看本次数据</span></div>
-              <p className="return-scope-note">{selectedMatter.description}</p>
+              {selectedMatter.description && <p className="return-scope-note">{selectedMatter.description}</p>}
             </div>
             <div className="return-action-row">
             <button className="run-return-button" onClick={runOneClickReturn} disabled={loading || selectedSystem?.session.status !== 'authenticated'}>
               <strong>开始数据回流</strong>
             </button>
-            <span>{selectedSystem?.session.status === 'authenticated' ? '提取完成后自动去重保存，可在回流任务中查看进度。' : selectedSystem?.session.status === 'unverified' ? '会话待验证，请检查网络。' : '请先在原系统标签页完成登录。'}</span>
+            <span>{selectedSystem?.session.status === 'authenticated' ? '提取完成后自动去重保存，可在回流任务中查看进度。' : selectedSystem?.session.status === 'unverified' ? selectedSystem.session.message ?? '会话待验证，请检查网络。' : '请先在原系统标签页完成登录。'}</span>
             </div>
           </section>
-          {selectedSystem?.workspaceMode === 'list-ledger' ? <HrssLedgerPage defaultPageSize={defaultPageSize} key={selectedMatterId} matterId={selectedMatterId} matterName={selectedMatter.name} columns={selectedMatter.listColumns ?? []} preview onViewAll={() => { setSelectedDataBatchId(''); setMatterSection('data'); }} /> : <ReturnPreview systemId={selectedSystemId} matterId={selectedMatterId} onViewAll={() => { setSelectedDataBatchId(''); setMatterSection('data'); }} />}
+          {selectedSystem?.workspaceMode === 'list-ledger' ? <HrssLedgerPage systemId={selectedSystemId} defaultPageSize={defaultPageSize} key={`${selectedSystemId}/${selectedMatterId}`} matterId={selectedMatterId} matterName={selectedMatter.name} columns={selectedMatter.listColumns ?? []} preview onViewAll={() => { setSelectedDataBatchId(''); setMatterSection('data'); }} /> : <ReturnPreview systemId={selectedSystemId} matterId={selectedMatterId} onViewAll={() => { setSelectedDataBatchId(''); setMatterSection('data'); }} />}
           </>
         ) : <>
         <section className="query-workspace">

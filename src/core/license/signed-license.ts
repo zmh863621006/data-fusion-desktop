@@ -1,6 +1,7 @@
 import { createPublicKey, verify } from 'node:crypto';
 import type { LicenseGrant } from './types';
 import governmentMatters from '../../plugins/government-info/matter-catalog.json';
+import hrssMatters from '../../plugins/guangdong-hrss/matter-catalog.json';
 
 export interface SignedLicenseEnvelope {
   payload: string;
@@ -76,6 +77,11 @@ export function verifySignedLicense(envelope: SignedLicenseEnvelope, publicKeyPe
   const grant = parseGrant(decoded);
   if (grant.notBefore && Date.now() < grant.notBefore) throw new Error('授权尚未生效');
   if (!options.allowExpiredForRefresh && Date.now() >= grant.expiresAt) throw new Error('授权已过期');
+  // Keep the scope that existed when an older all-matters HRSS grant was issued.
+  if (grant.allowedSystems.includes('guangdong-hrss') && !grant.allowedMatters?.['guangdong-hrss']) {
+    grant.allowedMatters = { ...grant.allowedMatters,
+      'guangdong-hrss': hrssMatters.filter(matter => matter.departmentId !== 'subdistrict-office').map(matter => matter.id) };
+  }
   // The signed legacy permission covered the former combined government module.
   // Expand only after signature verification, including already-issued offline keys.
   const legacy = grant.allowedMatters?.['government-info'];

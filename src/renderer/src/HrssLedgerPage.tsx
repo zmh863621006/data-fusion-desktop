@@ -9,7 +9,6 @@ import { BatchPageOptions, selectBatchOption, useCompletedBatches } from './useC
 
 export interface HrssListColumn { key: string; label: string; sensitive?: boolean }
 interface Row { recordKey: string; data: Record<string, unknown>; updatedAt?: number; rowNo?: number }
-const SYSTEM_ID = 'guangdong-hrss';
 
 export function hrssDisplayValue(column: HrssListColumn, value: unknown): string {
   const text = value === null || value === undefined || value === '' ? '' : String(value);
@@ -20,8 +19,8 @@ export function hrssDisplayValue(column: HrssListColumn, value: unknown): string
   return text.slice(0, 3) + '********' + text.slice(-4);
 }
 
-export function HrssLedgerPage({ matterId, matterName, columns, defaultPageSize, batchId = '', onBatchChange, allowExport = false, preview = false, onViewAll }: {
-  matterId: string; matterName: string; columns: readonly HrssListColumn[]; defaultPageSize: number; batchId?: string;
+export function HrssLedgerPage({ systemId, matterId, matterName, columns, defaultPageSize, batchId = '', onBatchChange, allowExport = false, preview = false, onViewAll }: {
+  systemId: string; matterId: string; matterName: string; columns: readonly HrssListColumn[]; defaultPageSize: number; batchId?: string;
   onBatchChange?: (id: string) => void; allowExport?: boolean; preview?: boolean; onViewAll?: () => void;
 }) {
   const [keyword, setKeyword] = useState('');
@@ -33,7 +32,7 @@ export function HrssLedgerPage({ matterId, matterName, columns, defaultPageSize,
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
   const [revision, setRevision] = useState(0);
-  const batchPages = useCompletedBatches(SYSTEM_ID, matterId, batchId, revision, !preview);
+  const batchPages = useCompletedBatches(systemId, matterId, batchId, revision, !preview);
   const { batches } = batchPages;
   const [exportResult, setExportResult] = useState<ExportResult | null>(null);
   const [exporting, setExporting] = useState(false);
@@ -44,14 +43,14 @@ export function HrssLedgerPage({ matterId, matterName, columns, defaultPageSize,
     setLoading(true); setRows([]); setError(''); setExportResult(null);
     const request = batchId
       ? window.desktopApi.tasks.output(batchId, page, preview ? 10 : pageSize, search || undefined)
-      : window.desktopApi.records.list({ systemId: SYSTEM_ID, matterId, keyword: search || undefined, page, pageSize: preview ? 10 : pageSize });
+      : window.desktopApi.records.list({ systemId, matterId, keyword: search || undefined, page, pageSize: preview ? 10 : pageSize });
     void request.then((result: { rows: Row[]; total: number }) => {
       if (current !== generation.current) return;
       setRows(preview ? result.rows.slice(0, 5) : result.rows); setTotal(result.total);
     }).catch(error => { if (current === generation.current) { setTotal(0); setError(error instanceof Error ? error.message : '列表台账读取失败'); } })
       .finally(() => { if (current === generation.current) setLoading(false); });
     return () => { ++generation.current; };
-  }, [matterId, batchId, page, pageSize, search, revision, preview]);
+  }, [systemId, matterId, batchId, page, pageSize, search, revision, preview]);
 
   const exportData = async () => {
     if (exportLock.current) return;
@@ -59,14 +58,14 @@ export function HrssLedgerPage({ matterId, matterName, columns, defaultPageSize,
     const current = generation.current;
     try {
       const result = batchId ? await window.desktopApi.tasks.exportOutput(batchId, search || undefined)
-        : await window.desktopApi.records.export({ systemId: SYSTEM_ID, matterId, keyword: search || undefined }, 'xlsx');
+        : await window.desktopApi.records.export({ systemId, matterId, keyword: search || undefined }, 'xlsx');
       if (current === generation.current) setExportResult(result as ExportResult | null);
     } catch (error) { if (current === generation.current) setError(error instanceof Error ? error.message : '导出失败'); }
     finally { exportLock.current = false; setExporting(false); }
   };
   const pageCount = Math.max(1, Math.ceil(total / pageSize));
   const visibleColumns = preview ? columns.slice(0, 5) : columns;
-  return <section className={`hrss-ledger ${preview ? 'hrss-ledger-preview' : ''}`} aria-label="人社列表台账">
+  return <section className={`hrss-ledger ${preview ? 'hrss-ledger-preview' : ''}`} aria-label={systemId === 'guangdong-hrss' ? '人社列表台账' : '业务列表台账'}>
     <header className="hrss-ledger-head"><div><span className="eyebrow">{preview ? '本机数据' : '业务台账'}</span><h2>{preview ? '本地列表预览' : matterName}</h2><p>{batchId ? '当前查看已完成回流的列表快照。' : '合并保存历次列表记录；重新回流会更新相同业务记录。'}个人信息默认脱敏显示。</p></div>
       {preview ? <button className="secondary" onClick={onViewAll}>查看台账 <AppIcon name="chevron" size={14} /></button>
         : allowExport && <button className="primary" aria-busy={exporting} disabled={exporting || loading || !total} onClick={() => void exportData()}><AppIcon name="download" size={17} />{exporting ? '正在导出…' : batchId ? '导出当前批次' : '导出台账'}</button>}
