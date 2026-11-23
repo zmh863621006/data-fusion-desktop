@@ -40,6 +40,7 @@ export class LocalLicenseService implements LicenseService {
   readonly deviceId = createDeviceId();
   private revision = 0;
   private writes: Promise<void> = Promise.resolve();
+  private refreshInFlight?: { revision: number; result: Promise<LicenseGrant | null> };
 
   constructor(private readonly options: LocalLicenseOptions) {}
 
@@ -112,18 +113,20 @@ export class LocalLicenseService implements LicenseService {
   async getStatus(): Promise<LicenseStatus> {
     const stored = await this.readStored();
     if (!stored) return { state: 'missing', deviceId: this.deviceId, message: '尚未激活' };
-    if (stored.revokedAt) return { state: 'invalid', deviceId: this.deviceId, message: '在线授权已被管理员停用' };
     try {
       const grant = stored.developmentGrant && this.options.allowDevelopmentLicense
         ? this.currentDevelopmentGrant(stored.developmentGrant)
         : stored.envelope
-          ? verifySignedLicense(stored.envelope, this.options.publicKeyPem)
+          ? verifySignedLicense(stored.envelope, this.options.publicKeyPem, { allowExpiredForRefresh: true })
           : undefined;
       if (!grant) return { state: 'invalid', deviceId: this.deviceId, message: '本地授权内容无效' };
       if (grant.deviceId && grant.deviceId !== this.deviceId) {
         return { state: 'invalid', deviceId: this.deviceId, message: '授权设备不匹配' };
       }
-      if (Date.now() >= grant.expiresAt) return { state: 'expired', grant, deviceId: this.deviceId, message: '授权已过期' };
+      const { licenseId, customerName, activationMode, expiresAt } = grant;
+      const identity = { licenseId, customerName, activationMode, expiresAt };
+      if (stored.revokedAt) return { state: 'invalid', identity, deviceId: this.deviceId, message: '在线授权已被管理员停用' };
+      if (Date.now() >= expiresAt) return { state: 'expired', identity, deviceId: this.deviceId, message: '授权已过期' };
       return {
         state: 'active', grant, deviceId: this.deviceId,
         development: Boolean(stored.developmentGrant),
@@ -142,8 +145,17 @@ export class LocalLicenseService implements LicenseService {
     this.writes = work.catch(() => {}); await work;
   }
 
-  async refreshOnline(): Promise<LicenseGrant | null> {
+  refreshOnline(): Promise<LicenseGrant | null> {
     const revision = this.revision;
+    if (this.refreshInFlight?.revision === revision) return this.refreshInFlight.result;
+    const result = this.refreshStoredOnline(revision).finally(() => {
+      if (this.refreshInFlight?.result === result) this.refreshInFlight = undefined;
+    });
+    this.refreshInFlight = { revision, result };
+    return result;
+  }
+
+  private async refreshStoredOnline(revision: number): Promise<LicenseGrant | null> {
     const stored = await this.readStored();
     if (!stored?.envelope || !this.options.statusEndpoint) return this.getCurrent();
     const current = verifySignedLicense(stored.envelope, this.options.publicKeyPem, { allowExpiredForRefresh: true });

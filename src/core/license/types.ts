@@ -17,10 +17,13 @@ export interface LicenseGrant {
 }
 
 export type LicenseState = 'missing' | 'active' | 'expired' | 'invalid';
+export type LicenseIdentity = Pick<LicenseGrant, 'licenseId' | 'customerName' | 'activationMode' | 'expiresAt'>;
 
 export interface LicenseStatus {
   state: LicenseState;
   grant?: LicenseGrant;
+  /** Verified identification fields for an expired or revoked grant. */
+  identity?: LicenseIdentity;
   deviceId: string;
   message?: string;
   development?: boolean;

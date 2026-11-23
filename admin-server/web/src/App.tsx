@@ -218,6 +218,18 @@ function LicensesPage({ data, reload }: { data: BootstrapData; reload: () => Pro
   const matterMap = useMemo(() => new Map(data.matters.map((item) => [`${item.system_id}:${item.id}`, item.name])), [data.matters]);
   const statusOf = useLicenseStatus(data.customers);
   const selectedStatus = selected && statusOf(selected);
+  const reference = String(filters.reference ?? '').trim().toLowerCase();
+  const deviceLicenses = useMemo(() => {
+    const matching = new Set<string>();
+    if (!reference) return matching;
+    const masked = /^[0-9a-f]{12}(?:…|\.\.\.)[0-9a-f]{8}$/.test(reference);
+    const deviceReference = masked ? reference.replace('...', '…') : reference;
+    for (const device of data.devices) {
+      const code = device.device_id.toLowerCase();
+      if (code === deviceReference || (masked && shortCode(code) === deviceReference)) matching.add(device.license_id);
+    }
+    return matching;
+  }, [data.devices, reference]);
   const componentOptions = useMemo(() => {
     const names = new Map<string, string>();
     for (const item of data.systems) names.set('system:' + item.id, item.name);
@@ -228,12 +240,17 @@ function LicensesPage({ data, reload }: { data: BootstrapData; reload: () => Pro
     }
     return Array.from(names, ([value, label]) => ({ value, label }));
   }, [data.systems, data.tools, data.licenses]);
-  const filteredRows = data.licenses.filter((row) => contains(row.customer_name, filters.customer_name) && (!filters.mode || row.mode === filters.mode)
+  const filteredRows = data.licenses.filter((row) => (!reference || row.id.toLowerCase() === reference || deviceLicenses.has(row.id))
+    && contains(row.customer_name, filters.customer_name) && (!filters.mode || row.mode === filters.mode)
     && (!filters.component || jsonArray(row.allowed_systems_json).some(id => filters.component === 'system:' + id)
       || jsonArray(row.allowed_tools_json).some(id => filters.component === 'tool:' + id))
     && (!filters.status || statusOf(row) === filters.status));
   const columns: ProColumns<LicenseRecord>[] = [
+    { title: '授权编号或设备码', dataIndex: 'reference', hideInTable: true,
+      fieldProps: { placeholder: '粘贴授权编号或设备码', allowClear: true } },
     { title: '客户', dataIndex: 'customer_name', ellipsis: true },
+    { title: '授权编号', dataIndex: 'id', search: false, width: 170,
+      render: (_, row) => <Typography.Text code title={row.id} copyable={{ text: row.id, tooltips: ['复制授权编号', '已复制'] }}>{shortCode(row.id)}</Typography.Text> },
     { title: '授权系统 / 工具', dataIndex: 'component', hideInTable: true, valueType: 'select',
       fieldProps: { options: componentOptions, showSearch: true, optionFilterProp: 'label', allowClear: true, placeholder: '搜索系统或工具' } },
     { title: '激活方式', dataIndex: 'mode', width: 105, valueEnum: { online: { text: '在线', status: 'Processing' }, offline: { text: '离线', status: 'Warning' } } },
@@ -241,7 +258,11 @@ function LicensesPage({ data, reload }: { data: BootstrapData; reload: () => Pro
     { title: '设备数', dataIndex: 'max_devices', width: 85, search: false },
     { title: '有效期至', dataIndex: 'expires_at', width: 125, valueType: 'date', search: false, render: (_, row) => dateOnly(row.expires_at) },
     { title: '状态', dataIndex: 'status', width: 110, valueEnum: licenseStatusLabels, render: (_, row) => <LicenseStatusTag status={statusOf(row)} /> },
-    { title: '操作', valueType: 'option', width: 150, render: (_, row) => <Space><Button type="link" icon={<EyeOutlined />} onClick={() => setSelectedId(row.id)}>详情</Button>{canManage && row.status === 'active' && <Popconfirm title="确定停用该授权？" description="其下在线设备将在下次校验时失效。" onConfirm={async () => { await adminApi.revokeLicense(row.id); message.success('授权已停用'); await reload(); }}><Button danger type="link">停用</Button></Popconfirm>}</Space> },
+    { title: '操作', valueType: 'option', width: reference && canManage ? 216 : 150, render: (_, row) => <Space wrap size={4}>
+      <Button type="link" icon={<EyeOutlined />} onClick={() => setSelectedId(row.id)}>详情</Button>
+      {reference && canManage && statusOf(row) === 'active' && <Button type="link" onClick={() => setScopeEditing(row)}>调整授权</Button>}
+      {canManage && row.status === 'active' && <Popconfirm title="确定停用该授权？" description="其下在线设备将在下次校验时失效。" onConfirm={async () => { await adminApi.revokeLicense(row.id); message.success('授权已停用'); await reload(); }}><Button danger type="link">停用</Button></Popconfirm>}
+    </Space> },
   ];
   const showKey = (value: string, offline: boolean) => modal.info({
     width: 720, title: offline ? '离线许可证已生成' : '在线激活码已生成',
@@ -284,7 +305,7 @@ function LicensesPage({ data, reload }: { data: BootstrapData; reload: () => Pro
       { key: 'features', label: '功能权限', children: <Space wrap>{selected.allow_export ? <Tag color="green">数据导出</Tag> : null}{selected.allow_auto_sync ? <Tag color="green">自动同步</Tag> : null}{selected.allow_auto_update ? <Tag color="green">自动更新</Tag> : null}</Space> },
       { key: 'expires', label: '有效期至', children: dateTime(selected.expires_at) },
       { key: 'status', label: '当前状态', children: <LicenseStatusTag status={statusOf(selected)} /> },
-      { key: 'id', label: '授权 ID', children: <Typography.Text copyable>{selected.id}</Typography.Text> },
+      { key: 'id', label: '授权编号', children: <Typography.Text copyable>{selected.id}</Typography.Text> },
     ]} />}</Drawer>
   </PageContainer>;
 }

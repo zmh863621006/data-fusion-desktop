@@ -34,6 +34,7 @@ const desktopApi = {
     importFile: () => ipcRenderer.invoke(IPC_CHANNELS.licenseImport),
     deactivate: () => ipcRenderer.invoke(IPC_CHANNELS.licenseDeactivate),
     refresh: () => ipcRenderer.invoke(IPC_CHANNELS.licenseRefresh),
+    copyIdentifier: (kind: 'license' | 'device') => ipcRenderer.invoke(IPC_CHANNELS.licenseCopyIdentifier, kind) as Promise<void>,
   },
   backend: { status: (): Promise<{ origin: string; connected: boolean; insecure: boolean }> => ipcRenderer.invoke(IPC_CHANNELS.backendStatus) },
   healthTool: {

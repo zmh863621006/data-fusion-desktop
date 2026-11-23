@@ -173,6 +173,9 @@ button, a, input, textarea, select { -webkit-tap-highlight-color: transparent; }
 .scope-no-results { padding: 14px; text-align: center; color: var(--admin-secondary); }
 .license-scope-summary > .ant-typography:first-child { display: block; margin-bottom: 6px; font-size: 16px; }
 .license-scope-summary .ant-typography { margin-bottom: 0; line-height: 1.7; }
+.license-bound-devices { margin-top: 8px; }
+.license-bound-devices summary { cursor: pointer; }
+.license-bound-devices ul { margin: 8px 0 0; padding-left: 20px; max-height: 150px; overflow: auto; overflow-wrap: anywhere; }
 .license-details-drawer .ant-drawer-header { flex-wrap: wrap; gap: 14px; }
 .license-details-drawer .ant-drawer-extra { max-width: 100%; }
 

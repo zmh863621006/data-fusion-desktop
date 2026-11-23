@@ -5,7 +5,7 @@ import { contextBridge, ipcRenderer } from 'electron';
 const invoke = (method: string, ...args: unknown[]) => ipcRenderer.invoke('ui-redesign:invoke', method, ...args);
 const group = (name: string, methods: string[]) => Object.fromEntries(methods.map(method => [method, (...args: unknown[]) => invoke(`${name}.${method}`, ...args)]));
 contextBridge.exposeInMainWorld('desktopApi', {
-  license: group('license', ['status', 'activate', 'importFile', 'deactivate', 'refresh']),
+  license: group('license', ['status', 'activate', 'importFile', 'deactivate', 'refresh', 'copyIdentifier']),
   backend: group('backend', ['status']),
   healthTool: group('healthTool', ['state', 'importFiles', 'update', 'settings', 'remove', 'export']),
   modules: group('modules', ['list']),

@@ -1,4 +1,4 @@
-import { BrowserWindow, dialog, ipcMain, shell, type IpcMainInvokeEvent } from 'electron';
+import { BrowserWindow, clipboard, dialog, ipcMain, shell, type IpcMainInvokeEvent } from 'electron';
 import { appRuntime } from './runtime';
 import { IPC_CHANNELS } from '../core/ipc/channels';
 import { parseIdentifier, parseLocalRecordQuery, parseQueryContext, parseRows, parseSettingsPatch, parseTaskHistoryQuery } from '../core/ipc/validation';
@@ -101,6 +101,15 @@ export function registerIpcHandlers(getTrustedWebContentsId: () => number | unde
     if (!appRuntime.license) throw new Error('授权模块未就绪');
     await appRuntime.license.refreshOnline();
     return appRuntime.license.getStatus();
+  });
+  handle(IPC_CHANNELS.licenseCopyIdentifier, async (event, kind: unknown) => {
+    trusted(event);
+    if (kind !== 'license' && kind !== 'device') throw new Error('授权标识类型无效');
+    if (!appRuntime.license) throw new Error('授权模块未就绪');
+    const status = await appRuntime.license.getStatus();
+    const value = kind === 'device' ? status.deviceId : (status.identity ?? status.grant)?.licenseId;
+    if (!value) throw new Error('当前没有可复制的授权编号');
+    clipboard.writeText(value);
   });
   handle(IPC_CHANNELS.healthToolState, async event => { trusted(event); return (await appRuntime.healthTool()).state(); });
   handle(IPC_CHANNELS.healthToolImport, async event => {

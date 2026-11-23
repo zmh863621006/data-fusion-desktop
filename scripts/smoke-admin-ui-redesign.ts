@@ -313,9 +313,14 @@ async function closeDrawer() {
 async function verifyLicenseComponentFilter() {
   await route('licenses');
   for (const [label, expectMatch] of [['政务综合信息平台', false], ['卫健局双公示工具', true]] as const) {
-    await dom(`document.querySelector('input[placeholder="搜索系统或工具"], .ant-form-item:has(#component) .ant-select-selector, .ant-form-item:has(input[id$="component"]) .ant-select-selector').dispatchEvent(new MouseEvent('mousedown',{bubbles:true,cancelable:true}))`);
-    await until(() => dom(`[...document.querySelectorAll('.ant-select-item-option-content')].some(node=>node.textContent === ${JSON.stringify(label)} && node.getBoundingClientRect().width > 0)`), 'license filter options');
-    await clickText(label, '.ant-select-item-option-content');
+    await dom(`document.querySelector('.ant-pro-table-search input[id$="component"]').closest('.ant-select').querySelector('.ant-select-selector').dispatchEvent(new MouseEvent('mousedown',{bubbles:true,cancelable:true}))`);
+    await until(() => dom(`(() => {
+      const option = [...document.querySelectorAll('.ant-select-dropdown:not(.ant-select-dropdown-hidden) .ant-select-item-option-content')]
+        .find(node => node.textContent === ${JSON.stringify(label)} && node.getBoundingClientRect().width > 0);
+      if (!option) return false;
+      option.click();
+      return true;
+    })()`), 'select license filter option');
     await dom(`document.querySelector('.ant-pro-table-search form, form.ant-pro-query-filter').requestSubmit()`);
     await until(() => dom(`Boolean(document.querySelector('tr[data-row-key="fixture-license"]')) === ${expectMatch}`), 'license filter results');
     checks++;
@@ -413,6 +418,47 @@ async function verifyScopeEditing() {
   await closeDrawer();bootstrap.user.role='admin';await clickText('刷新','.admin-topbar button');
 }
 
+async function verifyLicenseIdentifierSearch() {
+  const original = bootstrap.licenses[0], device = bootstrap.devices[0];
+  const other = { ...original, id: 'fixture-license-other' };
+  const historical = { ...original, id: 'fixture-previous-license', status: 'revoked' };
+  bootstrap.licenses.push(other, historical);
+  const secondDevice = 'b'.repeat(64);
+  bootstrap.devices.push(
+    { ...device, id: 'fixture-second-bound-device', device_id: secondDevice },
+    { ...device, id: 'fixture-previous-bound-device', license_id: historical.id, status: 'revoked' },
+  );
+  const search = async (value: string, expected: string[]) => {
+    await setInput('input[placeholder="粘贴授权编号或设备码"]', value);
+    await dom(`document.querySelector('.ant-pro-table-search form, form.ant-pro-query-filter').requestSubmit()`);
+    const expectedKeys = JSON.stringify(expected);
+    await until(() => dom(`JSON.stringify([...document.querySelectorAll('tbody tr[data-row-key]')].map(row => row.dataset.rowKey)) === ${JSON.stringify(expectedKeys)}`),
+      'exact license lookup');
+    checks++;
+  };
+  try {
+    await route('licenses');
+    await clickText('刷新', '.admin-topbar button');
+    await until(() => dom(`Boolean(document.querySelector('tr[data-row-key="fixture-license-other"]'))`), 'second license fixture loaded');
+    await search('  FIXTURE-LICENSE  ', [original.id]);
+    await clickText('调整授权', 'tr[data-row-key="fixture-license"] button');
+    await until(() => dom(`document.querySelector('.license-bound-devices summary')?.textContent.includes('2 台')`), 'affected device count');
+    await clickText('已绑定且在用的设备（2 台）', '.license-bound-devices summary');
+    assert.deepEqual(await dom(`[...document.querySelectorAll('.license-bound-devices li code')].map(node=>node.textContent)`),
+      [device.device_id, secondDevice]); checks++;
+    await clickText('取消', '.license-scope-modal button');
+    await search(device.device_id.toUpperCase(), [original.id, historical.id]);
+    await search('aaaaaaaaaaaa…aaaaaaaa', [original.id, historical.id]);
+    assert.equal(await dom(`Boolean([...document.querySelectorAll('tr[data-row-key="fixture-previous-license"] button')].find(node=>node.textContent.includes('调整授权')))`), false);
+    await search('fixture-licen', []);
+  } finally {
+    bootstrap.licenses.pop(); bootstrap.licenses.pop();
+    bootstrap.devices.pop(); bootstrap.devices.pop();
+    await route('overview');
+    await clickText('刷新', '.admin-topbar button');
+  }
+}
+
 async function run() {
   await mkdir(resolve('.tmp'), { recursive: true });
   directory = await mkdtemp(join(resolve('.tmp'), 'admin-ui-redesign-'));
@@ -469,7 +515,7 @@ async function run() {
     for (const label of ['后台账号', '我的登录会话', '登录安全日志']) { await clickText(label, '.security-tabs [role="tab"]'); await verifyBounds(`security-${label}-${width}`); }
     await modal('修改我的密码', `password-change-${width}`); await modal('新增账号', `account-create-${width}`);
   }
-  main.setContentSize(1440, 1000);await verifyLicenseComponentFilter();await verifyDisabledCustomerLicense();await verifyScopeEditing();await verifyReleaseTargets();await verifyReleasePublishing();await verifyBusinessUpdates();await route('overview');
+  main.setContentSize(1440, 1000);await verifyLicenseComponentFilter();await verifyDisabledCustomerLicense();await verifyScopeEditing();await verifyLicenseIdentifierSearch();await verifyReleaseTargets();await verifyReleasePublishing();await verifyBusinessUpdates();await route('overview');
   await dom(`document.querySelector('.ant-pro-sider-collapsed-button')?.click()`); await settle();
   assert.equal(await dom(`Boolean(document.querySelector('.ant-layout-sider-collapsed'))`), true); checks++;
   await verifyBounds('sidebar-collapsed'); await screenshot('sidebar-collapsed');
@@ -505,4 +551,4 @@ async function finish(code: number) {
   }
   app.exit(code);
 }
-void run().then(() => finish(0)).catch(async error => { console.error(error); if (main && directory) await screenshot('failure').catch(() => {}); return finish(1); });
+void run().then(() => finish(0)).catch(async error => { console.error(error, ...pageErrors); if (main && directory) await screenshot('failure').catch(() => {}); return finish(1); });

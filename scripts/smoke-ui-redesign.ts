@@ -21,6 +21,7 @@ let outputDirectory = '';
 let failureReason = '';
 type Scenario = 'inactive' | 'active' | 'no-tool' | 'tools-only' | 'single-system' | 'active-empty' | 'equipment-only';
 let scenario: Scenario = 'inactive';
+let scopeAfterManualRefresh: Scenario | undefined;
 let scenarioEpoch = 0;
 let sourceTabs: { tabs: Array<{ systemId: string; systemName: string; displayUrl: string; loading: boolean }>; activeSystemId: string | null } = { tabs: [], activeSystemId: null };
 const errors: string[] = [];
@@ -108,7 +109,11 @@ async function invoke(method: string, ...args: any[]) {
   calls.set(method, (calls.get(method) ?? 0) + 1);
   invocations.push({ method, args, scenario, epoch: scenarioEpoch, allowedSystems: [...allowedSystems()], allowedTools: [...allowedTools()] });
   switch (method) {
-    case 'license.status': case 'license.refresh': return license();
+    case 'license.status': return license();
+    case 'license.refresh':
+      if (scopeAfterManualRefresh) { scenario = scopeAfterManualRefresh; scenarioEpoch++; scopeAfterManualRefresh = undefined; }
+      return license();
+    case 'license.copyIdentifier': return undefined;
     case 'license.activate': case 'license.importFile': scenario = 'active'; return license();
     case 'license.deactivate': scenario = 'inactive'; return license();
     case 'practitionerNumbers.get':
@@ -872,6 +877,28 @@ async function verifyPractitionerNumberScope() {
   } finally { numberScope = undefined; }
 }
 
+async function verifyAuthorizationInfo() {
+  await reload('inactive');
+  await click('.activation-card .authorization-info summary');
+  await button('复制设备码', '.authorization-info');
+  await until('document.querySelector(".authorization-feedback")?.textContent === "设备码已复制"');
+  assert.equal(invocations.filter(call => call.method === 'license.copyIdentifier').at(-1)?.args[0], 'device');
+
+  await reload('active');
+  await button('设置', '.sidebar');
+  await until('Boolean(document.querySelector("main .authorization-info"))');
+  assert.equal(await dom('document.querySelector(".authorization-info").open'), false);
+  await click('.authorization-info summary');
+  assert.equal(await dom('document.querySelector(".authorization-identifier code")?.textContent'), 'ui-only-fixture');
+  await button('复制授权编号', '.authorization-info');
+  await until('document.querySelector(".authorization-feedback")?.textContent === "授权编号已复制"');
+  assert.equal(invocations.filter(call => call.method === 'license.copyIdentifier').at(-1)?.args[0], 'license');
+  scopeAfterManualRefresh = 'equipment-only';
+  await button('刷新授权', '.authorization-info');
+  await until('document.querySelectorAll(".sidebar .system-nav-toggle").length === 1');
+  assert.equal(await dom('document.querySelector(".sidebar .system-nav-toggle").title'), equipment.name);
+}
+
 async function verifyEquipmentWorkspace() {
   await reload('equipment-only');
   await until('document.querySelectorAll(".system-nav-toggle").length === 1');
@@ -918,6 +945,7 @@ async function run() {
   ipcMain.handle('ui-redesign:invoke', (_event, method, ...args) => invoke(method, ...args));
   await verifyPractitionerNumberScope();
   await verifyLedgerPreferences();
+  await verifyAuthorizationInfo();
   await verifyEquipmentWorkspace();
   await runViewport(1440, 900); await runViewport(1180, 720);
   assertAuthorizedReads(0, 'Complete authorization regression');

@@ -9,6 +9,7 @@ export const IPC_CHANNELS = {
   licenseImport: 'license:import',
   licenseDeactivate: 'license:deactivate',
   licenseRefresh: 'license:refresh',
+  licenseCopyIdentifier: 'license:copy-identifier',
   backendStatus: 'backend:status',
   healthToolState: 'tools:health:state',
   healthToolImport: 'tools:health:import',

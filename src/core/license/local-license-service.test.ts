@@ -32,6 +32,9 @@ describe('LocalLicenseService', () => {
     expect((await service.getCurrent())?.allowedMatters?.['government-info']).toHaveLength(18);
     vi.useFakeTimers(); vi.setSystemTime(Date.now()+2000);
     expect(await service.getCurrent()).toBeNull();
+    const expired = await service.getStatus();
+    expect(expired).toMatchObject({ state: 'expired', identity: { licenseId: 'online', activationMode: 'online' } });
+    expect(expired.grant).toBeUndefined();
     vi.stubGlobal('fetch', vi.fn(async () => Response.json(envelope(Date.now()+60_000))));
     expect((await service.refreshOnline())?.licenseId).toBe('online');
     const sent = JSON.parse(vi.mocked(fetch).mock.calls[0][1]!.body as string);
@@ -45,8 +48,25 @@ describe('LocalLicenseService', () => {
     await expect(service.refreshOnline()).rejects.toThrow('offline'); expect(await service.getCurrent()).not.toBeNull();
     vi.stubGlobal('fetch', vi.fn(async () => new Response('', { status: 403 })));
     await expect(service.refreshOnline()).rejects.toThrow('停用'); expect(await service.getCurrent()).toBeNull();
+    const revoked = await service.getStatus();
+    expect(revoked).toMatchObject({ state: 'invalid', identity: { licenseId: 'online', activationMode: 'online' } });
+    expect(revoked.grant).toBeUndefined();
     vi.stubGlobal('fetch', vi.fn(async () => Response.json(envelope(Date.now()+60_000))));
     expect(await service.refreshOnline()).not.toBeNull();
+  });
+
+  it('shares one pending online refresh across the settings button and background poll', async () => {
+    const { service, envelope } = await onlineFixture();
+    let finish!: (response: Response) => void;
+    const request = vi.fn(() => new Promise<Response>(resolve => { finish = resolve; }));
+    vi.stubGlobal('fetch', request);
+    const background = service.refreshOnline();
+    const manual = service.refreshOnline();
+    await vi.waitFor(() => expect(request).toHaveBeenCalledOnce());
+    const expiry = Date.now() + 120_000;
+    finish(Response.json(envelope(expiry)));
+    for (const result of await Promise.all([background, manual])) expect(result?.expiresAt).toBe(expiry);
+    expect(request).toHaveBeenCalledOnce();
   });
 
   it('does not resurrect a locally deactivated license from an in-flight heartbeat', async () => {

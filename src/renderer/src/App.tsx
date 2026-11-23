@@ -16,6 +16,7 @@ import { PageSizeOptions } from './PageSizeOptions';
 import { DEFAULT_APP_SETTINGS, type AppSettings } from '../../core/settings/types';
 import { shortSystemName, systemDescription, taskProgressPercent, taskStatusLabel } from './ui-format';
 import type { LicenseStatus } from '../../core/license/types';
+import { AuthorizationInfo } from './AuthorizationInfo';
 import { workspaceAccess, type AppPage } from './workspace-access';
 import { UpdateBanner, UpdateStatus, useUpdateState } from './UpdateStatus';
 import type { ComponentSummary } from '../../core/plugins/components';
@@ -95,6 +96,11 @@ export function App() {
 
 function LicensedApp() {
   const [license, setLicense] = useState<LicenseStatus | null>(null);
+  const licenseRevision = useRef(0);
+  const applyLicense = (status: LicenseStatus) => {
+    licenseRevision.current++;
+    setLicense(status);
+  };
 
   useEffect(() => {
     let disposed = false;
@@ -102,9 +108,12 @@ function LicensedApp() {
     const refresh = async () => {
       if (pending) return;
       pending = true;
+      const revision = licenseRevision.current;
       try {
         const value = await window.desktopApi.license.status() as LicenseStatus;
-        if (!disposed) setLicense(current => JSON.stringify(current) === JSON.stringify(value) ? current : value);
+        if (!disposed && revision === licenseRevision.current) {
+          setLicense(current => JSON.stringify(current) === JSON.stringify(value) ? current : value);
+        }
       } catch { /* Keep the last known state on transient IPC failures; main-process checks still apply. */ }
       finally { pending = false; }
     };
@@ -115,15 +124,15 @@ function LicensedApp() {
   }, []);
 
   if (!license) return <div className="splash">正在初始化安全运行环境…</div>;
-  if (license.state !== 'active') return <ActivationPage status={license} onActivated={setLicense} />;
-  return <Workspace license={license} />;
+  if (license.state !== 'active') return <ActivationPage status={license} onActivated={applyLicense} />;
+  return <Workspace license={license} onLicenseChanged={applyLicense} />;
 }
 
 function ActivationPage({ status, onActivated }: { status: LicenseStatus; onActivated: (status: LicenseStatus) => void }) {
   const [mode, setMode] = useState<'online' | 'offline'>('online');
   const [key, setKey] = useState('');
   const [busy, setBusy] = useState(false);
-  const [message, setMessage] = useState(status.message ?? '');
+  const [message, setMessage] = useState('');
 
   const activate = async () => {
     setBusy(true);
@@ -170,10 +179,10 @@ function ActivationPage({ status, onActivated }: { status: LicenseStatus; onActi
         <p>在线激活支持设备管理和自动更新；无法连接互联网的设备可以导入管理员签发的离线授权文件。</p>
         <div className="activation-tabs" role="group" aria-label="授权方式"><button aria-pressed={mode === 'online'} className={mode === 'online' ? 'active' : ''} onClick={() => setMode('online')}>在线激活</button><button aria-pressed={mode === 'offline'} className={mode === 'offline' ? 'active' : ''} onClick={() => setMode('offline')}>离线许可证</button></div>
         <label className="activation-field"><span>{mode === 'online' ? '在线激活码' : '离线授权密钥'}</span>{mode === 'online' ? <input value={key} onChange={event => setKey(event.target.value)} placeholder="请输入管理员分配的在线激活码" spellCheck={false} autoComplete="off" /> : <textarea value={key} onChange={(event) => setKey(event.target.value)} placeholder="粘贴 DFL1 开头的离线授权密钥，或导入授权文件" spellCheck={false} />}</label>
-        <div className="device-id"><span>设备标识</span><code>{status.deviceId.slice(0, 12)}…{status.deviceId.slice(-8)}</code></div>
         <div className="activation-tools">{mode === 'offline' && <button className="text-button" onClick={importLicense} disabled={busy}>导入离线授权文件</button>}{import.meta.env.DEV && <button className="text-button" onClick={() => { setMode('offline'); setKey('DF-DEV-LOCAL'); }}>填入本机开发授权</button>}</div>
-        {message && <div className="message activation-message">{message}</div>}
+        {(message || status.message) && <div className="message activation-message">{message || status.message}</div>}
         <button className="primary activation-button" disabled={busy || !key.trim()} onClick={activate}>{busy ? '正在激活…' : '激活并进入工作台'}</button>
+        <AuthorizationInfo status={status} onChanged={onActivated} />
         <small>授权可分配业务系统或独立工具；只有访问原业务系统数据时，才需要登录相应系统。</small>
       </div>
     </div>
@@ -240,7 +249,7 @@ function WorkspaceSidebar({ systems, matters, license, selectedSystemId, selecte
   </aside>;
 }
 
-function Workspace({ license }: { license: LicenseStatus }) {
+function Workspace({ license, onLicenseChanged }: { license: LicenseStatus; onLicenseChanged: (status: LicenseStatus) => void }) {
   const access = workspaceAccess(license);
   const [defaultPageSize, setDefaultPageSize] = useState(DEFAULT_APP_SETTINGS.defaultPageSize);
   const scope = access.permissionKey;
@@ -618,7 +627,7 @@ function Workspace({ license }: { license: LicenseStatus }) {
         <UpdateBanner state={updateState} onOpen={() => setActivePage('settings')} />
         {activePage === 'home' && message && <div className="message page-message" role="status">{message}</div>}
         {activePage === 'home' ? <HomePage systems={systems} license={license} loading={loading} onSelect={(id) => { setSelectedSystemId(id); setActivePage('workspace'); }} onLogin={(id) => { void login(id); }} onTool={() => setActivePage('tools')} onTask={openTaskData} /> : activePage === 'tools' ? <HealthPublicityPage licensed={Boolean(license.grant?.allowedTools?.includes('health-publicity'))} allowExport={Boolean(license.grant?.allowExport)} /> : activePage !== 'workspace' ? (
-          <PlatformPage onPageSizeSaved={setDefaultPageSize} page={activePage} license={license} components={components} onNavigate={setActivePage} onSystemSelect={id => { if (access.canOpenSystem(id)) { setSelectedSystemId(id); setActivePage('workspace'); } }} />
+          <PlatformPage onPageSizeSaved={setDefaultPageSize} onLicenseChanged={onLicenseChanged} page={activePage} license={license} components={components} onNavigate={setActivePage} onSystemSelect={id => { if (access.canOpenSystem(id)) { setSelectedSystemId(id); setActivePage('workspace'); } }} />
         ) : <>
         <header className="topbar">
           <div>
@@ -898,11 +907,12 @@ type TaskOutputRow = {
 
 function PlatformPage(props: {
   page: AppPage; license: LicenseStatus; components: ComponentSummary[]; onNavigate: (page: AppPage) => void; onSystemSelect: (id: string) => void;
+  onLicenseChanged: (status: LicenseStatus) => void;
   onPageSizeSaved: (size: number) => void;
 }) {
   if (props.page === 'systems') return <ComponentCatalog components={props.components} license={props.license} onOpenTool={() => props.onNavigate('tools')} onOpenSystem={props.onSystemSelect} />;
   if (props.page === 'diagnostics') return <DiagnosticsPage onClose={() => props.onNavigate('settings')} />;
-  return <SettingsPage license={props.license} onPageSizeSaved={props.onPageSizeSaved} onOpenDiagnostics={() => props.onNavigate('diagnostics')} />;
+  return <SettingsPage license={props.license} onLicenseChanged={props.onLicenseChanged} onPageSizeSaved={props.onPageSizeSaved} onOpenDiagnostics={() => props.onNavigate('diagnostics')} />;
 }
 
 function PageHeader({ eyebrow, title, description, action, className = '' }: { eyebrow: string; title: string; description: string; action?: React.ReactNode; className?: string }) {
@@ -1148,7 +1158,10 @@ function SystemCredentialPanel({ systemId, systemName, onClose, onLogin }: { sys
   return <section className="panel credential-card system-credential-card"><div className="panel-head"><div><span className="eyebrow">当前系统 / 账号</span><h3>{systemName} · 系统账号配置</h3></div><div className="drawer-actions"><span className={`status-chip ${configured ? 'ready' : 'disabled'}`}>{configured ? '已配置' : '未配置'}</span><button className="secondary" onClick={onClose}>收起</button></div></div><p>这是当前业务系统自己的账号配置，仅供该系统内部事项共用，不会应用到其他业务系统。</p><div className="credential-form"><label><span>系统账号</span><input value={account} onChange={(event) => setAccount(event.target.value)} autoComplete="username" placeholder="请输入系统账号" /></label><label><span>系统密码</span><input type="password" value={password} onChange={(event) => setPassword(event.target.value)} autoComplete="current-password" placeholder={configured ? '输入新密码可更新配置' : '请输入系统密码'} /></label><button className="primary" disabled={!account.trim() || !password} onClick={() => void save()}>{configured ? '更新并打开登录页' : '保存并打开登录页'}</button></div>{message && <div className="message page-message">{message}</div>}</section>;
 }
 
-function SettingsPage({ license, onOpenDiagnostics, onPageSizeSaved }: { license: LicenseStatus; onOpenDiagnostics: () => void; onPageSizeSaved: (size: number) => void }) {
+function SettingsPage({ license, onOpenDiagnostics, onPageSizeSaved, onLicenseChanged }: {
+  license: LicenseStatus; onOpenDiagnostics: () => void; onPageSizeSaved: (size: number) => void;
+  onLicenseChanged: (status: LicenseStatus) => void;
+}) {
   const access = workspaceAccess(license);
   const [settings, setSettings] = useState<AppSettings | null>(null);
   const [audit, setAudit] = useState<Array<{ id: string; type: string; createdAt: number; systemId?: string }>>([]);
@@ -1204,6 +1217,7 @@ function SettingsPage({ license, onOpenDiagnostics, onPageSizeSaved }: { license
       <UpdateStatus state={updateState} checking={checkingUpdate} message={updateMessage} onCheck={() => void checkUpdates()} onInstall={() => void installUpdate()} />
     </div>
     <section className="panel audit-card"><div className="panel-head"><h3>最近操作记录</h3><span className="muted">仅保存在本机</span></div><div className="audit-list">{audit.filter(event => !event.systemId || access.canOpenSystem(event.systemId)).slice(0, 20).map((event) => <div key={event.id}><span>{event.type}</span><strong>{event.systemId ? shortSystemName(event.systemId) : '平台'}</strong><time>{new Date(event.createdAt).toLocaleString()}</time></div>)}{!audit.some(event => !event.systemId || access.canOpenSystem(event.systemId)) && <div className="empty">暂无操作记录</div>}</div></section>
+    <AuthorizationInfo status={license} onChanged={onLicenseChanged} />
     <button className="diagnostics-trigger" title="本地运行环境" onClick={() => { const next = diagnosticClicks + 1; if (next >= 5) { setDiagnosticClicks(0); onOpenDiagnostics(); } else setDiagnosticClicks(next); }}>本地运行环境</button>
   </>;
 }

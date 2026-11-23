@@ -24,6 +24,7 @@ export function LicenseScopeEditor({ license, data, onClose, onSaved }: {
   });
   const [values, setValues] = useState(initial.values ?? emptyScope);
   const legacySystems = initial.snapshot ? legacyScopeSystems(initial.snapshot) : [];
+  const boundDevices = data.devices.filter(device => device.license_id === license.id && device.status === 'active');
 
   const save = async () => {
     if (!initial.snapshot || saving || conflicted) return;
@@ -47,7 +48,14 @@ export function LicenseScopeEditor({ license, data, onClose, onSaved }: {
     okButtonProps={{ disabled: Boolean(initial.error) || conflicted || refreshing }} cancelButtonProps={{ disabled: saving || refreshing }}>
     <Space direction="vertical" size={16} className="license-scope-content">
       <div className="license-scope-summary"><Typography.Text strong>{license.customer_name}</Typography.Text><Typography.Paragraph type="secondary">仅调整系统、工具和业务事项，保留原有效期、设备绑定、最大设备数及其他功能权限。</Typography.Paragraph></div>
-      <Alert type="info" showIcon message="影响此授权绑定的全部设备" description={license.mode === 'offline' ? '离线授权保存后，需补发许可证并由用户重新导入；已交付的旧文件不会远程失效。' : '在线授权将在客户端下次在线校验后生效，无需重新激活。'} />
+      <Alert type="info" showIcon message="影响此授权绑定的全部设备" description={<>
+        {license.mode === 'offline' ? '离线授权保存后，需补发许可证并由用户重新导入；已交付的旧文件不会远程失效。' : '在线授权将在客户端下次在线校验后生效，无需重新激活。'}
+        <details className="license-bound-devices">
+          <summary>已绑定且在用的设备（{boundDevices.length} 台）</summary>
+          {boundDevices.length > 0 ? <ul>{boundDevices.map(device => <li key={device.id}><Typography.Text code copyable>{device.device_id}</Typography.Text></li>)}</ul>
+            : <div>暂无在用设备</div>}
+        </details>
+      </>} />
       {legacySystems.length > 0 && <Alert type="warning" showIcon message="此授权包含历史“全部事项”范围" description="已按当前目录列出这些系统的现有事项（含已停用事项）。保存后将改为明确清单，不会自动包含将来新增事项；请核对后保存。" />}
       {(initial.error || error) && <Alert type="error" showIcon role="alert" message={initial.error || error} action={conflicted ? <Button type="link" size="small" loading={refreshing} onClick={async () => { if (refreshing) return; setRefreshing(true); try { await onSaved(); onClose(); } catch { setError('刷新失败，请稍后重试'); } finally { setRefreshing(false); } }}>刷新授权</Button> : undefined} />}
       {initial.values && <LicenseScopePicker data={data} initial={initial.values} value={values} disabled={saving || conflicted || refreshing}
