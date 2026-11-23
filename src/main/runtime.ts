@@ -9,6 +9,8 @@ import { configureOnlineCarPermitCredentials, onlineCarPermitPlugin } from '../p
 import { createGuangdongHrssPlugin } from '../plugins/guangdong-hrss';
 import { createShenzhenHazardousPlugin } from '../plugins/shenzhen-hazardous-chemicals';
 import { HAZCHEM_SYSTEM_ID, HAZCHEM_SYSTEM_NAME } from '../plugins/shenzhen-hazardous-chemicals/catalog';
+import { createSpecialEquipmentPlugin } from '../plugins/guangdong-special-equipment';
+import { EQUIPMENT_SYSTEM_ID, EQUIPMENT_SYSTEM_NAME, EQUIPMENT_VERSION } from '../plugins/guangdong-special-equipment/catalog';
 import { buildHrssDashboard } from '../core/hrss/dashboard';
 import { NodeSqliteDriver } from '../core/storage/database';
 import { SqliteLocalRepository } from '../core/storage/sqlite-repository';
@@ -63,6 +65,10 @@ b1oByVzE+8Uj5k4ApNg1P0JX3kxWn0qhcUFtRxsMO/nPAgMBAAE=
 -----END PUBLIC KEY-----`;
 
 const builtinModules = [
+  {
+    id: EQUIPMENT_SYSTEM_ID, name: EQUIPMENT_SYSTEM_NAME, version: EQUIPMENT_VERSION, publisher: '数据融合助手',
+    description: '特种设备使用登记、作业人员考核及双公示导出',
+  },
   {
     id: HAZCHEM_SYSTEM_ID, name: HAZCHEM_SYSTEM_NAME, version: '0.1.0', publisher: '数据融合助手',
     description: '已办流程结束记录关联制证数据，生成省执法和南山双公示',
@@ -201,6 +207,7 @@ export class AppRuntime {
     this.plugins.register(onlineCarPermitPlugin);
     this.plugins.register(createGuangdongHrssPlugin());
     this.plugins.register(createShenzhenHazardousPlugin());
+    this.plugins.register(createSpecialEquipmentPlugin());
     const plugins = this.plugins.list();
     const sources = plugins.flatMap(({ id, loginPage }) => [
       ...(loginPage ? [{ partition: loginPage.partition, origins: sourceOrigins(loginPage) }] : []),

@@ -27,6 +27,7 @@ import { HrssDashboardWindowPage } from './HrssDashboardWindowPage';
 import { HrssDateNotice } from './HrssDateNotice';
 import { hrssTaskDateLabel } from '../../core/hrss/date-filters';
 import { GOVERNMENT_EXPORT_LABELS, supportsGovernmentExport, type GovernmentExportTarget } from '../../core/export/government-target';
+import { EQUIPMENT_SYSTEM_ID, USE_REGISTRATION } from '../../plugins/guangdong-special-equipment/catalog';
 import type { QueryPage } from '../../core/query/types';
 
 type SessionState = {
@@ -653,7 +654,7 @@ function Workspace({ license }: { license: LicenseStatus }) {
           <section className="panel one-click-panel">
             <div className="one-click-copy">
               <h2 className="sr-only">{selectedMatter.name}</h2>
-              <div className="return-controls">
+              <div className={`return-controls${selectedMatter.querySchema.some(field => field.type === 'select') ? ' return-controls-with-select' : ''}`}>
               <div className="return-date-fields">
                 {selectedMatter.querySchema.filter((field) => field.type === 'date').map((field) => <label key={field.key}>
                   <span>{field.label}{field.required ? ' *' : ''}</span>
@@ -664,6 +665,18 @@ function Workspace({ license }: { license: LicenseStatus }) {
                 </label>)}
               </div>
               <label className="return-matter-field"><span>业务事项</span><select value={selectedMatterId} onChange={event => { const matter = matters.find(item => item.id === event.target.value); if (matter) selectMatter(matter); }}>{matters.map(matter => <option key={matter.id} value={matter.id}>{matter.name}</option>)}</select></label>
+              {selectedMatter.querySchema.filter(field => field.type === 'select').map(field => (
+                <label className="return-matter-field" key={field.key}>
+                  <span>{field.label}{field.required ? ' *' : ''}</span>
+                  <select required={field.required} value={String(filters[field.key] ?? '')} onChange={event => {
+                    const option = field.options?.find(item => String(item.value) === event.target.value);
+                    setFilters(current => ({ ...current, [field.key]: option?.value ?? '' }));
+                  }}>
+                    <option value="">请选择</option>
+                    {field.options?.map(option => <option key={option.value} value={option.value}>{option.label}</option>)}
+                  </select>
+                </label>
+              ))}
               </div>
               {selectedMatter.dateFilter && <HrssDateNotice condition={selectedMatter.dateFilter} />}
               <div className="one-click-flow" aria-label="回流处理流程"><span><b>1</b>自动提取</span><i>→</i><span><b>2</b>按事项规则筛选</span><i>→</i><span><b>3</b>去重保存</span><i>→</i><span><b>4</b>查看本次数据</span></div>
@@ -1061,7 +1074,12 @@ function LocalDataPage({ systemId, matterId, matterName, selectedBatchId, onBatc
   };
   const pageCount = Math.max(1, Math.ceil(total / pageSize));
   const rawGovernment = systemId === 'government-info' && rows.some((row) => !('xzxkmc' in row.data));
-  const provincialFields = [['ajmc', '案件名称'], ['xkCljg', '省执法处理结果'], ['xkZqly', '职权来源']] as const;
+  const isEquipmentRegistration = systemId === EQUIPMENT_SYSTEM_ID && matterId === USE_REGISTRATION.id;
+  const provincialFields = [
+    ['ajmc', isEquipmentRegistration ? '案件名称（含省执法许可内容）' : '案件名称'],
+    ['xkCljg', '省执法处理结果'], ['xkZqly', '职权来源'],
+    ...(isEquipmentRegistration ? [['provincialDocumentNumber', '省执法决定书文号'] as const] : []),
+  ] as const;
   const columns: ReadonlyArray<readonly [string, string]> = rawGovernment ? [
     ['cityLsh', '市流水号'], ['sblsh', '申办流水号'], ['sxmc', '业务事项'],
     ['applyer', '申请人/单位'], ['cardNumber', '证件号码'], ['receiveType', '收件方式'],

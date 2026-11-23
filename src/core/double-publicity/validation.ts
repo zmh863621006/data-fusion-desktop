@@ -2,8 +2,9 @@ import type { StoredRecord } from '../storage/types';
 import { DOUBLE_PUBLICITY_TEMPLATE } from './template';
 import { readOversizeApplicationEvidence } from '../../plugins/oversize-transport/application';
 import { isDelegatedConstructionWaste, resolvedConstructionWasteContractor } from '../../plugins/government-info/construction-waste';
+import { EQUIPMENT_SYSTEM_ID } from '../../plugins/guangdong-special-equipment/catalog';
 
-const systems = new Set(['government-info', 'oversize-transport', 'online-car-permit', 'transport-practitioner', 'health-publicity', 'shenzhen-hazardous-chemicals']);
+const systems = new Set(['government-info', 'oversize-transport', 'online-car-permit', 'transport-practitioner', 'health-publicity', 'shenzhen-hazardous-chemicals', EQUIPMENT_SYSTEM_ID]);
 const common = ['xkXdrMc','xkXdrLb','xkXkws','xkWsh','xkXklb','xkNr','xkJdrq','xkYxqz','xkYxqzi','xkXkjg','xkXkjgdm','xkZt','xkLydw','xkLydwdm'];
 const labels = new Map<string,string>(DOUBLE_PUBLICITY_TEMPLATE);
 // Only semantic equivalents. Never substitute certificate dates, license number or case title.

@@ -48,7 +48,7 @@ test('HRSS catalog exposes 18 grouped list ledgers alongside the other registere
   assert.equal((await f.api('/api/admin/bootstrap', undefined, false)).status, 401);
   const bootstrap = (await f.api('/api/admin/bootstrap')).body;
   assert.deepEqual(bootstrap.systems.map(system => system.id).sort(), [
-    'government-info', SYSTEM, 'market-access', 'online-car-permit', 'oversize-transport', 'transport-practitioner', 'shenzhen-hazardous-chemicals',
+    'government-info', SYSTEM, 'market-access', 'online-car-permit', 'oversize-transport', 'transport-practitioner', 'shenzhen-hazardous-chemicals', 'guangdong-special-equipment',
   ].sort());
   assert.equal(bootstrap.systems.find(system => system.id === SYSTEM).name, '广东省集中式人力资源和社会保障一体化门户系统');
   const matters = bootstrap.matters.filter(matter => matter.system_id === SYSTEM && matter.enabled);

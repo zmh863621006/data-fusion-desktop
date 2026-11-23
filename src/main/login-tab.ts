@@ -157,7 +157,7 @@ export class LoginTabController {
       if (this.tabs.get(plugin.id) !== tab) return;
       if (successfulMainFrame && loginPage.onLoginPageChange && allowed(url)) {
         const page = new URL(url);
-        const visible = page.origin === loginPage.allowedOrigin && page.pathname.replace(/\/$/, '') === loginPath
+        const visible = page.origin === configuredLogin.origin && page.pathname.replace(/\/$/, '') === loginPath
           && (!configuredLogin.hash.startsWith('#/') || hashRoute(page) === hashRoute(configuredLogin));
         if (visible !== tab.onLoginPage) {
           tab.onLoginPage = visible;
@@ -172,7 +172,7 @@ export class LoginTabController {
           }
         }
       }
-      loginPage.onNavigate?.(url);
+      if (successfulMainFrame) loginPage.onNavigate?.(url);
       update();
       void this.checkSession(tab);
     };

@@ -6,6 +6,7 @@ import { tmpdir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
 import { createAdminServer } from '../app.mjs';
+import equipmentCatalog from '../../src/plugins/guangdong-special-equipment/matter-catalog.json' with { type: 'json' };
 import { password, captchaFactory, loginCaptcha } from './helpers.mjs';
 
 const { privateKey, publicKey } = generateKeyPairSync('rsa', { modulusLength: 2048 });
@@ -67,6 +68,24 @@ async function fixture(t) {
 const both = matter => ({ allowedSystems: [A, B], allowedTools: [], allowedMatters: { [A]: [MATTER_A], [B]: [matter] } });
 const onlyA = () => ({ allowedSystems: [A], allowedTools: [], allowedMatters: { [A]: [MATTER_A] } });
 const onlyTool = () => ({ allowedSystems: [], allowedTools: [TOOL], allowedMatters: {} });
+
+test('special equipment exposes only the two configured matters and must be assigned explicitly', async t => {
+  const f = await fixture(t), { id, name, matters } = equipmentCatalog;
+  const { body } = await f.api('/api/admin/bootstrap');
+  assert.equal(body.systems.find(system => system.id === id)?.name, name);
+  assert.deepEqual(body.matters.filter(matter => matter.system_id === id).map(({ id, name }) => ({ id, name })), matters);
+  const license = await f.license();
+  const device = 'a'.repeat(64);
+  const activated = await f.activate(license.activationCode, device);
+  assert.equal(activated.status, 200);
+  assert.deepEqual(f.grant(activated.body).allowedSystems, [A]);
+  const newScope = { ...onlyA(), allowedSystems: [A, id],
+    allowedMatters: { [A]: [MATTER_A], [id]: [matters[1].id] } };
+  assert.equal((await f.update(license.id, newScope)).status, 200);
+  const refreshed = await f.refresh(license.id, device, activated.body);
+  assert.equal(refreshed.status, 200);
+  assert.deepEqual(f.grant(refreshed.body).allowedMatters, newScope.allowedMatters);
+});
 
 test('issuance verifies every granted matter including empty catalogs', async t => {
   const f = await fixture(t);

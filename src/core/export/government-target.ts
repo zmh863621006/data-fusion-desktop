@@ -1,8 +1,10 @@
+import { EQUIPMENT_SYSTEM_ID } from '../../plugins/guangdong-special-equipment/catalog';
+
 export type GovernmentExportTarget = 'nanshan' | 'guangdong-law';
 
 /** Systems whose returned permit records support both publication templates. */
 export function supportsGovernmentExport(systemId: string): boolean {
-  return systemId === 'government-info' || systemId === 'shenzhen-hazardous-chemicals';
+  return systemId === 'government-info' || systemId === 'shenzhen-hazardous-chemicals' || systemId === EQUIPMENT_SYSTEM_ID;
 }
 
 export function parseGovernmentExportTarget(value: unknown): GovernmentExportTarget | undefined {
@@ -14,7 +16,7 @@ export function parseGovernmentExportTarget(value: unknown): GovernmentExportTar
 export function assertGovernmentExportTarget(target: GovernmentExportTarget | undefined, format: string, systems: string[]): void {
   parseGovernmentExportTarget(target);
   if (target && (format !== 'xlsx' || !systems.length || new Set(systems).size !== 1 || systems.some(system => !supportsGovernmentExport(system)))) {
-    throw new Error('省执法和南山模板仅支持政务综合信息或危化品管理的单系统 Excel 导出');
+    throw new Error('省执法和南山模板仅支持政务综合信息、危化品管理或特种设备监管的单系统 Excel 导出');
   }
 }
 

@@ -32,6 +32,10 @@ const server = createServer((req, res) => {
     : '<input type="password" id="txt_pwd" name="password">';
   res.end(`<!doctype html><title>Source fixture</title><form><input ${accountField}>${passwordFields}<input name="captcha"><button type="button" id="complete">模拟登录</button></form><script>window.fixtureSubmissions=0;document.querySelector("form").onsubmit=e=>{e.preventDefault();window.fixtureSubmissions++;};document.querySelector("#complete").onclick=()=>{sessionStorage.setItem("fixture-session","retained");history.pushState({},"","records");document.body.innerHTML="<h1>已登录测试页</h1><input id=record-filter>";};</script>`);
 });
+const ssoServer = createServer((_request, response) => {
+  response.setHeader('Content-Type', 'text/html; charset=utf-8');
+  response.end('<!doctype html><title>SSO test login</title><h1>统一认证登录</h1>');
+});
 async function until(check: () => Promise<unknown> | unknown, label: string, timeoutMs = 10000) {
   const end = Date.now() + timeoutMs;
   while (Date.now() < end) { if (await check()) return; await new Promise(resolve => setTimeout(resolve, 25)); }
@@ -201,12 +205,30 @@ async function run() {
   controller.close('nanshan-publicity');
   assert(!publicationPages[1].isDestroyed());
   assert.equal(controller.currentSystemId(), 'guangdong-law-publicity');
+  await new Promise<void>(resolve => ssoServer.listen(0, '127.0.0.1', resolve));
+  const ssoOrigin = `http://127.0.0.1:${(ssoServer.address() as { port: number }).port}`;
+  const loginUrl = ssoOrigin + '/zwrz/login';
+  const portalUrl = origin + '/equipment/home';
+  const transitions: boolean[] = [];
+  controller.open(main, { id: 'equipment-cross-origin', name: '跨域登录测试', loginPage: {
+    url: loginUrl, allowedOrigin: origin, additionalAllowedOrigins: [ssoOrigin], partition: 'smoke-cross-origin-sso',
+    onLoginPageChange: visible => transitions.push(visible),
+  } });
+  await until(() => transitions.length === 1, 'cross-origin login entry detected');
+  const ssoTab = webContents.getAllWebContents().find(contents => contents.getURL() === loginUrl)!;
+  await ssoTab.executeJavaScript(`void (location.href = ${JSON.stringify(portalUrl)})`);
+  await until(() => ssoTab.getURL() === portalUrl && transitions.length === 2, 'SSO redirects to allowed business portal');
+  await ssoTab.executeJavaScript(`void (location.href = ${JSON.stringify(loginUrl)})`);
+  await until(() => transitions.length === 3, 'cross-origin sign-out detected');
+  assert.deepEqual(transitions, [true, false, true]);
+  controller.close('equipment-cross-origin');
+  console.log('PASS: cross-origin SSO login, business portal and sign-out use a single isolated source tab.');
   console.log('PASS: both publication views retain their login/page/form independently, reuse existing tabs, preserve business views, return without business-session detection, and close independently.');
   console.log('PASS: collapsible menus; five live tabs; page/form/session retention; saved credential fill; market legacy password masked and filled; user edits/captcha preserved; no automatic submit; automatic and background login detection; manual force detection; independent close; 1180px layout.');
 }
 void run().then(() => finish(0)).catch(error => { console.error(error); return finish(1); });
 async function finish(code: number) {
-  controller.close(); main?.destroy(); server.close();
+  controller.close(); main?.destroy(); server.close(); ssoServer.close();
   // Delete only this test's unique temporary profile, never the real application profile.
   if (directory && dirname(resolve(directory)) === resolve(tmpdir()) && directory.startsWith(join(tmpdir(), 'fusion-source-tabs-smoke-'))) {
     await rm(directory, { recursive: true, force: true }).catch(() => {});

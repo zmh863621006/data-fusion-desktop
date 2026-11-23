@@ -1,0 +1,9 @@
+{
+  "id": "guangdong-special-equipment",
+  "name": "广东省特种设备电子监管系统",
+  "version": "0.1.0",
+  "matters": [
+    { "id": "equipment-use-registration", "name": "特种设备使用登记" },
+    { "id": "equipment-personnel-assessment", "name": "特种设备作业考核人员" }
+  ]
+}

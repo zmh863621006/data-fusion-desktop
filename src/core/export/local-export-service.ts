@@ -8,8 +8,9 @@ import { createPermitWorkbook, fillPermitRow, PERMIT_FIRST_DATA_ROW } from '../d
 import { createProvincialPermitWorkbook, validateProvincialPermit } from '../double-publicity/provincial-permit';
 import { assertGovernmentExportTarget, type GovernmentExportTarget } from './government-target';
 import { createNanshanPermitWorkbook, validateNanshanPermit } from '../double-publicity/nanshan-permit';
+import { EQUIPMENT_SYSTEM_ID } from '../../plugins/guangdong-special-equipment/catalog';
 
-const permitSystems = new Set(['government-info', 'oversize-transport', 'online-car-permit', 'transport-practitioner', 'health-publicity', 'shenzhen-hazardous-chemicals']);
+const permitSystems = new Set(['government-info', 'oversize-transport', 'online-car-permit', 'transport-practitioner', 'health-publicity', 'shenzhen-hazardous-chemicals', EQUIPMENT_SYSTEM_ID]);
 
 function highlight(sheet: ExcelJS.Worksheet, issue: ExportRowIssue, rowNumber: number, columns: string[]) {
   const row = sheet.getRow(rowNumber);

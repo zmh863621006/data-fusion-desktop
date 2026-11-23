@@ -15,13 +15,13 @@ describe('browser session to API session bridge', () => {
     return { accept, clear, before: mocks.webRequest.onBeforeSendHeaders.mock.calls[0][1], completed: mocks.webRequest.onCompleted.mock.calls[0][1],
       failed: mocks.webRequest.onErrorOccurred.mock.calls[0][1], redirected: mocks.webRequest.onBeforeRedirect.mock.calls[0][1] };
   }
-  const response = { id: 1, statusCode: 200, responseHeaders: { 'Content-Type': ['application/json'] } };
+  const response = { id: 1, url: 'https://test.example/api/list', statusCode: 200, responseHeaders: { 'Content-Type': ['application/json'] } };
   it('reads only the configured partition and accepts a successful API request without modifying it', () => {
     const api = setup(); const callback = vi.fn(); const requestHeaders = { Authorization: 'Bearer test-token' };
     api.before({ id: 1, requestHeaders }, callback); expect(api.accept).not.toHaveBeenCalled(); api.completed(response);
     expect(mocks.fromPartition).toHaveBeenCalledWith('persist:test-system');
     expect(callback).toHaveBeenCalledWith({ requestHeaders });
-    expect(api.accept).toHaveBeenCalledWith('Bearer test-token');
+    expect(api.accept).toHaveBeenCalledWith('Bearer test-token', response.url);
     api.completed(response); expect(api.accept).toHaveBeenCalledTimes(1);
   });
   it('does not mistake HTML login pages or server failures for authenticated APIs', () => {
@@ -63,7 +63,7 @@ describe('browser session to API session bridge', () => {
     expect(accept).not.toHaveBeenCalled(); expect(clear).not.toHaveBeenCalled();
     before({ id: 4, requestHeaders: { Token: 'fresh' } }, vi.fn());
     completed({ ...response, id: 4 });
-    expect(accept).toHaveBeenCalledExactlyOnceWith('fresh');
+    expect(accept).toHaveBeenCalledExactlyOnceWith('fresh', response.url);
   });
   it('allows a system-specific authenticated landing page predicate', () => {
     const accept = vi.fn();
@@ -74,7 +74,7 @@ describe('browser session to API session bridge', () => {
       before({ id: 1, requestHeaders: { Cookie: 'JSESSIONID=test' } }, vi.fn());
       completed({ ...response, url: `https://test.example/${path}`, responseHeaders: { 'Content-Type': ['text/html'] } });
     }
-    expect(accept).toHaveBeenCalledExactlyOnceWith('JSESSIONID=test');
+    expect(accept).toHaveBeenCalledExactlyOnceWith('JSESSIONID=test', 'https://test.example/index');
   });
   it('clears only the requested browser partition on logout', async () => {
     await clearBrowserAuth('persist:test-system');
@@ -89,11 +89,11 @@ describe('browser session to API session bridge', () => {
     expect(mocks.webRequest.onBeforeSendHeaders).toHaveBeenCalledOnce();
     const before = mocks.webRequest.onBeforeSendHeaders.mock.calls[0][1], completed = mocks.webRequest.onCompleted.mock.calls[0][1];
     before({ id: 1, url: 'https://hrss.example/employment/list', requestHeaders: { 'Access-Token': 'portal-test', Cookie: 'other=cookie' } }, vi.fn());
-    completed(response);
-    expect(token).toHaveBeenCalledExactlyOnceWith('portal-test'); expect(cookie).not.toHaveBeenCalled();
+    completed({ ...response, url: 'https://hrss.example/employment/list' });
+    expect(token).toHaveBeenCalledExactlyOnceWith('portal-test', 'https://hrss.example/employment/list'); expect(cookie).not.toHaveBeenCalled();
     before({ id: 2, url: 'https://hrss.example/WGBT/list', requestHeaders: { Cookie: 'wgbt=independent', 'Access-Token': 'ignored' } }, vi.fn());
-    completed({ ...response, id: 2 });
-    expect(cookie).toHaveBeenCalledExactlyOnceWith('wgbt=independent');
+    completed({ ...response, id: 2, url: 'https://hrss.example/WGBT/list' });
+    expect(cookie).toHaveBeenCalledExactlyOnceWith('wgbt=independent', 'https://hrss.example/WGBT/list');
     before({ id: 3, url: 'https://hrss.example/WGBT/list', requestHeaders: { Cookie: 'wgbt=expired' } }, vi.fn());
     completed({ ...response, id: 3, statusCode: 401 });
     expect(clearCookie).toHaveBeenCalledOnce(); expect(clearToken).not.toHaveBeenCalled();

@@ -245,6 +245,7 @@ p { line-height: 1.75; }
 .one-click-copy { min-width: 0; }
 .one-click-copy h2 { margin: 0; }
 .return-controls { display: grid; grid-template-columns: minmax(0, 1.1fr) minmax(0, 1fr); align-items: end; gap: 24px; }
+.return-controls-with-select { grid-template-columns: minmax(0, 1.5fr) minmax(0, 1fr) minmax(0, .75fr); }
 .return-date-fields { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; }
 .return-date-fields label, .return-matter-field { display: grid; min-width: 0; gap: 7px; color: #515157; font-size: 13px; }
 .return-date-fields input, .return-matter-field select { font-size: 14px; }

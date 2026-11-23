@@ -7,7 +7,7 @@ export interface BrowserAuthObservation {
   /** Drop observations from an earlier session. Null pauses credential observation. */
   credentialGeneration?(): number | null;
   acceptsResponse?(details: OnCompletedListenerDetails, contentType: string): boolean;
-  accept(value: string): void;
+  accept(value: string, sourceUrl?: string): void;
   clear(): void;
 }
 
@@ -38,7 +38,7 @@ export function observeBrowserAuthMany(partition: string, observations: BrowserA
       if (options.credentialGeneration?.() !== generation) continue;
       if (details.statusCode === 401 || details.statusCode === 403) { options.clear(); continue; }
       const accepted = options.acceptsResponse?.(details, contentType) ?? /json/i.test(contentType);
-      if (details.statusCode >= 200 && details.statusCode < 300 && accepted) options.accept(value);
+      if (details.statusCode >= 200 && details.statusCode < 300 && accepted) options.accept(value, details.url);
     }
   });
   browserSession.webRequest.onBeforeRedirect(filter, (details) => { candidates.delete(details.id); });

@@ -7,6 +7,8 @@ import { DOUBLE_PUBLICITY_TEMPLATE } from '../src/core/double-publicity/template
 import { parseSettingsPatch } from '../src/core/ipc/validation';
 import type { UpdatePresentationState } from '../src/renderer/src/UpdateStatus';
 import { PUBLICATION_PLATFORMS, publicationPlatform } from '../src/core/publication/platforms';
+import { createSpecialEquipmentPlugin } from '../src/plugins/guangdong-special-equipment';
+import { EQUIPMENT_SYSTEM_ID, PERSONNEL_ASSESSMENT, USE_REGISTRATION } from '../src/plugins/guangdong-special-equipment/catalog';
 
 // UI-only regression: a fresh profile, an in-memory fixture, no app runtime or
 // SQLite imports, no real credentials, and all network traffic blocked.
@@ -17,7 +19,7 @@ let window: BrowserWindow | undefined;
 let profile = '';
 let outputDirectory = '';
 let failureReason = '';
-type Scenario = 'inactive' | 'active' | 'no-tool' | 'tools-only' | 'single-system' | 'active-empty';
+type Scenario = 'inactive' | 'active' | 'no-tool' | 'tools-only' | 'single-system' | 'active-empty' | 'equipment-only';
 let scenario: Scenario = 'inactive';
 let scenarioEpoch = 0;
 let sourceTabs: { tabs: Array<{ systemId: string; systemName: string; displayUrl: string; loading: boolean }>; activeSystemId: string | null } = { tabs: [], activeSystemId: null };
@@ -55,7 +57,13 @@ function publishUpdate(state: UpdatePresentationState) {
   if (window && !window.isDestroyed()) window.webContents.send('ui-redesign:updates-changed', updateState);
 }
 
-function allowedSystems() { return scenario === 'tools-only' || scenario === 'active-empty' || scenario === 'inactive' ? [] : scenario === 'single-system' ? [ids[1]] : ids; }
+const equipment = createSpecialEquipmentPlugin({ now: () => now });
+const equipmentComponent = { id: equipment.id, name: equipment.name, version: equipment.version,
+  description: equipment.description, workspaceMode: equipment.workspaceMode, kind: 'system', authorized: true };
+function allowedSystems() {
+  if (scenario === 'equipment-only') return [equipment.id];
+  return scenario === 'tools-only' || scenario === 'active-empty' || scenario === 'inactive' ? [] : scenario === 'single-system' ? [ids[1]] : ids;
+}
 function allowedTools() { return scenario === 'active' || scenario === 'tools-only' ? ['health-publicity'] : []; }
 function grant() {
   return { licenseId: 'ui-only-fixture', customerName: '界面测试客户（示例）', expiresAt: now + 365 * 86400000,
@@ -65,6 +73,9 @@ function grant() {
 }
 function license() { return { state: scenario === 'inactive' ? 'inactive' : 'active', deviceId: 'ui-fixture-device-000000000000', grant: scenario === 'inactive' ? undefined : grant() }; }
 function matters(systemId: string) {
+  if (systemId === equipment.id) return equipment.matters.map(({ query, createDefaultContext, ...matter }) => ({
+    ...matter, defaultFilters: createDefaultContext?.().filters,
+  }));
   return (systemId === ids[0] ? ['水务局', '城管局', '其他'] : ['业务事项']).map((departmentName, index) => ({
     id: `${systemId}-matter-${index}`, name: `${departmentName}演示许可事项`, description: '仅供界面交互回归验证。',
     departmentId: `department-${index}`, departmentName, departmentOrder: index, uniqueKey: ['xkWsh'],
@@ -110,8 +121,12 @@ async function invoke(method: string, ...args: any[]) {
     case 'components.list':
       if (componentGate) await componentGate;
       return [...ids.map((id,index)=>({id,kind:'system',name:names[index],version:'0.1.0',description:'独立业务组件，测试示例。',authorized:true,workspaceMode:id===ids[1]?'standard':'return-ledger',supportsCredentialConfiguration:true})),
+        equipmentComponent,
         {id:'health-publicity',kind:'tool',name:'卫健局双公示工具',version:'1.2.3',description:'读取医疗机构登记批复 Word 文档，核对字段并生成行政许可双公示表格',authorized:true}];
-    case 'systems.list': if (sessionGate) await sessionGate; return ids.map(id => ({ id, name: names[ids.indexOf(id)], version: '0.1.0', workspaceMode: id === ids[1] ? 'query' : 'return-ledger', supportsCredentialConfiguration: true, session: { systemId: id, status: 'authenticated', displayName: '演示用户' } }));
+    case 'systems.list':
+      if (sessionGate) await sessionGate;
+      return [...ids.map(id => ({ id, name: names[ids.indexOf(id)], version: '0.1.0', workspaceMode: id === ids[1] ? 'query' : 'return-ledger', supportsCredentialConfiguration: true, session: { systemId: id, status: 'authenticated', displayName: '演示用户' } })),
+        { ...equipmentComponent, session: { systemId: equipment.id, status: 'authenticated' } }];
     case 'systems.session': return { systemId: args[0], status: 'authenticated', displayName: '演示用户' };
     case 'systems.tabs': return sourceTabs;
     case 'publications.open': {
@@ -857,6 +872,41 @@ async function verifyPractitionerNumberScope() {
   } finally { numberScope = undefined; }
 }
 
+async function verifyEquipmentWorkspace() {
+  await reload('equipment-only');
+  await until('document.querySelectorAll(".system-nav-toggle").length === 1');
+  assert.equal(await dom('document.querySelector(".system-nav-toggle").title'), equipment.name);
+  await click('.system-nav-toggle');
+  await until('document.querySelectorAll(".return-matter-field select").length === 2');
+  assert.deepEqual(await dom('[...document.querySelector(".return-matter-field select").options].map(option => option.value)'),
+    [USE_REGISTRATION.id, PERSONNEL_ASSESSMENT.id]);
+  await dom(`(() => {
+    const choose = (node, value) => {
+      node.value = value;
+      node.dispatchEvent(new Event('change', { bubbles: true }));
+    };
+    choose(document.querySelector('.return-matter-field select'), ${JSON.stringify(PERSONNEL_ASSESSMENT.id)});
+  })()`);
+  await until(`document.querySelector(".return-matter-field select").value === "${PERSONNEL_ASSESSMENT.id}"`);
+  await dom(`(() => {
+    const city = document.querySelectorAll('.return-matter-field select')[1];
+    city.value = '440300';
+    city.dispatchEvent(new Event('change', { bubbles: true }));
+  })()`);
+  await click('.one-click-panel .run-return-button');
+  await until('Boolean(document.querySelector(".matter-workspace-tabs button.active")?.textContent.includes("回流任务"))');
+  const runCall = invocations.filter(call => call.method === 'matters.run').at(-1);
+  assert.deepEqual(runCall?.args, [equipment.id, PERSONNEL_ASSESSMENT.id, { page: 1, pageSize: 200,
+    filters: { ...equipment.matters[1].createDefaultContext?.().filters, city: '440300' } }]);
+  await button('回流数据', '.matter-workspace-tabs');
+  await until('document.querySelectorAll(".publication-actions button:not(:disabled)").length === 2');
+  for (const [label, target] of [['导出省执法双公示', 'guangdong-law'], ['导出南山双公示', 'nanshan']]) {
+    await button(label);
+    await until('Boolean(document.querySelector(".export-notice-path"))');
+    assert.equal(invocations.filter(call => call.method === 'records.export').at(-1)?.args[2], target);
+  }
+}
+
 async function run() {
   profile = process.env.DATA_FUSION_UI_TEST_PROFILE || await mkdtemp(join(tmpdir(), 'fusion-ui-redesign-')); app.setPath('userData', profile);
   await app.whenReady();
@@ -868,10 +918,13 @@ async function run() {
   ipcMain.handle('ui-redesign:invoke', (_event, method, ...args) => invoke(method, ...args));
   await verifyPractitionerNumberScope();
   await verifyLedgerPreferences();
+  await verifyEquipmentWorkspace();
   await runViewport(1440, 900); await runViewport(1180, 720);
   assertAuthorizedReads(0, 'Complete authorization regression');
   assert.equal(errors.length, 0, `Renderer errors: ${errors.join('\n')}`); assert.equal(blockedRequests.length, 0, `UI tried to access external resources: ${blockedRequests.join(', ')}`);
-  assert(localRecordQueries.every(query => typeof query.systemId === 'string' && typeof query.matterId === 'string' && query.matterId.startsWith(`${query.systemId}-matter-`)), `Every local record read must retain matching system/matter scope: ${JSON.stringify(localRecordQueries)}`);
+  assert(localRecordQueries.every(query => typeof query.systemId === 'string' && typeof query.matterId === 'string'
+    && (query.systemId === EQUIPMENT_SYSTEM_ID ? equipment.matters.some(matter => matter.id === query.matterId)
+      : query.matterId.startsWith(`${query.systemId}-matter-`))), `Every local record read must retain matching system/matter scope: ${JSON.stringify(localRecordQueries)}`);
   assert.equal(actualFontSamples.length, coverage.length, 'Each screenshot must include an actual-platform-font sample');
   await writeFile(join(outputDirectory, 'report.json'), JSON.stringify({ status: 'pass', coverage, visualMetrics, actualFontSamples, localRecordQueries, queryContexts, calls: Object.fromEntries(calls), invocations, errors, blockedRequests,
     captureMethod: 'Test window only: showInactive, wait 300 ms, Chromium Page.captureScreenshot fromSurface=false, hide',
