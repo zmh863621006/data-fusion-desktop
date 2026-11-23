@@ -82,16 +82,11 @@ it('uses collection rules for both food/drug matters without turning empty judic
     ...license, xkXkzs: matter.name, ajmc: '历史批次自动生成值', xkCljg: '予以许可',
   }));
   const directory = await destination(), service = new LocalExportService(), confirm = vi.fn(async () => false);
-  const generalPath = join(directory, '双公示.xlsx');
   const judicialPath = join(directory, '司法公示.xlsx');
-  expect(await service.export(generalPath, 'xlsx', records, confirm)).toMatchObject({ rowCount: 2, warningCount: 0 });
   expect(await service.export(judicialPath, 'xlsx', records, confirm, undefined, 'collection-judicial'))
     .toMatchObject({ rowCount: 2, warningCount: 0, missingRequiredCount: 0 });
   expect(confirm).not.toHaveBeenCalled();
-  const ordinary = await read(generalPath), judicial = await read(judicialPath);
-  expect(ordinary.name).toBe('行政许可');
-  expect(ordinary.getCell('Q2').value).toBe('0001');
-  expect(ordinary.getCell('S3').value).toBe(FOOD_DRUG_LICENSES[1].name);
+  const judicial = await read(judicialPath);
   expect(judicial.getCell('M6').value).toBe(FOOD_DRUG_LICENSES[1].name);
   expect(judicial.getCell('P6').value).toBe('核准');
   expect(judicial.getCell('R6').value).toBe(license.xkNr);

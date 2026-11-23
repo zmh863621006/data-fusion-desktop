@@ -7,6 +7,7 @@ import { AppRuntime } from './runtime';
 import { oversizeTransportPlugin } from '../plugins/oversize-transport';
 import { onlineCarPermitPlugin } from '../plugins/online-car-permit';
 import { ApplicationExportDirectory } from '../core/export/export-directory';
+import { PERMIT_FIRST_DATA_ROW, PERMIT_SHEET_NAME } from '../core/double-publicity/permit-workbook';
 import { EnterpriseEnrichmentService } from '../core/enterprise/service';
 import { MemoryLocalRepository } from '../core/storage/memory-repository';
 import { buildRecordKey, DefaultLocalSyncEngine } from '../core/sync/engine';
@@ -166,7 +167,9 @@ describe('reflow enterprise completion and managed export integration', () => {
     runtime.plugins.register(plugin);
     const matter = plugin.matters[0];
     const record = { systemId: plugin.id, matterId: matter.id, recordKey: 'existing-record',
-      data: { ...canonical, xkXkbh: '00008' }, firstSeenAt: 1, updatedAt: 1 };
+      data: { ...canonical, xkXdrShxym: creditCode, xkFrdb: '测试法人', xkXkbh: '00008', xkXkws: '决定书',
+        xkXklb: '普通', xkNr: '测试许可内容', xkYxqz: '2026-10-06', xkYxqzi: '2027-10-06',
+        xkXkjgdm: '测试机关代码', xkZt: '1', xkLydw: '测试来源单位', xkLydwdm: '测试来源单位代码' }, firstSeenAt: 1, updatedAt: 1 };
     const task = { id: 'existing-batch', type: 'data-return', systemId: record.systemId, matterId: record.matterId,
       createdAt: 1, details: { startDate: '2026-10-01', endDate: '2026-10-19' } };
     const taskRowsForExport = vi.fn(async () => [record]);
@@ -177,7 +180,7 @@ describe('reflow enterprise completion and managed export integration', () => {
     });
     const confirm = vi.fn(async () => false);
     for (const [target, label, sheetName, permitCell] of [
-      ['collection-disclosure', '双公示', '行政许可', 'T2'],
+      ['collection-disclosure', '双公示', PERMIT_SHEET_NAME, 'T' + PERMIT_FIRST_DATA_ROW],
       ['collection-judicial', '司法公示', '行政许可案件导入模板', 'N5'],
     ] as const) {
       const result = await runtime.exportTaskOutput(task.id, undefined, '原筛选值', confirm, target);

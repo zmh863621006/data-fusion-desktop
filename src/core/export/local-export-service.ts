@@ -10,7 +10,6 @@ import { assertGovernmentExportTarget, supportsCollectionExport, type Government
 import { createNanshanPermitWorkbook, validateNanshanPermit } from '../double-publicity/nanshan-permit';
 import { EQUIPMENT_SYSTEM_ID } from '../../plugins/guangdong-special-equipment/catalog';
 import { FOOD_DRUG_SYSTEM_ID } from '../../plugins/guangdong-food-drug/catalog';
-import { createCollectionDisclosureWorkbook } from './collection-disclosure-workbook';
 import { createCollectionJudicialWorkbook } from './collection-judicial-workbook';
 
 const permitSystems = new Set(['government-info', 'oversize-transport', 'online-car-permit', 'transport-practitioner',
@@ -47,9 +46,8 @@ export class LocalExportService {
     const systems = records.map(record => record.systemId);
     const selectedTarget = target ?? (format === 'xlsx' && systems.some(supportsCollectionExport) ? 'collection-disclosure' : undefined);
     assertGovernmentExportTarget(selectedTarget, format, systems);
-    if (selectedTarget === 'collection-disclosure' || selectedTarget === 'collection-judicial') {
-      const buffer = selectedTarget === 'collection-judicial' ? await createCollectionJudicialWorkbook(records)
-        : Buffer.from(await createCollectionDisclosureWorkbook(records).xlsx.writeBuffer());
+    if (selectedTarget === 'collection-judicial') {
+      const buffer = await createCollectionJudicialWorkbook(records);
       await writeFile(path, buffer, { flag: 'wx' });
       return { path, rowCount: records.length, createdAt: Date.now(), warningCount: 0, missingRequiredCount: 0 };
     }
@@ -100,6 +98,8 @@ export class LocalExportService {
       records.forEach((record, index) => fillPermitRow(sheet, index + PERMIT_FIRST_DATA_ROW, [
         index + 1, ...DOUBLE_PUBLICITY_TEMPLATE.map(([key]) => {
           const value = cellValue(exportFieldValue(record, key) ?? record.data[key]);
+          if (selectedTarget === 'collection-disclosure' && key === 'xkXdrZjlx'
+            && typeof value === 'string' && value.includes('身份证')) return '身份证';
           return value === '' ? null : value;
         }),
       ]));

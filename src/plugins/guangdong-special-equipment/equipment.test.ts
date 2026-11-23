@@ -4,6 +4,7 @@ import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { LocalExportService } from '../../core/export/local-export-service';
+import { PERMIT_FIRST_DATA_ROW, PERMIT_SHEET_NAME } from '../../core/double-publicity/permit-workbook';
 import type { StoredRecord } from '../../core/storage/types';
 import type { BrowserAuthObservation } from '../../main/browser-auth';
 import { createSpecialEquipmentPlugin } from './index';
@@ -77,7 +78,7 @@ it('maps all equipment including a second linked page and exports the source-spe
   try {
     const service = new LocalExportService();
     for (const [target, sheet, row, docColumn, contentColumn, document, content] of [
-      ['collection-disclosure', '行政许可', 2, 17, 21, '登记证-0', '电梯更名变更'],
+      ['collection-disclosure', PERMIT_SHEET_NAME, PERMIT_FIRST_DATA_ROW, 17, 21, '登记证-0', '电梯更名变更'],
       ['collection-judicial', '行政许可案件导入模板', 5, 12, 18, '许可决定-1', '测试登记企业电梯更名变更'],
     ] as const) {
       const file = join(directory, target + '.xlsx');

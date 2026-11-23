@@ -13,6 +13,8 @@ import { LocalExportService } from './local-export-service';
 import { supplementCertificateFields } from '../../plugins/government-info/certificate-fields';
 import { enrichDrainagePermit, NEW_DRAINAGE_PERMIT_CONTENT, NEW_DRAINAGE_PERMIT_MATTER } from '../../plugins/government-info/field-rules';
 import { toDoublePublicityRecord } from '../../plugins/government-info/enrichment';
+import { EQUIPMENT_SYSTEM_ID } from '../../plugins/guangdong-special-equipment/catalog';
+import { FOOD_DRUG_SYSTEM_ID } from '../../plugins/guangdong-food-drug/catalog';
 
 const record = (systemId = 'transport-practitioner', data: Record<string, unknown> = {}): StoredRecord => ({
   systemId, matterId: 'test-matter', recordKey: 'record-1', data, firstSeenAt: 1, updatedAt: 1,
@@ -117,6 +119,27 @@ describe('LocalExportService', () => {
     expect(choice('D22:D65536')).toBe('"法人,非法人组织,自然人,个体工商户"');
     expect(choice('AA22:AA65536')).toBe('"1,2"');
     expect($('dimension').attr('ref')).toBe('A1:AF3');
+  });
+
+  it('shares the oversize and ride-hailing disclosure workbook with equipment and food/drug', async () => {
+    const data = { xzxkmc: '测试事项', xkXdrMc: '测试相对人', xkXdrLb: '自然人', xkXdrZjlx: '身份证',
+      xkXdrZjhm: '012345678901234567', xkXkws: '标准决定书', xkWsh: '00013', xkXklb: '普通', xkXkbh: '00085',
+      xkNr: '测试许可内容', xkJdrq: '2026-11-23', xkYxqz: '2026-11-23', xkYxqzi: '2027-11-23',
+      xkXkjg: '测试机关', xkXkjgdm: '示例机关代码', xkZt: '1', xkLydw: '测试单位', xkLydwdm: '示例单位代码' };
+    const service = new LocalExportService();
+    async function partsFor(systemId: string, target?: 'collection-disclosure', fields = data) {
+      const path = await destination();
+      expect(await service.export(path, 'xlsx', [record(systemId, fields)], undefined, undefined, target))
+        .toMatchObject({ rowCount: 1, warningCount: 0, missingRequiredCount: 0 });
+      const zip = await JSZip.loadAsync(await readFile(path));
+      return Promise.all(['xl/worksheets/sheet1.xml', 'xl/styles.xml', 'xl/sharedStrings.xml'].map(name => zip.file(name)!.async('string')));
+    }
+    const shared = await partsFor('oversize-transport');
+    expect(await partsFor('online-car-permit')).toEqual(shared);
+    expect(await partsFor(EQUIPMENT_SYSTEM_ID, 'collection-disclosure', { ...data, xkXdrZjlx: '居民身份证' })).toEqual(shared);
+    expect(await partsFor(FOOD_DRUG_SYSTEM_ID, 'collection-disclosure')).toEqual(shared);
+    expect(await partsFor(FOOD_DRUG_SYSTEM_ID)).toEqual(shared);
+    expect(shared[2]).not.toContain('职权来源');
   });
 
   it.each(['health-publicity', 'oversize-transport', 'online-car-permit', 'transport-practitioner', 'government-info'])('exports every canonical field for %s at row three and flags the entire incomplete row', async systemId => {
