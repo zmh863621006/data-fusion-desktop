@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest';
+import { HRSS_SUBDISTRICT_MATTERS } from '../../plugins/guangdong-hrss/catalog';
 import { buildHrssDashboard, HrssDashboardAccessError, type HrssDashboardInput, type HrssDashboardRecord, type HrssDashboardTask } from './dashboard';
 
 const NOW = Date.parse('2026-11-04T04:00:00Z');
@@ -44,6 +45,17 @@ describe('authorized local HRSS dashboard', () => {
     expect(empty.ages.total).toBe(0);
     expect(empty.matters[0].total).toBe(0);
     expect(empty.lastSuccessAt).toBe(NOW - 1_000);
+  });
+
+  it('opens the dashboard for a street office grant and counts only matters with a list source', () => {
+    const streetMatter = HRSS_SUBDISTRICT_MATTERS[0].id;
+    expect(build({ allowedMatterIds: [streetMatter] })).toMatchObject({
+      authorizedMatterCount: 0, matters: [], syncState: 'not-synced', totalRecords: null,
+    });
+    expect(build({ allowedMatterIds: [POPULATION, streetMatter], tasks: [success()] })).toMatchObject({
+      authorizedMatterCount: 1, syncState: 'synced', totalRecords: 0,
+    });
+    expect(() => build({ allowedMatterIds: [streetMatter], records: [record({}, streetMatter)] })).toThrow(HrssDashboardAccessError);
   });
 
   it('does not treat failed, cancelled, unrelated, incomplete or future tasks as successful evidence', () => {

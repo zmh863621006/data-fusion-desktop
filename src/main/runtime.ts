@@ -357,8 +357,10 @@ export class AppRuntime {
     const grant = await this.requireLicense(systemId);
     if (!this.platformStore) throw new Error('本地人社台账尚未就绪');
     const allowed = grant.allowedMatters?.[systemId];
-    const matterIds = this.plugins.get(systemId)!.matters.filter(matter => !allowed || allowed.includes(matter.id)).map(matter => matter.id);
-    const snapshot = await this.platformStore.successfulSnapshots(systemId, matterIds);
+    const matters = this.plugins.get(systemId)!.matters.filter(matter => !allowed || allowed.includes(matter.id));
+    const matterIds = matters.map(matter => matter.id);
+    const snapshot = await this.platformStore.successfulSnapshots(systemId,
+      matters.filter(matter => matter.queryAvailable !== false).map(matter => matter.id));
     const latestGrant = await this.requireLicense(systemId);
     for (const matterId of matterIds) assertSystemLicensed(latestGrant, systemId, matterId);
     return buildHrssDashboard({ allowedMatterIds: matterIds, records: snapshot.records,

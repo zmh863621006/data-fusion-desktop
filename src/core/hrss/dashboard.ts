@@ -1,4 +1,4 @@
-import { HRSS_MATTER_DEFINITIONS } from '../../plugins/guangdong-hrss/catalog';
+import { HRSS_MATTER_DEFINITIONS, HRSS_SUBDISTRICT_MATTERS } from '../../plugins/guangdong-hrss/catalog';
 
 export const HRSS_DASHBOARD_SYSTEM_ID = 'guangdong-hrss' as const;
 
@@ -264,14 +264,15 @@ function coverageDate(value: unknown): string | null {
 export function buildHrssDashboard(input: HrssDashboardInput): HrssDashboardData {
   const now = input.now ?? Date.now();
   if (!finiteTime(now)) throw new Error('人社统计时间无效');
-  const definitions = new Map(HRSS_MATTER_DEFINITIONS.map((matter) => [matter.id, matter]));
   const allowed = new Set(input.allowedMatterIds);
-  if (!allowed.size || [...allowed].some((id) => !definitions.has(id))) throw new HrssDashboardAccessError();
-  for (const item of [...input.records, ...input.tasks]) {
-    if (!allowed.has(item.matterId) || (item.systemId && item.systemId !== HRSS_DASHBOARD_SYSTEM_ID)) throw new HrssDashboardAccessError();
-  }
-  // Preserve the catalog order. Never trust a record-provided title or arbitrary status label.
+  const catalogIds = new Set([...HRSS_MATTER_DEFINITIONS, ...HRSS_SUBDISTRICT_MATTERS].map((matter) => matter.id));
+  if (!allowed.size || [...allowed].some((id) => !catalogIds.has(id))) throw new HrssDashboardAccessError();
+  // Only matters with a list source contribute to dashboard coverage.
   const selected = HRSS_MATTER_DEFINITIONS.filter((matter) => allowed.has(matter.id));
+  const selectedIds = new Set(selected.map((matter) => matter.id));
+  for (const item of [...input.records, ...input.tasks]) {
+    if (!selectedIds.has(item.matterId) || (item.systemId && item.systemId !== HRSS_DASHBOARD_SYSTEM_ID)) throw new HrssDashboardAccessError();
+  }
   const recordsByMatter = new Map<string, HrssDashboardRecord[]>();
   for (const matter of selected) recordsByMatter.set(matter.id, []);
   const keyedRecords = new Map<string, HrssDashboardRecord>();
@@ -436,7 +437,7 @@ export function buildHrssDashboard(input: HrssDashboardInput): HrssDashboardData
   const successTimes = matters.flatMap((matter) => matter.lastSuccessAt === null ? [] : [matter.lastSuccessAt]);
   return {
     systemId: HRSS_DASHBOARD_SYSTEM_ID, generatedAt: now,
-    syncState: syncedMatterCount === matters.length ? 'synced' : syncedMatterCount ? 'partial' : hasEvidence ? 'local-only' : 'not-synced',
+    syncState: syncedMatterCount ? (syncedMatterCount === matters.length ? 'synced' : 'partial') : hasEvidence ? 'local-only' : 'not-synced',
     totalRecords, authorizedMatterCount: matters.length, syncedMatterCount,
     lastSuccessAt: successTimes.length ? Math.max(...successTimes) : null,
     matters, ages: { total: ageHasEvidence ? ageCounts.reduce((sum, bucket) => sum + bucket.count, 0) : null, buckets: ageCounts },
