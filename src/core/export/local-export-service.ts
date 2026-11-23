@@ -6,10 +6,12 @@ import { DOUBLE_PUBLICITY_TEMPLATE, isDoublePublicityData } from '../double-publ
 import { exportFieldValue, validateExport, type ConfirmExport, type ExportRowIssue } from '../double-publicity/validation';
 import { createPermitWorkbook, fillPermitRow, PERMIT_FIRST_DATA_ROW } from '../double-publicity/permit-workbook';
 import { createProvincialPermitWorkbook, validateProvincialPermit } from '../double-publicity/provincial-permit';
-import { assertGovernmentExportTarget, type GovernmentExportTarget } from './government-target';
+import { assertGovernmentExportTarget, supportsCollectionExport, type GovernmentExportTarget } from './government-target';
 import { createNanshanPermitWorkbook, validateNanshanPermit } from '../double-publicity/nanshan-permit';
 import { EQUIPMENT_SYSTEM_ID } from '../../plugins/guangdong-special-equipment/catalog';
 import { FOOD_DRUG_SYSTEM_ID } from '../../plugins/guangdong-food-drug/catalog';
+import { createCollectionDisclosureWorkbook } from './collection-disclosure-workbook';
+import { createCollectionJudicialWorkbook } from './collection-judicial-workbook';
 
 const permitSystems = new Set(['government-info', 'oversize-transport', 'online-car-permit', 'transport-practitioner',
   'health-publicity', 'shenzhen-hazardous-chemicals', EQUIPMENT_SYSTEM_ID, FOOD_DRUG_SYSTEM_ID]);
@@ -42,7 +44,15 @@ function csvCell(value: unknown): string {
 export class LocalExportService {
   async export(path: string, format: ExportFormat, records: StoredRecord[], confirm?: ConfirmExport,
     listColumns?: readonly { key: string; label: string }[], target?: GovernmentExportTarget): Promise<ExportResult | null> {
-    assertGovernmentExportTarget(target, format, records.map(record => record.systemId));
+    const systems = records.map(record => record.systemId);
+    const selectedTarget = target ?? (format === 'xlsx' && systems.some(supportsCollectionExport) ? 'collection-disclosure' : undefined);
+    assertGovernmentExportTarget(selectedTarget, format, systems);
+    if (selectedTarget === 'collection-disclosure' || selectedTarget === 'collection-judicial') {
+      const buffer = selectedTarget === 'collection-judicial' ? await createCollectionJudicialWorkbook(records)
+        : Buffer.from(await createCollectionDisclosureWorkbook(records).xlsx.writeBuffer());
+      await writeFile(path, buffer, { flag: 'wx' });
+      return { path, rowCount: records.length, createdAt: Date.now(), warningCount: 0, missingRequiredCount: 0 };
+    }
     if (target === 'nanshan') {
       const validation = validateNanshanPermit(records);
       if (validation.invalid && confirm && !await confirm(validation, format)) return null;

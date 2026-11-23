@@ -21,8 +21,8 @@ function permitRow(matter: FoodDrugLicense, id: string, list: FoodDrugRow, accep
   const businessName = foodDrugText(list.BUSINESS_NAME);
   return {
     sourceRecordId: id,
-    xzxkmc: businessName, ajmc: businessName, xkNr: businessName,
-    xkXdrLb: '法人及非法人组织', xkXklb: '普通', xkCljg: '予以许可', xkZt: '1',
+    xzxkmc: businessName, xkNr: businessName,
+    xkXdrLb: '法人及非法人组织', xkXklb: '普通', xkZt: '1',
     xkXdrMc: foodDrugText(acceptance.QYMC), xkXdrShxym: foodDrugText(acceptance.SHXYDM),
     xkFrdb: foodDrugText(acceptance.FDDBR), xkFrZjlx: foodDrugText(acceptance.ZJLX_DETAIL), xkFrZjhm: foodDrugText(acceptance.ZJHM),
     xkXkws: foodDrugText(acceptance.BUSINESS_NAME), xkWsh: foodDrugText(acceptance.SLH),

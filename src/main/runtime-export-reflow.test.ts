@@ -12,6 +12,8 @@ import { MemoryLocalRepository } from '../core/storage/memory-repository';
 import { buildRecordKey, DefaultLocalSyncEngine } from '../core/sync/engine';
 import { queryOversizeTransport } from '../plugins/oversize-transport/query';
 import { governmentInfoPlugin } from '../plugins/government-info';
+import { createSpecialEquipmentPlugin } from '../plugins/guangdong-special-equipment';
+import { createFoodDrugPlugin } from '../plugins/guangdong-food-drug';
 import ExcelJS from 'exceljs';
 
 const creditCode = '91440300123456789Q';
@@ -156,5 +158,39 @@ describe('reflow enterprise completion and managed export integration', () => {
     await expect(runtime.exportLocalRecords({ systemId: 'oversize-transport' }, undefined, 'xlsx', undefined, target)).rejects.toThrow('仅支持政务');
     Object.assign(runtime, { currentGrant: vi.fn(async () => ({ allowExport: false })) });
     await expect(runtime.exportTaskOutput(task.id, undefined, undefined, undefined, target)).rejects.toThrow();
+  });
+
+  it.each([createSpecialEquipmentPlugin(), createFoodDrugPlugin()])('$id exports both collection templates from an existing batch', async plugin => {
+    const directory = await mkdtemp(join(tmpdir(), 'fusion-collection-export-')); directories.push(directory);
+    const runtime = new AppRuntime();
+    runtime.plugins.register(plugin);
+    const matter = plugin.matters[0];
+    const record = { systemId: plugin.id, matterId: matter.id, recordKey: 'existing-record',
+      data: { ...canonical, xkXkbh: '00008' }, firstSeenAt: 1, updatedAt: 1 };
+    const task = { id: 'existing-batch', type: 'data-return', systemId: record.systemId, matterId: record.matterId,
+      createdAt: 1, details: { startDate: '2026-10-01', endDate: '2026-10-19' } };
+    const taskRowsForExport = vi.fn(async () => [record]);
+    const requireLicense = vi.fn(async () => {});
+    Object.assign(runtime, { exportDirectory: new ApplicationExportDirectory(directory),
+      currentGrant: vi.fn(async () => ({ allowExport: true })), requireLicense,
+      platformStore: { getTask: async () => task, taskRowsForExport },
+    });
+    const confirm = vi.fn(async () => false);
+    for (const [target, label, sheetName, permitCell] of [
+      ['collection-disclosure', '双公示', '行政许可', 'T2'],
+      ['collection-judicial', '司法公示', '行政许可案件导入模板', 'N5'],
+    ] as const) {
+      const result = await runtime.exportTaskOutput(task.id, undefined, '原筛选值', confirm, target);
+      expect(result).toMatchObject({ rowCount: 1, warningCount: 0 });
+      expect(basename(result!.path)).toBe(['行政许可', label, matter.name, '2026-10-01至2026-10-19.xlsx'].join('-'));
+      const book = await new ExcelJS.Workbook().xlsx.readFile(result!.path, { ignoreNodes: ['dataValidations'] });
+      expect(book.getWorksheet(sheetName)?.getCell(permitCell).value).toBe('00008');
+    }
+    expect(taskRowsForExport).toHaveBeenCalledTimes(2);
+    expect(taskRowsForExport).toHaveBeenCalledWith(task.id, '原筛选值');
+    expect(requireLicense).toHaveBeenCalledWith(plugin.id, matter.id);
+    expect(confirm).not.toHaveBeenCalled();
+    await expect(runtime.exportTaskOutput(task.id, undefined, undefined, confirm, 'guangdong-law')).rejects.toThrow('仅支持政务');
+    expect(taskRowsForExport).toHaveBeenCalledTimes(2);
   });
 });

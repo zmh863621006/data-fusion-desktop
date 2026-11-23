@@ -4,7 +4,6 @@ import descriptor from './provincial-template.json';
 import type { StoredRecord } from '../storage/types';
 import { exportFieldValue, type ExportValidation, type ExportFieldIssue } from './validation';
 import governmentMatters from '../../plugins/government-info/matter-catalog.json';
-import { EQUIPMENT_SYSTEM_ID, USE_REGISTRATION } from '../../plugins/guangdong-special-equipment/catalog';
 
 export const PROVINCIAL_PERMIT_SHEET = '行政许可案件导入模板';
 export const PROVINCIAL_FIRST_DATA_ROW = 5;
@@ -32,10 +31,6 @@ const waterMatters = new Set(governmentMatters.filter(matter => matter.departmen
 export function provincialValue(record: StoredRecord, key: string): string {
   // As in the original gdSgsExport, no attachment names without an attached PDF.
   if (key === 'decisionAttachmentName') return '';
-  if (record.systemId === EQUIPMENT_SYSTEM_ID && record.matterId === USE_REGISTRATION.id) {
-    if (key === 'xkWsh') return text(record.data.provincialDocumentNumber);
-    if (key === 'xkNr') return text(record.data.ajmc);
-  }
   let value = text(exportFieldValue(record, key));
   if (key === 'xkXkjg' && record.systemId === 'government-info') {
     // Only the water department has been confirmed for this new export. Preserve
@@ -71,7 +66,6 @@ export function validateProvincialPermit(records: StoredRecord[]): ExportValidat
     // These columns carry a red asterisk in the supplied workbook.
     // The original gdSgsExport maps its "委托单位" column to xkJg (our xkXkjg).
     ['xkXdrMc','xkXdrLb','ajmc','xkXkzs','xkJdrq','xkXklb','xkCljg','xkNr','xkZqly','xkXkjg'].forEach(require);
-    if (record.systemId === EQUIPMENT_SYSTEM_ID && !value('xkWsh')) add('xkWsh', '缺少原系统决定书文号，请核对');
     const category = value('xkXdrLb');
     if (['法人及非法人组织','个体工商户'].includes(category)) {
       require('xkXdrShxym'); require('xkFrdb');

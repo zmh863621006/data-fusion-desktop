@@ -12,7 +12,6 @@ import template from '../double-publicity/provincial-template.json';
 import type { StoredRecord } from '../storage/types';
 import { PERMIT_SHEET_NAME } from '../double-publicity/permit-workbook';
 import { NANSHAN_PERMIT_SHEET } from '../double-publicity/nanshan-permit';
-import { FOOD_DRUG_SYSTEM_ID } from '../../plugins/guangdong-food-drug/catalog';
 
 const complete = { xkXdrMc: '示例企业', xkXdrLb: '法人及非法人组织', xkXdrShxym: '001234567890123456', xkFrdb: '示例法人',
   ajmc: '示例企业申请排水许可案件', xkXkws: '行政许可决定书', xkWsh: '00123', xkXkzs: '排水许可证', xkXkbh: '00045',
@@ -95,31 +94,6 @@ describe('provincial permit template export', () => {
     expect(sheet.columnCount).toBe(31); expect(sheet.getCell('A2').value).toBe(complete.xkXdrMc);
     expect(data).toEqual(complete); expect(PROVINCIAL_PERMIT_COLUMNS).toHaveLength(24);
     expect(validateProvincialPermit([record({ ...complete, xkJdrq: '2026-02-30', xkCljg: '正常受理' })]).issues[0].fields.map(f => f.key)).toEqual(expect.arrayContaining(['xkJdrq','xkCljg']));
-  });
-  it('exports both food and drug matters with the original document numbers and authority, and marks missing fields', async () => {
-    const authority = '惠州市市场监督管理局';
-    const source = '惠州市惠城区市场监督管理局';
-    const food = { ...record({ ...complete, xkXkzs: '食品生产许可证', xkXkjg: authority,
-      xkXkjgdm: '11441300MB2C90987A', xkLydw: source, xkLydwdm: '11441302351971239H', xkZt: '1' }, FOOD_DRUG_SYSTEM_ID),
-    matterId: 'food-production-license' };
-    const medical = { ...food, matterId: 'class-iii-medical-device-operation-license', recordKey: 'medical',
-      data: { ...food.data, xkXkzs: '医疗器械经营许可证（第三类）', xkWsh: '00567', xkXkbh: '00890', xkZqly: '', xkFrdb: '' } };
-    const service = new LocalExportService();
-    for (const [target, sheetName, firstRow, documentColumn, numberColumn, authorityColumn] of [
-      ['nanshan', NANSHAN_PERMIT_SHEET, 2, 'O', 'R', 'AA'],
-      ['guangdong-law', PROVINCIAL_PERMIT_SHEET, 5, 'L', 'N', 'V'],
-    ] as const) {
-      const path = await destination();
-      const result = await service.export(path, 'xlsx', [food, medical], undefined, undefined, target);
-      expect(result).toMatchObject({ rowCount: 2, warningCount: 1, missingRequiredCount: 1 });
-      const sheet = (await read(path)).getWorksheet(sheetName)!;
-      expect(sheet.getCell(`${documentColumn}${firstRow}`).value).toBe('00123');
-      expect(sheet.getCell(`${documentColumn}${firstRow + 1}`).value).toBe('00567');
-      expect(sheet.getCell(`${numberColumn}${firstRow + 1}`).value).toBe('00890');
-      expect(sheet.getCell(`${authorityColumn}${firstRow + 1}`).value).toBe(authority);
-      expect(sheet.getCell(`A${firstRow + 1}`).fill).toMatchObject({ fgColor: { argb: 'FFFFCCCC' } });
-      if (target === 'nanshan') expect(sheet.getCell('AC2').value).toBe(source);
-    }
   });
   it('confirms authority only for water matters and leaves unknown or incorrectly inherited water authorities blank elsewhere', async () => {
     const water = record({ ...complete, xkXkjg: '' });

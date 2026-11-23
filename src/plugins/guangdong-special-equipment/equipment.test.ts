@@ -77,8 +77,8 @@ it('maps all equipment including a second linked page and exports the source-spe
   try {
     const service = new LocalExportService();
     for (const [target, sheet, row, docColumn, contentColumn, document, content] of [
-      ['nanshan', 'Sheet1', 2, 15, 19, '登记证-0', '电梯更名变更'],
-      ['guangdong-law', '行政许可案件导入模板', 5, 12, 18, '许可决定-1', '测试登记企业电梯更名变更'],
+      ['collection-disclosure', '行政许可', 2, 17, 21, '登记证-0', '电梯更名变更'],
+      ['collection-judicial', '行政许可案件导入模板', 5, 12, 18, '许可决定-1', '测试登记企业电梯更名变更'],
     ] as const) {
       const file = join(directory, target + '.xlsx');
       expect(await service.export(file, 'xlsx', records, undefined, undefined, target)).toMatchObject({ rowCount: 11, warningCount: 0 });

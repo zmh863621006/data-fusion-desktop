@@ -933,10 +933,17 @@ async function verifyEquipmentWorkspace() {
     filters: { ...equipment.matters[1].createDefaultContext?.().filters, city: '440300' } }]);
   await button('回流数据', '.matter-workspace-tabs');
   await until('document.querySelectorAll(".publication-actions button:not(:disabled)").length === 2');
-  for (const [label, target] of [['导出省执法双公示', 'guangdong-law'], ['导出南山双公示', 'nanshan']]) {
+  await verifyCollectionExportButtons(equipment.id, PERSONNEL_ASSESSMENT.id);
+}
+
+async function verifyCollectionExportButtons(systemId: string, matterId: string) {
+  assert.deepEqual(await dom('[...document.querySelectorAll(".publication-actions button")].map(item => item.textContent.trim())'),
+    ['双公示导出', '司法公示导出']);
+  for (const [label, target] of [['双公示导出', 'collection-disclosure'], ['司法公示导出', 'collection-judicial']]) {
     await button(label);
     await until('Boolean(document.querySelector(".export-notice-path"))');
-    assert.equal(invocations.filter(call => call.method === 'records.export').at(-1)?.args[2], target);
+    assert.deepEqual(invocations.filter(call => call.method === 'records.export').at(-1)?.args,
+      [{ keyword: undefined, systemId, matterId }, 'xlsx', target]);
   }
 }
 
@@ -956,8 +963,7 @@ async function verifyFoodDrugWorkspace() {
   ]);
   await button('回流数据', '.matter-workspace-tabs');
   await until('document.querySelectorAll(".publication-actions button:not(:disabled)").length === 2');
-  assert.deepEqual(await dom('[...document.querySelectorAll(".publication-actions button")].map(item => item.textContent.trim())'),
-    ['导出省执法双公示', '导出南山双公示']);
+  await verifyCollectionExportButtons(foodDrug.id, FOOD_PRODUCTION.id);
 }
 
 async function run() {
