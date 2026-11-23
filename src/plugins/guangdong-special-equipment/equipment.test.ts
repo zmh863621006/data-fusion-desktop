@@ -21,6 +21,9 @@ const context = { page: 1, pageSize: 200, filters: { startDate: day, endDate: da
 const json = (data: unknown) => new Response(JSON.stringify({ code: 200, data }));
 const page = (rows: unknown[], total = rows.length) => json({ rows, total });
 const token = 'fixture-token';
+const workbench = () => Response.json({ status: '200', success: true, data: {
+  areaCode: '441300', registerPermits: {}, examOperatorPermits: {},
+} });
 
 async function connectedPlugin(fetcher: (url: string, init: RequestInit) => Promise<Response>) {
   const plugin = createSpecialEquipmentPlugin({ fetcher, minimumIntervalMs: 0, now: () => Date.parse(day) });
@@ -112,15 +115,21 @@ it('uses personnel field names and details, excludes denied cases and leaves unk
   expect(calls).not.toContain('exam/findApplicationById/DENIED-1');
 });
 
-it('invalidates the session on explicit rejection or returning to SSO and stores only a portal route for reopening', async () => {
+it('monitors the workbench and invalidates the session on explicit rejection or returning to SSO', async () => {
   let status = 200;
-  const fetcher = vi.fn(async (_url: string) => status === 200 ? page([]) : new Response(null, { status }));
+  const fetcher = vi.fn(async (url: string, init: RequestInit) => {
+    expect(url).toBe(EQUIPMENT_API + 'workbench/info');
+    expect(init.method).toBe('GET');
+    expect(init.body).toBeUndefined();
+    expect(new Headers(init.headers).has('Token')).toBe(true);
+    return status === 200 ? workbench() : new Response(null, { status });
+  });
   const { plugin, observer } = await connectedPlugin(fetcher);
   const recovery = plugin.sessionRecovery!;
   expect(new URL(EQUIPMENT_LOGIN_URL).searchParams.get('redirect_uri')).toBe(EQUIPMENT_HOME_URL + 'api/oauth/gov/new/code');
   plugin.loginPage!.onNavigate!(EQUIPMENT_HOME_URL + 'index.html?unused=discard#/home');
   plugin.loginPage!.onNavigate!(EQUIPMENT_HOME_URL + 'api/oauth/gov/new/code?code=fixture');
-  expect(await recovery.snapshot()).toEqual({ token, home: EQUIPMENT_HOME_URL + 'index.html#/home', probeKind: 'registration' });
+  expect(await recovery.snapshot()).toEqual({ token, home: EQUIPMENT_HOME_URL + 'index.html#/home' });
   expect(await plugin.getSessionState()).toMatchObject({ systemId: EQUIPMENT_SYSTEM_ID, status: 'authenticated' });
   status = 401;
   expect(await plugin.getSessionState()).toMatchObject({ status: 'expired' });
@@ -131,14 +140,29 @@ it('invalidates the session on explicit rejection or returning to SSO and stores
   expect(observer.credentialGeneration?.()).toBeNull();
   expect(await plugin.getSessionState()).toMatchObject({ status: 'logged-out' });
   plugin.loginPage!.onLoginPageChange!(false);
-  observer.accept('new-fixture-token', EQUIPMENT_API + 'exam/queryMultipleTask/1/20');
+  observer.accept('new-fixture-token');
   status = 200;
   expect(await plugin.getSessionState()).toMatchObject({ status: 'authenticated' });
   const saved = (await recovery.snapshot())!;
-  expect(saved.probeKind).toBe('personnel');
-  recovery.restore({ ...saved, token });
+  recovery.restore({ ...saved, token, probeKind: 'personnel' });
   expect(await plugin.getSessionState()).toMatchObject({ status: 'authenticated' });
-  expect(fetcher.mock.calls.at(-1)?.[0]).toBe(EQUIPMENT_API + 'exam/queryMultipleTask/1/1');
+});
+
+it('keeps a workbench session valid when a matter denies access and separates verification failures from expiration', async () => {
+  let workbenchReply = workbench;
+  const { plugin, observer } = await connectedPlugin(async url =>
+    url === EQUIPMENT_API + 'workbench/info' ? workbenchReply() : new Response(null, { status: 403 }));
+  expect(await plugin.getSessionState()).toMatchObject({ status: 'authenticated' });
+  await expect(plugin.matters[0].query(context)).rejects.toThrow('账号权限');
+  observer.clear();
+  expect(await plugin.getSessionState()).toMatchObject({ status: 'authenticated' });
+
+  workbenchReply = () => Response.json({ status: '200', success: true, data: { rows: [] } });
+  expect(await plugin.getSessionState()).toMatchObject({ status: 'unverified' });
+  expect((await plugin.sessionRecovery!.snapshot())?.token).toBe(token);
+  workbenchReply = () => Response.json({ status: '401', success: false, data: null });
+  expect(await plugin.getSessionState()).toMatchObject({ status: 'expired' });
+  expect(await plugin.sessionRecovery!.snapshot()).toBeNull();
 });
 
 it('fails a repeated page rather than returning a partial batch', async () => {

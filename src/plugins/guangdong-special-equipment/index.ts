@@ -68,7 +68,10 @@ export function createSpecialEquipmentPlugin(options: EquipmentClientOptions = {
       observeBrowserAuth({
         partition: EQUIPMENT_PARTITION, urlPattern: EQUIPMENT_API + '*', header: 'token',
         credentialGeneration: () => client.browserAuthGeneration(),
-        accept: (token, sourceUrl) => client.acceptToken(token, sourceUrl), clear: () => client.expireToken(),
+        accept: token => client.acceptToken(token),
+        // An individual browser request can be denied while the portal session is still valid.
+        // The workbench probe and navigation to the SSO page own session invalidation.
+        clear: () => {},
       });
     },
     getSessionState: getState,

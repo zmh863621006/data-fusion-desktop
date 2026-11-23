@@ -2,8 +2,7 @@ import { session } from 'electron';
 import { AppError } from '../../core/errors/app-error';
 import { RequestGate } from '../../core/network/request-policy';
 import {
-  DEFAULT_EQUIPMENT_CITY, EQUIPMENT_API, EQUIPMENT_HOME_URL, EQUIPMENT_PARTITION, EQUIPMENT_SYSTEM_NAME,
-  equipmentDate, equipmentHomeRoute,
+  EQUIPMENT_API, EQUIPMENT_HOME_URL, EQUIPMENT_PARTITION, EQUIPMENT_SYSTEM_NAME, equipmentHomeRoute,
 } from './catalog';
 
 export type EquipmentRow = Record<string, unknown>;
@@ -15,6 +14,7 @@ export interface EquipmentClientOptions {
 }
 
 const MAX_ROWS = 50_000;
+const WORKBENCH_PATH = 'workbench/info';
 const record = (value: unknown): value is EquipmentRow => !!value && typeof value === 'object' && !Array.isArray(value);
 export const sourceText = (value: unknown) => typeof value === 'string' || (typeof value === 'number' && Number.isSafeInteger(value))
   ? String(value).trim() : '';
@@ -59,16 +59,13 @@ const validToken = (value: unknown): value is string =>
 export class SpecialEquipmentClient {
   private token = '';
   private home?: string;
-  private probeKind: EquipmentReadKind = 'registration';
   private revision = 0;
   private rejected = false;
   private loginVisible = false;
-  private readonly now: () => number;
   private readonly fetcher: NonNullable<EquipmentClientOptions['fetcher']>;
   private readonly gate: RequestGate;
 
   constructor(options: EquipmentClientOptions = {}) {
-    this.now = options.now ?? Date.now;
     this.fetcher = options.fetcher ?? ((url, init) => session.fromPartition(EQUIPMENT_PARTITION).fetch(url, init));
     this.gate = new RequestGate({ timeoutMs: 20_000, maxAttempts: 2, retryDelayMs: 600, minimumIntervalMs: options.minimumIntervalMs ?? 250 });
   }
@@ -79,17 +76,11 @@ export class SpecialEquipmentClient {
 
   browserAuthGeneration(): number | null { return this.loginVisible ? null : this.revision; }
 
-  acceptToken(value: string, requestUrl?: string): void {
-    if (this.loginVisible || !validToken(value)) return;
-    if (value !== this.token) {
-      this.token = value;
-      this.revision++;
-      this.rejected = false;
-      this.probeKind = 'registration';
-    }
-    if (this.rejected) return;
-    if (requestUrl?.startsWith(EQUIPMENT_API + 'exam/')) this.probeKind = 'personnel';
-    if (requestUrl?.startsWith(EQUIPMENT_API + 'registerPreserve/')) this.probeKind = 'registration';
+  acceptToken(value: string): void {
+    if (this.loginVisible || !validToken(value) || value === this.token) return;
+    this.token = value;
+    this.revision++;
+    this.rejected = false;
   }
 
   setLoginVisible(visible: boolean): void {
@@ -105,14 +96,13 @@ export class SpecialEquipmentClient {
   homeUrl(): string { return this.home ?? EQUIPMENT_HOME_URL; }
 
   snapshot(): EquipmentRow | null {
-    return this.token && !this.rejected ? { token: this.token, home: this.homeUrl(), probeKind: this.probeKind } : null;
+    return this.token && !this.rejected ? { token: this.token, home: this.homeUrl() } : null;
   }
 
   restore(value: EquipmentRow): void {
     if (!validToken(value.token)) return;
     this.acceptToken(value.token);
     this.home = equipmentHomeRoute(value.home);
-    this.probeKind = value.probeKind === 'personnel' ? 'personnel' : 'registration';
   }
 
   clear(): void {
@@ -120,7 +110,6 @@ export class SpecialEquipmentClient {
     this.token = '';
     this.rejected = false;
     this.home = undefined;
-    this.probeKind = 'registration';
   }
 
   assertSession(revision: number): void {
@@ -129,21 +118,16 @@ export class SpecialEquipmentClient {
 
   private rejectToken(revision: number): never {
     this.assertSession(revision);
-    this.expireToken();
+    this.revision++;
+    this.rejected = true;
     throw expired();
   }
 
-  expireToken(): void {
-    if (!this.token || this.rejected) return;
-    this.revision++;
-    this.rejected = true;
-  }
-
   async validateSession(signal?: AbortSignal): Promise<{ displayName: string }> {
-    const date = equipmentDate(this.now());
-    const kind = this.probeKind;
-    const reply = await this.request(this.revision, LIST_PATHS[kind] + '/1/1', listFilters(kind, date, DEFAULT_EQUIPMENT_CITY), signal);
-    pageData(reply);
+    const reply = await this.request(this.revision, WORKBENCH_PATH, undefined, signal);
+    if (!record(reply) || !['areaCode', 'registerPermits', 'examOperatorPermits'].every(key => Object.hasOwn(reply, key))) {
+      throw sourceFailure('特种设备工作台未返回有效会话信息');
+    }
     return { displayName: `${EQUIPMENT_SYSTEM_NAME}会话` };
   }
 
@@ -205,6 +189,11 @@ export class SpecialEquipmentClient {
   }
 
   private async request(revision: number, path: string, params?: EquipmentRow, outerSignal?: AbortSignal) {
+    const checksLogin = path === WORKBENCH_PATH;
+    const checkAuthorization = (status: string) => {
+      if (status === '401' || (status === '403' && checksLogin)) this.rejectToken(revision);
+      if (status === '403') throw sourceFailure('特种设备系统拒绝访问该接口，请核对原系统账号权限');
+    };
     return this.gate.execute(async (signal) => {
       this.assertSession(revision);
       let response: Response;
@@ -216,7 +205,7 @@ export class SpecialEquipmentClient {
         });
       } catch { throw new AppError('REMOTE_REQUEST_FAILED', '连接特种设备系统失败，请检查网络'); }
       this.assertSession(revision);
-      if ([401, 403].includes(response.status)) this.rejectToken(revision);
+      checkAuthorization(String(response.status));
       if (response.status >= 300 && response.status < 400) {
         const location = response.headers.get('location');
         if (location && new URL(location, EQUIPMENT_API).pathname.startsWith('/zwrz/login')) this.rejectToken(revision);
@@ -228,7 +217,10 @@ export class SpecialEquipmentClient {
       catch { throw sourceFailure('特种设备接口未返回有效 JSON，请在原系统核对登录状态'); }
       this.assertSession(revision);
       if (!record(reply)) throw sourceFailure('特种设备系统返回的数据格式异常');
-      if (['401', '403'].includes(sourceText(reply.code))) this.rejectToken(revision);
+      checkAuthorization(sourceText(reply.status ?? reply.code));
+      if (checksLogin && (sourceText(reply.status) !== '200' || reply.success !== true)) {
+        throw sourceFailure('特种设备工作台暂时无法验证登录');
+      }
       if (!Object.hasOwn(reply, 'data') || reply.success === false) throw sourceFailure('特种设备系统未返回有效业务数据');
       return reply.data;
     }, outerSignal);
