@@ -11,6 +11,8 @@ import { createShenzhenHazardousPlugin } from '../plugins/shenzhen-hazardous-che
 import { HAZCHEM_SYSTEM_ID, HAZCHEM_SYSTEM_NAME } from '../plugins/shenzhen-hazardous-chemicals/catalog';
 import { createSpecialEquipmentPlugin } from '../plugins/guangdong-special-equipment';
 import { EQUIPMENT_SYSTEM_ID, EQUIPMENT_SYSTEM_NAME, EQUIPMENT_VERSION } from '../plugins/guangdong-special-equipment/catalog';
+import { createFoodDrugPlugin } from '../plugins/guangdong-food-drug';
+import { FOOD_DRUG_SYSTEM_ID, FOOD_DRUG_SYSTEM_NAME, FOOD_DRUG_VERSION } from '../plugins/guangdong-food-drug/catalog';
 import { buildHrssDashboard } from '../core/hrss/dashboard';
 import { NodeSqliteDriver } from '../core/storage/database';
 import { SqliteLocalRepository } from '../core/storage/sqlite-repository';
@@ -65,6 +67,10 @@ b1oByVzE+8Uj5k4ApNg1P0JX3kxWn0qhcUFtRxsMO/nPAgMBAAE=
 -----END PUBLIC KEY-----`;
 
 const builtinModules = [
+  {
+    id: FOOD_DRUG_SYSTEM_ID, name: FOOD_DRUG_SYSTEM_NAME, version: FOOD_DRUG_VERSION, publisher: '数据融合助手',
+    description: '食品生产和第三类医疗器械经营许可回流及双公示导出',
+  },
   {
     id: EQUIPMENT_SYSTEM_ID, name: EQUIPMENT_SYSTEM_NAME, version: EQUIPMENT_VERSION, publisher: '数据融合助手',
     description: '特种设备使用登记、作业人员考核及双公示导出',
@@ -208,6 +214,7 @@ export class AppRuntime {
     this.plugins.register(createGuangdongHrssPlugin());
     this.plugins.register(createShenzhenHazardousPlugin());
     this.plugins.register(createSpecialEquipmentPlugin());
+    this.plugins.register(createFoodDrugPlugin());
     const plugins = this.plugins.list();
     const sources = plugins.flatMap(({ id, loginPage }) => [
       ...(loginPage ? [{ partition: loginPage.partition, origins: sourceOrigins(loginPage) }] : []),
@@ -221,7 +228,11 @@ export class AppRuntime {
     loginTabController.configurePersistence({
       load: (id) => this.sessionRecovery!.storage(id),
       save: (id, value) => this.sessionRecovery!.saveStorage(id, value),
-      forget: (id) => this.sessionRecovery!.forget(id, { awaitApiLogin: true }),
+      forget: (id) => {
+        const plugin = this.plugins.get(id);
+        const awaitApiLogin = Boolean(plugin?.sessionRecovery?.apiCredentials || plugin?.loginPage?.browserAuth);
+        return this.sessionRecovery!.forget(id, { awaitApiLogin });
+      },
     });
     this.licenseMonitor = new OnlineLicenseMonitor(() => this.license!.refreshOnline());
     this.licenseMonitor.start();

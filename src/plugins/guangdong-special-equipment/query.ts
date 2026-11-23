@@ -1,4 +1,5 @@
 import { AppError } from '../../core/errors/app-error';
+import { huizhouMarketAuthority } from '../../core/double-publicity/huizhou-market-authority';
 import { normalizeCreditCode } from '../../core/enterprise/credit-code';
 import type { QueryContext, QueryPage } from '../../core/query/types';
 import { EQUIPMENT_CITIES } from './catalog';
@@ -14,21 +15,9 @@ const APPLY_TYPES: Record<string, string> = {
   '7': '补证', '9': '注销', '10': '过户并移装', '11': '换证', '12': '产权单位更名变更', '13': '设备使用地点变更',
 };
 
-const HUIZHOU_AUTHORITIES = [
-  ['惠城区', '惠州市惠城区市场监督管理局', '11441302351971239H'],
-  ['惠阳区', '惠州市惠阳区市场监督管理局', '11441303MB2C47313U'],
-  ['博罗县', '博罗县市场监督管理局', '114413223547593214'],
-  ['龙门县', '龙门县市场监督管理局', '11441324MB2C20196D'],
-  ['惠东县', '惠东县市场监督管理局', '11441323MB2C08058M'],
-  ['大亚湾', '惠州大亚湾经济技术开发区管理委员会市场监督管理局', '11441300MB2E2413XP'],
-  ['仲恺', '惠州仲恺高新技术产业开发区管理委员会市场监督管理局', '11441300MB2E23946P'],
-  ['惠州市市场监督管理局', '惠州市市场监督管理局', '11441300MB2C90987A'],
-];
-
 function authority(value: unknown, city: string): EquipmentRow {
   const original = sourceText(value);
-  const mapped = city === '441300' ? HUIZHOU_AUTHORITIES.find(([district]) => original.includes(district)) : undefined;
-  const [, name = original, code = ''] = mapped ?? [];
+  const { name, code } = (city === '441300' ? huizhouMarketAuthority(original) : undefined) ?? { name: original, code: '' };
   return { xkXkjg: name, xkXkjgdm: code, xkLydw: name, xkLydwdm: code };
 }
 

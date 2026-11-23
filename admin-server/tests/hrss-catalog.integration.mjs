@@ -7,6 +7,7 @@ import { dirname, join, resolve } from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
 import { createAdminServer } from '../app.mjs';
 import catalog from '../../src/plugins/guangdong-hrss/matter-catalog.json' with { type: 'json' };
+import foodDrugCatalog from '../../src/plugins/guangdong-food-drug/matter-catalog.json' with { type: 'json' };
 import { password, captchaFactory, loginCaptcha } from './helpers.mjs';
 
 const SYSTEM = 'guangdong-hrss';
@@ -48,7 +49,8 @@ test('HRSS catalog exposes 18 grouped list ledgers alongside the other registere
   assert.equal((await f.api('/api/admin/bootstrap', undefined, false)).status, 401);
   const bootstrap = (await f.api('/api/admin/bootstrap')).body;
   assert.deepEqual(bootstrap.systems.map(system => system.id).sort(), [
-    'government-info', SYSTEM, 'market-access', 'online-car-permit', 'oversize-transport', 'transport-practitioner', 'shenzhen-hazardous-chemicals', 'guangdong-special-equipment',
+    'government-info', SYSTEM, 'market-access', 'online-car-permit', 'oversize-transport', 'transport-practitioner',
+    'shenzhen-hazardous-chemicals', 'guangdong-special-equipment', foodDrugCatalog.id,
   ].sort());
   assert.equal(bootstrap.systems.find(system => system.id === SYSTEM).name, '广东省集中式人力资源和社会保障一体化门户系统');
   const matters = bootstrap.matters.filter(matter => matter.system_id === SYSTEM && matter.enabled);
@@ -83,7 +85,7 @@ test('HRSS grants carry only selected list ledgers and never permit enterprise e
   assert.deepEqual(grant(JSON.parse(Buffer.from(offline.body.offlineKey.slice(5), 'base64url'))).allowedMatters, { [SYSTEM]: selected });
 });
 
-test('adding or restarting HRSS catalog preserves licenses and explicit component disabling', async () => {
+test('restarting the HRSS and food/drug catalogs preserves licenses and explicit component disabling', async () => {
   const directory = await mkdtemp(join(tmpdir(), 'fusion-hrss-catalog-'));
   const dataPath = join(directory, 'fixture.sqlite');
   const boot = async () => {
@@ -99,15 +101,20 @@ test('adding or restarting HRSS catalog preserves licenses and explicit componen
     db.prepare(`INSERT INTO licenses(id,customer_id,mode,expires_at,allowed_systems_json,allowed_matters_json,created_at)
       VALUES('existing','original','online',?,'["market-access"]','{"market-access":["business-application-query"]}',1)`).run(Date.now() + 86_400_000);
     const previous = { ...db.prepare("SELECT * FROM licenses WHERE id='existing'").get() };
-    db.prepare('UPDATE systems SET enabled=0 WHERE id=?').run(SYSTEM);
-    db.prepare('UPDATE system_matters SET enabled=0 WHERE system_id=? AND id=?').run(SYSTEM, catalog[0].id);
+    const disabledCatalogs = [{ id: SYSTEM, matters: catalog }, foodDrugCatalog];
+    for (const { id, matters } of disabledCatalogs) {
+      db.prepare('UPDATE systems SET enabled=0 WHERE id=?').run(id);
+      db.prepare('UPDATE system_matters SET enabled=0 WHERE system_id=? AND id=?').run(id, matters[0].id);
+    }
     db.close(); db = undefined;
     await boot(); await boot();
     db = new DatabaseSync(dataPath, { readOnly: true });
     assert.deepEqual({ ...db.prepare("SELECT * FROM licenses WHERE id='existing'").get() }, previous);
-    assert.equal(db.prepare('SELECT enabled FROM systems WHERE id=?').get(SYSTEM).enabled, 0);
-    assert.equal(db.prepare('SELECT enabled FROM system_matters WHERE system_id=? AND id=?').get(SYSTEM, catalog[0].id).enabled, 0);
-    assert.equal(db.prepare('SELECT count(*) count FROM system_matters WHERE system_id=?').get(SYSTEM).count, 18);
+    for (const { id, matters } of disabledCatalogs) {
+      assert.equal(db.prepare('SELECT enabled FROM systems WHERE id=?').get(id).enabled, 0);
+      assert.equal(db.prepare('SELECT enabled FROM system_matters WHERE system_id=? AND id=?').get(id, matters[0].id).enabled, 0);
+      assert.equal(db.prepare('SELECT count(*) count FROM system_matters WHERE system_id=?').get(id).count, matters.length);
+    }
     db.close(); db = undefined;
   } finally {
     db?.close();

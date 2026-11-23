@@ -1,6 +1,7 @@
 import { publicationPlatform } from '../../core/publication/platforms';
 import { HAZCHEM_SYSTEM_ID, HAZCHEM_SYSTEM_NAME } from '../../plugins/shenzhen-hazardous-chemicals/catalog';
 import { EQUIPMENT_SYSTEM_ID } from '../../plugins/guangdong-special-equipment/catalog';
+import { FOOD_DRUG_SYSTEM_ID } from '../../plugins/guangdong-food-drug/catalog';
 
 export const taskStatusLabel = (status: string): string => ({ queued: '排队中', running: '进行中', completed: '已完成', failed: '失败', cancelled: '已取消' })[status] ?? status;
 
@@ -10,6 +11,7 @@ const systemNames: Record<string, string> = {
   'guangdong-hrss': '广东人社一体化',
   [HAZCHEM_SYSTEM_ID]: HAZCHEM_SYSTEM_NAME,
   [EQUIPMENT_SYSTEM_ID]: '特种设备监管',
+  [FOOD_DRUG_SYSTEM_ID]: '智慧食药监',
 };
 const descriptions: Record<string, string> = {
   'market-access': '市场主体设立、变更等业务记录', 'government-info': '跨部门事项回流与证照字段核对',
@@ -17,6 +19,7 @@ const descriptions: Record<string, string> = {
   'guangdong-hrss': '就业服务与补贴列表回流、本地台账及数据看板',
   'shenzhen-hazardous-chemicals': '按已办流程关联制证数据，核对并导出双公示',
   [EQUIPMENT_SYSTEM_ID]: '使用登记和作业人员考核回流、核对与双公示导出',
+  [FOOD_DRUG_SYSTEM_ID]: '按办结日期回流食品生产和第三类医疗器械经营许可',
 };
 export const shortSystemName = (id: string, fallback = id): string => systemNames[id] ?? publicationPlatform(id)?.tabName ?? fallback;
 export const systemDescription = (id: string, fallback?: string): string => descriptions[id] ?? fallback ?? '进入工作区，查询并核对业务数据';

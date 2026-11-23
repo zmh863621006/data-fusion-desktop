@@ -19,6 +19,7 @@ import governmentMatters from '../src/plugins/government-info/matter-catalog.jso
 import hrssMatters from '../src/plugins/guangdong-hrss/matter-catalog.json' with { type: 'json' };
 import hazardousMatters from '../src/plugins/shenzhen-hazardous-chemicals/matter-catalog.json' with { type: 'json' };
 import equipmentCatalog from '../src/plugins/guangdong-special-equipment/matter-catalog.json' with { type: 'json' };
+import foodDrugCatalog from '../src/plugins/guangdong-food-drug/matter-catalog.json' with { type: 'json' };
 import toolCatalog from '../src/core/tools/catalog.json' with { type: 'json' };
 
 export function createAdminServer(options = {}) {
@@ -101,7 +102,6 @@ seedSystem.run('transport-practitioner', '广东省道路运输从业人员管�
 seedSystem.run('oversize-transport', '广东省交通运输厅大件运输许可系统', '0.1.0', now);
 seedSystem.run('online-car-permit', '网络预约出租汽车运输证系统', '0.1.0', now);
 seedSystem.run('guangdong-hrss', '广东省集中式人力资源和社会保障一体化门户系统', '0.1.0', now);
-seedSystem.run(equipmentCatalog.id, equipmentCatalog.name, equipmentCatalog.version, now);
 database.prepare(`INSERT INTO systems(id,name,version,created_at) VALUES(?,?,?,?)
   ON CONFLICT(id) DO UPDATE SET name=excluded.name WHERE systems.name=?`)
   .run('shenzhen-hazardous-chemicals', '危化品管理', '0.1.0', now, '深圳市危险化学品安全生产风险监测预警系统');
@@ -126,8 +126,13 @@ seedMatter.run('road-practitioner-return', 'transport-practitioner', '道路运�
 seedMatter.run('taxi-driver-return', 'transport-practitioner', '出租车驾驶员', now);
 seedMatter.run('oversize-transport-return', 'oversize-transport', '大件运输许可', now);
 seedMatter.run('online-car-permit-return', 'online-car-permit', '网约车车证', now);
-const seedEquipmentMatter = database.prepare('INSERT OR IGNORE INTO system_matters(id,system_id,name,matter_order,created_at) VALUES(?,?,?,?,?)');
-for (const [order, matter] of equipmentCatalog.matters.entries()) seedEquipmentMatter.run(matter.id, equipmentCatalog.id, matter.name, order, now);
+transaction(() => {
+  const seedOrderedMatter = database.prepare('INSERT OR IGNORE INTO system_matters(id,system_id,name,matter_order,created_at) VALUES(?,?,?,?,?)');
+  for (const catalog of [equipmentCatalog, foodDrugCatalog]) {
+    seedSystem.run(catalog.id, catalog.name, catalog.version, now);
+    for (const [order, matter] of catalog.matters.entries()) seedOrderedMatter.run(matter.id, catalog.id, matter.name, order, now);
+  }
+});
 // Human-resources lists are an independent component. Adding its catalog never
 // expands an existing customer's signed scope or enables enterprise enrichment.
 transaction(() => {

@@ -1,0 +1,9 @@
+{
+  "id": "guangdong-food-drug",
+  "name": "广东省食品药品监管管理系统",
+  "version": "0.1.0",
+  "matters": [
+    { "id": "food-production-license", "name": "食品生产许可证" },
+    { "id": "class-iii-medical-device-operation-license", "name": "医疗器械经营许可证（第三类）" }
+  ]
+}

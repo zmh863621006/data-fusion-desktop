@@ -9,6 +9,8 @@ import type { UpdatePresentationState } from '../src/renderer/src/UpdateStatus';
 import { PUBLICATION_PLATFORMS, publicationPlatform } from '../src/core/publication/platforms';
 import { createSpecialEquipmentPlugin } from '../src/plugins/guangdong-special-equipment';
 import { EQUIPMENT_SYSTEM_ID, PERSONNEL_ASSESSMENT, USE_REGISTRATION } from '../src/plugins/guangdong-special-equipment/catalog';
+import { createFoodDrugPlugin } from '../src/plugins/guangdong-food-drug';
+import { FOOD_PRODUCTION, MEDICAL_DEVICE_OPERATION } from '../src/plugins/guangdong-food-drug/catalog';
 
 // UI-only regression: a fresh profile, an in-memory fixture, no app runtime or
 // SQLite imports, no real credentials, and all network traffic blocked.
@@ -19,7 +21,7 @@ let window: BrowserWindow | undefined;
 let profile = '';
 let outputDirectory = '';
 let failureReason = '';
-type Scenario = 'inactive' | 'active' | 'no-tool' | 'tools-only' | 'single-system' | 'active-empty' | 'equipment-only';
+type Scenario = 'inactive' | 'active' | 'no-tool' | 'tools-only' | 'single-system' | 'active-empty' | 'equipment-only' | 'food-drug-only';
 let scenario: Scenario = 'inactive';
 let scopeAfterManualRefresh: Scenario | undefined;
 let scenarioEpoch = 0;
@@ -59,10 +61,13 @@ function publishUpdate(state: UpdatePresentationState) {
 }
 
 const equipment = createSpecialEquipmentPlugin({ now: () => now });
-const equipmentComponent = { id: equipment.id, name: equipment.name, version: equipment.version,
-  description: equipment.description, workspaceMode: equipment.workspaceMode, kind: 'system', authorized: true };
+const foodDrug = createFoodDrugPlugin({ now: () => now });
+const licenseSystems = [equipment, foodDrug];
+const licenseComponents = licenseSystems.map(({ id, name, version, description, workspaceMode }) =>
+  ({ id, name, version, description, workspaceMode, kind: 'system', authorized: true }));
 function allowedSystems() {
   if (scenario === 'equipment-only') return [equipment.id];
+  if (scenario === 'food-drug-only') return [foodDrug.id];
   return scenario === 'tools-only' || scenario === 'active-empty' || scenario === 'inactive' ? [] : scenario === 'single-system' ? [ids[1]] : ids;
 }
 function allowedTools() { return scenario === 'active' || scenario === 'tools-only' ? ['health-publicity'] : []; }
@@ -74,7 +79,8 @@ function grant() {
 }
 function license() { return { state: scenario === 'inactive' ? 'inactive' : 'active', deviceId: 'ui-fixture-device-000000000000', grant: scenario === 'inactive' ? undefined : grant() }; }
 function matters(systemId: string) {
-  if (systemId === equipment.id) return equipment.matters.map(({ query, createDefaultContext, ...matter }) => ({
+  const plugin = licenseSystems.find(system => system.id === systemId);
+  if (plugin) return plugin.matters.map(({ query, createDefaultContext, ...matter }) => ({
     ...matter, defaultFilters: createDefaultContext?.().filters,
   }));
   return (systemId === ids[0] ? ['水务局', '城管局', '其他'] : ['业务事项']).map((departmentName, index) => ({
@@ -126,12 +132,12 @@ async function invoke(method: string, ...args: any[]) {
     case 'components.list':
       if (componentGate) await componentGate;
       return [...ids.map((id,index)=>({id,kind:'system',name:names[index],version:'0.1.0',description:'独立业务组件，测试示例。',authorized:true,workspaceMode:id===ids[1]?'standard':'return-ledger',supportsCredentialConfiguration:true})),
-        equipmentComponent,
+        ...licenseComponents,
         {id:'health-publicity',kind:'tool',name:'卫健局双公示工具',version:'1.2.3',description:'读取医疗机构登记批复 Word 文档，核对字段并生成行政许可双公示表格',authorized:true}];
     case 'systems.list':
       if (sessionGate) await sessionGate;
       return [...ids.map(id => ({ id, name: names[ids.indexOf(id)], version: '0.1.0', workspaceMode: id === ids[1] ? 'query' : 'return-ledger', supportsCredentialConfiguration: true, session: { systemId: id, status: 'authenticated', displayName: '演示用户' } })),
-        { ...equipmentComponent, session: { systemId: equipment.id, status: 'authenticated' } }];
+        ...licenseComponents.map(component => ({ ...component, session: { systemId: component.id, status: 'authenticated' } }))];
     case 'systems.session': return { systemId: args[0], status: 'authenticated', displayName: '演示用户' };
     case 'systems.tabs': return sourceTabs;
     case 'publications.open': {
@@ -934,6 +940,26 @@ async function verifyEquipmentWorkspace() {
   }
 }
 
+async function verifyFoodDrugWorkspace() {
+  await reload('food-drug-only');
+  await until('document.querySelectorAll(".system-nav-toggle").length === 1');
+  assert.equal(await dom('document.querySelector(".system-nav-toggle").title'), foodDrug.name);
+  await click('.system-nav-toggle');
+  await until('document.querySelector(".return-matter-field select")?.options.length === 2');
+  assert.deepEqual(await dom('[...document.querySelector(".return-matter-field select").options].map(option => option.value)'),
+    [FOOD_PRODUCTION.id, MEDICAL_DEVICE_OPERATION.id]);
+  assert.equal(await dom('document.querySelector(".return-date-fields").innerText.includes("办结开始日期")'), true);
+  await click('.one-click-panel .run-return-button');
+  await until('Boolean(document.querySelector(".matter-workspace-tabs button.active")?.textContent.includes("回流任务"))');
+  assert.deepEqual(invocations.filter(call => call.method === 'matters.run').at(-1)?.args, [
+    foodDrug.id, FOOD_PRODUCTION.id, foodDrug.matters[0].createDefaultContext!(),
+  ]);
+  await button('回流数据', '.matter-workspace-tabs');
+  await until('document.querySelectorAll(".publication-actions button:not(:disabled)").length === 2');
+  assert.deepEqual(await dom('[...document.querySelectorAll(".publication-actions button")].map(item => item.textContent.trim())'),
+    ['导出省执法双公示', '导出南山双公示']);
+}
+
 async function run() {
   profile = process.env.DATA_FUSION_UI_TEST_PROFILE || await mkdtemp(join(tmpdir(), 'fusion-ui-redesign-')); app.setPath('userData', profile);
   await app.whenReady();
@@ -947,6 +973,7 @@ async function run() {
   await verifyLedgerPreferences();
   await verifyAuthorizationInfo();
   await verifyEquipmentWorkspace();
+  await verifyFoodDrugWorkspace();
   await runViewport(1440, 900); await runViewport(1180, 720);
   assertAuthorizedReads(0, 'Complete authorization regression');
   assert.equal(errors.length, 0, `Renderer errors: ${errors.join('\n')}`); assert.equal(blockedRequests.length, 0, `UI tried to access external resources: ${blockedRequests.join(', ')}`);
