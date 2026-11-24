@@ -7,6 +7,7 @@ import { prepareLicenseScope, storedLicenseScope } from './license-scope.mjs';
 import { createEnterpriseStore, aliyunProvider } from './enterprises.mjs';
 import { createUpdateReleases } from './update-releases.mjs';
 import { createBusinessReleases } from './business-releases.mjs';
+import { createOneWindowUploads } from './one-window-uploads.mjs';
 import { releaseTarget, RELEASE_VERSION_PATTERN } from './update-filenames.mjs';
 import { establishmentImporterFromEnv } from './establishment-oss-import.mjs';
 import { createReadStream, existsSync, mkdirSync, readFileSync, statSync } from 'node:fs';
@@ -22,6 +23,7 @@ import equipmentCatalog from '../src/plugins/guangdong-special-equipment/matter-
 import foodDrugCatalog from '../src/plugins/guangdong-food-drug/matter-catalog.json' with { type: 'json' };
 import populationCatalog from '../src/plugins/guangdong-population/matter-catalog.json' with { type: 'json' };
 import shenzhenServicesCatalog from '../src/plugins/shenzhen-integrated-services/matter-catalog.json' with { type: 'json' };
+import oneWindowCatalog from '../src/plugins/shenzhen-one-window/matter-catalog.json' with { type: 'json' };
 import toolCatalog from '../src/core/tools/catalog.json' with { type: 'json' };
 
 export function createAdminServer(options = {}) {
@@ -130,7 +132,7 @@ seedMatter.run('oversize-transport-return', 'oversize-transport', '大件运输�
 seedMatter.run('online-car-permit-return', 'online-car-permit', '网约车车证', now);
 transaction(() => {
   const seedOrderedMatter = database.prepare('INSERT OR IGNORE INTO system_matters(id,system_id,name,matter_order,created_at) VALUES(?,?,?,?,?)');
-  for (const catalog of [equipmentCatalog, foodDrugCatalog, populationCatalog, shenzhenServicesCatalog]) {
+  for (const catalog of [equipmentCatalog, foodDrugCatalog, populationCatalog, shenzhenServicesCatalog, oneWindowCatalog]) {
     seedSystem.run(catalog.id, catalog.name, catalog.version, now);
     for (const [order, matter] of catalog.matters.entries()) seedOrderedMatter.run(matter.id, catalog.id, matter.name, order, now);
   }
@@ -301,11 +303,44 @@ const businessReleases = createBusinessReleases(database, {
   ...(options.businessOssStorage ? { ossStorage: options.businessOssStorage } : {}),
   ...(options.uploadTimeoutMs ? { uploadTimeoutMs: options.uploadTimeoutMs } : {}),
 });
+const oneWindowUploads = createOneWindowUploads({ database,
+  configDirectory: dataPath === ':memory:' ? undefined : dirname(dataPath),
+  storage: options.oneWindowOssStorage,
+  authorize(body, { systemId, matterId }) {
+    const reject = () => { throw Object.assign(new Error('一窗回流上传需要有效的设备及事项授权'), { status: 403 }); };
+    let grant;
+    try {
+      const proof = body.proof;
+      if (proof?.algorithm !== 'RSA-SHA256' || typeof proof.payload !== 'string' || proof.payload.length > 32768
+        || typeof proof.signature !== 'string' || proof.signature.length > 2048
+        || !verify('RSA-SHA256', Buffer.from(proof.payload, 'base64url'), createPublicKey(privateKey), Buffer.from(proof.signature, 'base64url'))) reject();
+      grant = JSON.parse(Buffer.from(proof.payload, 'base64url').toString('utf8'));
+      if (!Number.isFinite(grant.expiresAt) || grant.expiresAt <= Date.now() || grant.deviceId !== body.deviceId
+        || !/^[a-f0-9]{64}$/.test(body.deviceId) || (grant.notBefore && grant.notBefore > Date.now())
+        || !grant.allowedSystems?.includes(systemId)
+        || (grant.allowedMatters?.[systemId] && !grant.allowedMatters[systemId].includes(matterId))) reject();
+    } catch { reject(); }
+    const license = database.prepare(`SELECT l.* FROM licenses l JOIN customers c ON c.id=l.customer_id
+      JOIN devices d ON d.license_id=l.id WHERE l.id=? AND d.device_id=? AND d.status='active'
+      AND c.enabled=1 AND l.status='active' AND l.expires_at>?`).get(String(grant.licenseId), String(body.deviceId), Date.now());
+    const scope = license && storedLicenseScope(license);
+    if (!license?.allow_export || !scope?.allowedSystems.includes(systemId)
+      || (scope.allowedMatters?.[systemId] && !scope.allowedMatters[systemId].includes(matterId))
+      || !database.prepare(`SELECT 1 FROM systems s JOIN system_matters m ON s.id=m.system_id
+        WHERE s.id=? AND m.id=? AND s.enabled=1 AND m.enabled=1`).get(systemId, matterId)) reject();
+    return { customerId: license.customer_id, licenseId: license.id, deviceId: body.deviceId };
+  },
+});
 async function api(request, response, url) {
   if (request.method === 'GET' && url.pathname === '/api/health') return json(response,200,{status:'ok'});
   if (url.pathname.startsWith('/api/releases/') && await updateReleases.serve(request, response, url)) return;
   if (url.pathname.startsWith('/api/business-releases/') && await businessReleases.serve(request, response, url)) return;
   if (request.method === 'GET' && url.pathname === '/api/admin/captcha') return json(response, 200, security.captcha(request, response));
+  if (request.method === 'POST' && url.pathname.startsWith('/api/one-window/uploads/')) {
+    const body = await readJson(request);
+    security.limit(`one-window-upload:${security.ip(request)}`, 120, 60_000);
+    return json(response, 200, await oneWindowUploads.handle(url.pathname, body));
+  }
   if (url.pathname === '/api/admin/enterprises' || url.pathname.startsWith('/api/admin/enterprises/')) {
     const user = requireAdmin(request, response); if (!user) return;
     return enterprises.route(request, response, url, { user, readJson, json });

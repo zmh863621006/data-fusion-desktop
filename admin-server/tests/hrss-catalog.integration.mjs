@@ -54,7 +54,7 @@ test('catalog exposes the four HRSS subdistrict matters and the two new systems 
   const bootstrap = (await f.api('/api/admin/bootstrap')).body;
   assert.deepEqual(bootstrap.systems.map(system => system.id).sort(), [
     'government-info', SYSTEM, 'market-access', 'online-car-permit', 'oversize-transport', 'transport-practitioner',
-    'shenzhen-hazardous-chemicals', 'guangdong-special-equipment', foodDrugCatalog.id, ...addedSystems.map(system => system.id),
+    'shenzhen-hazardous-chemicals', 'guangdong-special-equipment', 'shenzhen-one-window', foodDrugCatalog.id, ...addedSystems.map(system => system.id),
   ].sort());
   assert.equal(bootstrap.systems.find(system => system.id === SYSTEM).name, '广东省集中式人力资源和社会保障一体化门户系统');
   const matters = bootstrap.matters.filter(matter => matter.system_id === SYSTEM && matter.enabled);

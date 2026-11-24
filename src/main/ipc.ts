@@ -41,6 +41,7 @@ export function registerIpcHandlers(getTrustedWebContentsId: () => number | unde
     return choice.response === 1;
   };
   const businessChannels = new Set<string>([
+    IPC_CHANNELS.oneWindowRun, IPC_CHANNELS.oneWindowRetry, IPC_CHANNELS.oneWindowSavePlan,
     IPC_CHANNELS.licenseActivate, IPC_CHANNELS.licenseImport, IPC_CHANNELS.licenseDeactivate, IPC_CHANNELS.licenseRefresh,
     IPC_CHANNELS.healthToolImport, IPC_CHANNELS.healthToolUpdate, IPC_CHANNELS.healthToolSettings, IPC_CHANNELS.healthToolRemove, IPC_CHANNELS.healthToolExport,
     IPC_CHANNELS.practitionerNumbersSave, IPC_CHANNELS.taskOutput, IPC_CHANNELS.taskOutputExport, IPC_CHANNELS.recordsList,
@@ -61,6 +62,39 @@ export function registerIpcHandlers(getTrustedWebContentsId: () => number | unde
       throw new Error('拒绝来自非受信页面的调用');
     }
   };
+
+  handle(IPC_CHANNELS.oneWindowState, async (event, matterId, page) => {
+    trusted(event);
+    return (await appRuntime.oneWindow()).state(parseIdentifier(matterId, '事项标识'), page);
+  });
+  handle(IPC_CHANNELS.oneWindowSavePlan, async (event, matterId, plan) => {
+    trusted(event);
+    return (await appRuntime.oneWindow()).savePlan(parseIdentifier(matterId, '事项标识'), plan);
+  });
+  handle(IPC_CHANNELS.oneWindowRun, async (event, matterId, filters) => {
+    trusted(event);
+    return (await appRuntime.oneWindow()).run(parseIdentifier(matterId, '事项标识'), filters);
+  });
+  handle(IPC_CHANNELS.oneWindowRecords, async (event, matterId, input) => {
+    trusted(event);
+    if (!input || typeof input !== 'object' || Array.isArray(input)) throw new Error('台账查询格式无效');
+    const { batchId, ...scope } = input;
+    const query = parseLocalRecordQuery(scope);
+    if (query.systemId || query.matterId) throw new Error('台账查询包含未知字段');
+    return (await appRuntime.oneWindow()).records(parseIdentifier(matterId, '事项标识'), {
+      ...query, batchId: batchId ? parseIdentifier(batchId, '批次标识') : undefined,
+    });
+  });
+  handle(IPC_CHANNELS.oneWindowRetry, async (event, taskId) => {
+    trusted(event);
+    return (await appRuntime.oneWindow()).retry(parseIdentifier(taskId, '批次标识'));
+  });
+  handle(IPC_CHANNELS.oneWindowFolder, async (event, taskId) => {
+    trusted(event);
+    const path = await (await appRuntime.oneWindow()).folder(parseIdentifier(taskId, '批次标识'));
+    const error = await shell.openPath(path);
+    if (error) throw new Error('无法打开批次文件夹');
+  });
 
   handle(IPC_CHANNELS.hrssDashboardGet, async event => {
     if (event.sender.id === options.hrssDashboard?.contentsId() && event.senderFrame === event.sender.mainFrame) {
@@ -483,6 +517,11 @@ export function registerIpcHandlers(getTrustedWebContentsId: () => number | unde
     assertMatterQueryAvailable(matter);
     const queryContext = parseQueryContext(contextInput);
     validateFilters(matter.querySchema, queryContext.filters);
+    if (systemId === 'shenzhen-one-window') {
+      const task = await (await appRuntime.oneWindow()).run(matterId, queryContext.filters);
+      if (task.status !== 'completed') throw new Error(task.error ?? '一窗详情回流未完成');
+      return { taskId: task.id, ...(task.result as Record<string, unknown>) };
+    }
     const dateDetails = systemId === 'guangdong-hrss' ? hrssReturnDateDetails(matterId, queryContext.filters) : {
       startDate: queryContext.filters.startDate, endDate: queryContext.filters.endDate,
       ...(systemId === 'government-info' ? { dateBasis: 'bj_bjsj' } : {}),
@@ -509,6 +548,7 @@ export function registerIpcHandlers(getTrustedWebContentsId: () => number | unde
       const context = parseQueryContext(contextInput);
       const plugin = requireSystem(systemId);
       await appRuntime.requireLicense(systemId, matterId);
+      if (systemId === 'shenzhen-one-window') throw new Error('请使用一窗业务详情回流，以保存完整批次并推送至后台');
       if (systemId === 'guangdong-hrss') throw new Error('请使用人社列表回流任务，以保证批次完整保存');
       const matter = plugin.matters.find((item) => item.id === matterId);
       if (!matter) throw new Error(`Unknown matter: ${matterId}`);

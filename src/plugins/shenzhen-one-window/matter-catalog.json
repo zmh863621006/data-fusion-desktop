@@ -1,0 +1,9 @@
+{
+  "id": "shenzhen-one-window",
+  "name": "深圳市一窗综合服务受理平台",
+  "version": "0.1.0",
+  "matters": [
+    { "id": "outdoor-advertising-approval", "name": "设置大型户外广告审批" },
+    { "id": "storefront-signboard-filing", "name": "一楼门楣招牌设置备案" }
+  ]
+}

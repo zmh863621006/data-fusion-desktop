@@ -30,6 +30,7 @@ import { hrssTaskDateLabel } from '../../core/hrss/date-filters';
 import { GOVERNMENT_EXPORT_LABELS, permitExportTargets, supportsCollectionExport, supportsGovernmentExport, type GovernmentExportTarget } from '../../core/export/government-target';
 import { EQUIPMENT_SYSTEM_ID, USE_REGISTRATION } from '../../plugins/guangdong-special-equipment/catalog';
 import type { QueryPage } from '../../core/query/types';
+import { OneWindowPage } from './OneWindowPage';
 
 type SessionState = {
   status: 'logged-out' | 'logging-in' | 'authenticated' | 'unverified' | 'expiring' | 'expired';
@@ -44,7 +45,7 @@ type SystemSummary = {
   name: string;
   version: string;
   description?: string;
-  workspaceMode?: 'standard' | 'return-ledger' | 'list-ledger';
+  workspaceMode?: 'standard' | 'return-ledger' | 'list-ledger' | 'detail-ledger';
   supportsCredentialConfiguration?: boolean;
   session: SessionState;
 };
@@ -245,7 +246,7 @@ function WorkspaceSidebar({ systems, matters, license, selectedSystemId, selecte
       {access.canOpenPage('systems') && <button className={`nav-item ${activePage === 'systems' ? 'active' : ''}`} aria-current={activePage === 'systems' ? 'page' : undefined} onClick={() => onNavigate('systems')}><AppIcon name="components" /><span>组件管理</span></button>}
       <button className={`nav-item ${activePage === 'settings' ? 'active' : ''}`} aria-current={activePage === 'settings' ? 'page' : undefined} onClick={() => onNavigate('settings')}><AppIcon name="settings" /><span>设置</span></button>
     </nav>
-    <div className="local-note"><AppIcon name="shield" size={15} />业务数据仅保存在本机</div>
+    <div className="local-note"><AppIcon name="shield" size={15} />{systems.some(system => system.workspaceMode === 'detail-ledger') ? '支持本地留存与后台推送' : '业务数据仅保存在本机'}</div>
   </aside>;
 }
 
@@ -652,14 +653,14 @@ function Workspace({ license, onLicenseChanged }: { license: LicenseStatus; onLi
         {showPractitionerNumbers && numberMatters.length > 0 && <PractitionerNumberPanel key={numberMatters.join('/')} allowedMatters={numberMatters} onClose={() => setShowPractitionerNumbers(false)} />}
         {showSystemCredentials && selectedSystem?.supportsCredentialConfiguration && <SystemCredentialPanel systemId={selectedSystemId} systemName={selectedSystem?.name ?? '当前业务系统'} onClose={() => setShowSystemCredentials(false)} onLogin={() => { setShowSystemCredentials(false); void login(); }} />}
 
-        {['return-ledger', 'list-ledger'].includes(selectedSystem?.workspaceMode ?? '') && <nav className={`matter-workspace-tabs ${permitExportTargets(selectedSystemId).length ? 'government-workspace-tabs' : ''}`} aria-label="事项工作区">
+        {['return-ledger', 'list-ledger', 'detail-ledger'].includes(selectedSystem?.workspaceMode ?? '') && <nav className={`matter-workspace-tabs ${permitExportTargets(selectedSystemId).length ? 'government-workspace-tabs' : ''}`} aria-label="事项工作区">
           <button aria-pressed={matterSection === 'return'} className={matterSection === 'return' ? 'active' : ''} onClick={() => setMatterSection('return')}>数据回流</button>
           <button aria-pressed={matterSection === 'tasks'} className={matterSection === 'tasks' ? 'active' : ''} onClick={() => setMatterSection('tasks')}>回流任务</button>
           <button aria-pressed={matterSection === 'data'} className={matterSection === 'data' ? 'active' : ''} onClick={() => setMatterSection('data')}>回流数据</button>
         </nav>}
         {selectedMatter?.executionMode === 'one-click-return' && message && <div className="message page-message">{message}</div>}
 
-        {!selectedMatter ? <div className="panel empty" role="status">{message || (matterSystemId === selectedSystemId ? '当前系统暂无可用业务事项。' : '正在加载业务事项…')}</div> : ['return-ledger', 'list-ledger'].includes(selectedSystem?.workspaceMode ?? '') && matterSection === 'tasks' ? <TaskCenterPage pageSize={defaultPageSize} key={`${selectedSystemId}/${selectedMatterId}`} systemId={selectedSystemId} matterId={selectedMatterId} matterName={selectedMatter?.name} onViewBatch={(batchId) => { setSelectedDataBatchId(batchId); setMatterSection('data'); }} /> : selectedSystem?.workspaceMode === 'list-ledger' && matterSection === 'data' ? <HrssLedgerPage systemId={selectedSystemId} defaultPageSize={defaultPageSize} key={`${selectedSystemId}/${selectedMatterId}`} matterId={selectedMatterId} matterName={selectedMatter.name} columns={selectedMatter.listColumns ?? []} batchId={selectedDataBatchId} onBatchChange={setSelectedDataBatchId} allowExport={license.grant?.allowExport} /> : selectedSystem?.workspaceMode === 'return-ledger' && matterSection === 'data' ? <LocalDataPage defaultPageSize={defaultPageSize} allowExport={Boolean(license.grant?.allowExport)} key={`${selectedSystemId}/${selectedMatterId}`} systemId={selectedSystemId} matterId={selectedMatterId} matterName={selectedMatter?.name} selectedBatchId={selectedDataBatchId} onBatchChange={setSelectedDataBatchId} onOpenPublication={openPublication} openingPublication={openingPublication} /> : <>
+        {!selectedMatter ? <div className="panel empty" role="status">{message || (matterSystemId === selectedSystemId ? '当前系统暂无可用业务事项。' : '正在加载业务事项…')}</div> : selectedSystem?.workspaceMode === 'detail-ledger' && matterSection !== 'tasks' ? <OneWindowPage key={selectedSystemId + '/' + selectedMatterId} matterId={selectedMatterId} matterName={selectedMatter.name} section={matterSection === 'data' ? 'data' : 'return'} batchId={selectedDataBatchId} onBatchChange={id => { setSelectedDataBatchId(id); setMatterSection('data'); }} sessionStatus={selectedSystem.session.status} allowExport={Boolean(license.grant?.allowExport)} allowAutoSync={Boolean(license.grant?.allowAutoSync)} defaultPageSize={defaultPageSize} /> : ['return-ledger', 'list-ledger', 'detail-ledger'].includes(selectedSystem?.workspaceMode ?? '') && matterSection === 'tasks' ? <TaskCenterPage pageSize={defaultPageSize} key={`${selectedSystemId}/${selectedMatterId}`} systemId={selectedSystemId} matterId={selectedMatterId} matterName={selectedMatter?.name} onViewBatch={(batchId) => { setSelectedDataBatchId(batchId); setMatterSection('data'); }} /> : selectedSystem?.workspaceMode === 'list-ledger' && matterSection === 'data' ? <HrssLedgerPage systemId={selectedSystemId} defaultPageSize={defaultPageSize} key={`${selectedSystemId}/${selectedMatterId}`} matterId={selectedMatterId} matterName={selectedMatter.name} columns={selectedMatter.listColumns ?? []} batchId={selectedDataBatchId} onBatchChange={setSelectedDataBatchId} allowExport={license.grant?.allowExport} /> : selectedSystem?.workspaceMode === 'return-ledger' && matterSection === 'data' ? <LocalDataPage defaultPageSize={defaultPageSize} allowExport={Boolean(license.grant?.allowExport)} key={`${selectedSystemId}/${selectedMatterId}`} systemId={selectedSystemId} matterId={selectedMatterId} matterName={selectedMatter?.name} selectedBatchId={selectedDataBatchId} onBatchChange={setSelectedDataBatchId} onOpenPublication={openPublication} openingPublication={openingPublication} /> : <>
 
         {selectedMatter?.executionMode === 'one-click-return' ? (
           <>

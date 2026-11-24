@@ -14,8 +14,17 @@ import type { ComponentSummary } from '../core/plugins/components';
 import type { PublicationPlatformId } from '../core/publication/platforms';
 import type { HrssDashboardData } from '../core/hrss/dashboard';
 import type { AppSettings } from '../core/settings/types';
+import type { OneWindowState, OneWindowPlan, OneWindowBatch } from '../core/one-window/types';
 
 const desktopApi = {
+  oneWindow: {
+    state: (matterId: string, page = 1): Promise<OneWindowState> => ipcRenderer.invoke(IPC_CHANNELS.oneWindowState, matterId, page),
+    savePlan: (matterId: string, plan: Pick<OneWindowPlan, 'schedule' | 'filters'>): Promise<OneWindowPlan> => ipcRenderer.invoke(IPC_CHANNELS.oneWindowSavePlan, matterId, plan),
+    run: (matterId: string, filters: OneWindowPlan['filters']): Promise<RuntimeTask> => ipcRenderer.invoke(IPC_CHANNELS.oneWindowRun, matterId, filters),
+    records: (matterId: string, query: { batchId?: string; keyword?: string; page?: number; pageSize?: number }): Promise<{ rows: Array<{ recordKey: string; data: Record<string, unknown> }>; total: number }> => ipcRenderer.invoke(IPC_CHANNELS.oneWindowRecords, matterId, query),
+    retry: (taskId: string): Promise<OneWindowBatch> => ipcRenderer.invoke(IPC_CHANNELS.oneWindowRetry, taskId),
+    openFolder: (taskId: string): Promise<void> => ipcRenderer.invoke(IPC_CHANNELS.oneWindowFolder, taskId),
+  },
   hrss: {
     dashboard: (): Promise<HrssDashboardData> => ipcRenderer.invoke(IPC_CHANNELS.hrssDashboardGet),
     openDashboard: (): Promise<void> => ipcRenderer.invoke(IPC_CHANNELS.hrssDashboardOpen),

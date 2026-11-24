@@ -55,6 +55,12 @@ import type { ComponentSummary } from '../core/plugins/components';
 import { installSourceCertificateVerifiers } from './source-certificate-trust';
 import { HRSS_SOURCE_CERTIFICATE_TRUST } from '../core/config/source-certificate-pins';
 import { businessBootstrapContext } from './business-bootstrap-context';
+import { createOneWindowPlugin } from '../plugins/shenzhen-one-window';
+import oneWindowCatalog from '../plugins/shenzhen-one-window/matter-catalog.json';
+import { OneWindowService } from './one-window-service';
+import { OneWindowUploader } from '../core/one-window/uploader';
+import { createOneWindowWorkbook } from '../core/one-window/workbook';
+import { writeFile } from 'node:fs/promises';
 
 const PRODUCT_PUBLIC_KEY = `-----BEGIN PUBLIC KEY-----
 MIIBojANBgkqhkiG9w0BAQEFAAOCAY8AMIIBigKCAYEAn2Th5TQoO3juKQte8Ai+
@@ -69,6 +75,8 @@ b1oByVzE+8Uj5k4ApNg1P0JX3kxWn0qhcUFtRxsMO/nPAgMBAAE=
 -----END PUBLIC KEY-----`;
 
 const builtinModules = [
+  { id: oneWindowCatalog.id, name: oneWindowCatalog.name, version: oneWindowCatalog.version,
+    publisher: '数据融合助手', description: '城管事项完整业务详情回流、定时采集与推送后台' },
   {
     id: FOOD_DRUG_SYSTEM_ID, name: FOOD_DRUG_SYSTEM_NAME, version: FOOD_DRUG_VERSION, publisher: '数据融合助手',
     description: '食品生产和第三类医疗器械经营许可回流及双公示导出',
@@ -147,6 +155,7 @@ export class AppRuntime {
   private activeBusinessOperations = 0;
   private updateInstallation = false;
   private hrssReturning = false;
+  private oneWindowService?: OneWindowService;
 
   async businessOperation<T>(operation: () => Promise<T>): Promise<T> {
     if (this.updateInstallation || this.shuttingDown) throw new Error('应用正在保存并更新，请稍后再操作');
@@ -218,6 +227,8 @@ export class AppRuntime {
     this.plugins.register(createShenzhenHazardousPlugin());
     this.plugins.register(createSpecialEquipmentPlugin());
     this.plugins.register(createFoodDrugPlugin());
+    const oneWindowPlugin = createOneWindowPlugin();
+    this.plugins.register(oneWindowPlugin);
     for (const definition of catalogOnlySystems) this.plugins.register(createCatalogOnlySystem(definition));
     const plugins = this.plugins.list();
     const sources = plugins.flatMap(({ id, loginPage }) => [
@@ -240,6 +251,20 @@ export class AppRuntime {
     });
     this.licenseMonitor = new OnlineLicenseMonitor(() => this.license!.refreshOnline());
     this.licenseMonitor.start();
+    const uploader = new OneWindowUploader(backend.origin, () => this.license!.clientAuthorization());
+    this.oneWindowService = new OneWindowService({ database, platformStore: this.platformStore,
+      syncEngine: this.syncEngine, plugin: oneWindowPlugin, tasks: this.tasks,
+      exportDirectory: this.exportDirectory?.directory ?? join(userDataPath, 'exports'),
+      authorize: async (matterId, automatic, requireExport) => {
+        const grant = await this.requireLicense(oneWindowCatalog.id, matterId);
+        if (requireExport) assertFeatureLicensed(grant, 'export');
+        if (automatic) assertFeatureLicensed(grant, 'auto-sync');
+      },
+      upload: (input, signal) => uploader.upload(input, signal),
+      businessOperation: operation => this.businessOperation(operation),
+    });
+    await this.oneWindowService.initialize();
+    this.oneWindowService.start();
   }
 
   async restoreSourceTabs(window: BrowserWindow): Promise<void> {
@@ -269,6 +294,12 @@ export class AppRuntime {
   }
 
   async forgetSession(systemId: string): Promise<void> { await this.sessionRecovery?.forget(systemId); }
+
+  async oneWindow(): Promise<OneWindowService> {
+    await this.requireLicense(oneWindowCatalog.id);
+    if (!this.oneWindowService) throw new Error('一窗业务详情模块尚未就绪');
+    return this.oneWindowService;
+  }
 
   async currentGrant(): Promise<LicenseGrant | null> {
     return this.license?.getCurrent() ?? null;
@@ -307,6 +338,19 @@ export class AppRuntime {
   }
 
   private async exportRecords(records: StoredRecord[], format: ExportFormat, identity: ExportIdentity, path?: string, confirm?: ConfirmExport, target?: GovernmentExportTarget) {
+    if (records.some(record => record.systemId === oneWindowCatalog.id)) {
+      if (records.some(record => record.systemId !== oneWindowCatalog.id) || target || format !== 'xlsx') throw new Error('一窗业务详情请单独导出为 Excel');
+      const bytes = await createOneWindowWorkbook(records.map(record => record.data), { businessName: identity.businessName,
+        startDate: typeof identity.startDate === 'string' ? identity.startDate : undefined,
+        endDate: typeof identity.endDate === 'string' ? identity.endDate : undefined });
+      const writer = async (destination: string) => {
+        await writeFile(destination, bytes, { flag: 'wx', mode: 0o600 });
+        return { path: destination, rowCount: records.length, createdAt: Date.now() };
+      };
+      if (path) return writer(path);
+      if (!this.exportDirectory) throw new Error('固定导出目录尚未就绪');
+      return this.exportDirectory.export(records, { ...identity, kind: 'list-ledger' }, 'xlsx', writer);
+    }
     assertGovernmentExportTarget(target, format, records.map(record => record.systemId));
     if (target) identity = { ...identity, businessName: `${GOVERNMENT_EXPORT_LABELS[target]}-${identity.businessName}` };
     const isHrss = records.some(record => record.systemId === 'guangdong-hrss');
@@ -393,7 +437,7 @@ export class AppRuntime {
     }
     for (const rows of groups.values()) {
       const { systemId, matterId } = rows[0];
-      if (systemId === 'guangdong-hrss') continue;
+      if (systemId === 'guangdong-hrss' || systemId === oneWindowCatalog.id) continue;
       const enriched = await this.enterpriseService.enrich(systemId, matterId, rows.map(row => row.data));
       const matter = this.plugins.get(systemId)?.matters.find(item => item.id === matterId);
       for (let i = 0; i < rows.length; i++) {
@@ -428,6 +472,7 @@ export class AppRuntime {
 
   async updateLocalRecord(systemId: string, matterId: string, recordKey: string, data: Record<string, unknown>) {
     await this.requireLicense(systemId, matterId);
+    if (systemId === oneWindowCatalog.id) throw new Error('一窗业务台账只读，请重新回流更新源系统数据');
     if (systemId === 'guangdong-hrss') throw new Error('人社列表台账只读，请重新回流更新源系统数据');
     const matter = this.plugins.get(systemId)?.matters.find((item) => item.id === matterId);
     if (!matter || !this.platformStore) throw new Error('业务事项数据模块未就绪');
@@ -476,7 +521,7 @@ export class AppRuntime {
       firstSeenAt: task.createdAt, updatedAt: task.finishedAt ?? task.createdAt,
     }));
     if (records.length === 0) throw new Error('当前批次没有可导出的数据');
-    if (this.enterpriseService && task.systemId !== 'guangdong-hrss') {
+    if (this.enterpriseService && !['guangdong-hrss', oneWindowCatalog.id].includes(task.systemId)) {
       const enriched = await this.enterpriseService.enrich(task.systemId, task.matterId, records.map(row => row.data));
       for (let i = 0; i < records.length; i++) {
         await this.platformStore.applyEnterpriseEnrichment(task.systemId, task.matterId, records[i].recordKey, records[i].data, enriched[i]);
@@ -683,6 +728,7 @@ export class AppRuntime {
     matterId: string,
     rows: Record<string, unknown>[],
   ): Promise<SyncPreviewReceipt> {
+    if (systemId === oneWindowCatalog.id) throw new Error('一窗业务详情请通过回流任务保存');
     if (systemId === 'guangdong-hrss') throw new Error('人社数据请通过列表回流任务保存');
     const plugin = this.plugins.get(systemId);
     const matter = plugin?.matters.find((item) => item.id === matterId);
@@ -732,6 +778,7 @@ export class AppRuntime {
 
   async shutdown(): Promise<void> {
     this.shuttingDown = true;
+    await this.oneWindowService?.stop();
     await this.licenseMonitor?.stop();
     await loginTabController.flushSessionStorage();
     await this.sessionRecovery?.flush();

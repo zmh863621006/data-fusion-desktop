@@ -1,4 +1,10 @@
 export const IPC_CHANNELS = {
+  oneWindowState: 'one-window:state',
+  oneWindowSavePlan: 'one-window:save-plan',
+  oneWindowRun: 'one-window:run',
+  oneWindowRecords: 'one-window:records',
+  oneWindowRetry: 'one-window:retry',
+  oneWindowFolder: 'one-window:folder',
   hrssDashboardGet: 'hrss:dashboard:get',
   hrssDashboardOpen: 'hrss:dashboard:open',
   hrssDashboardClose: 'hrss:dashboard:close',

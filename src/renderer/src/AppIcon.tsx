@@ -35,6 +35,7 @@ const systemIcons: Record<string, IconName> = {
   'market-access': 'building', 'government-info': 'government', 'transport-practitioner': 'person',
   'oversize-transport': 'truck', 'online-car-permit': 'car',
   'guangdong-hrss': 'person',
+  'shenzhen-one-window': 'government',
 };
 export const systemIcon = (id: string): IconName => systemIcons[id] ?? 'components';
 

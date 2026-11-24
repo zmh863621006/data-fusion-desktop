@@ -1,0 +1,45 @@
+.one-window-page { display: grid; grid-template-columns: minmax(0, 1fr); gap: 20px; min-width: 0; }
+.one-window-page > .panel { min-width: 0; }
+.one-window-controls, .one-window-batches, .one-window-data { padding: 24px; }
+.one-window-page .panel-head { align-items: flex-start; gap: 20px; padding: 0 0 18px; margin: 0; }
+.one-window-page h2 { margin: 0 0 8px; font-size: 21px; letter-spacing: -.4px; }
+.one-window-page h3 { margin: 0 0 8px; font-size: 17px; }
+.one-window-page p { margin: 0; font-size: 13px; line-height: 1.7; color: #6e6e73; }
+.one-window-form { display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap: 16px; margin: 20px 0; }
+.one-window-form label { display: grid; gap: 8px; font-size: 13px; color: #6e6e73; }
+.one-window-form input, .one-window-form select, .one-window-search input { width: 100%; min-height: 44px; padding: 10px 12px; border-radius: 10px; border: 1px solid #d2d2d7; background: white; color: #1d1d1f; font: inherit; }
+.one-window-page input:focus-visible, .one-window-page select:focus-visible { outline: 3px solid #007aff40; outline-offset: 2px; }
+.one-window-actions, .one-window-toggles { display: flex; align-items: center; gap: 16px 24px; flex-wrap: wrap; }
+.one-window-toggles { margin: 20px 0; }
+.one-window-toggles label, .one-window-weekdays label { display: inline-flex; gap: 10px; align-items: center; min-height: 44px; font-size: 13px; }
+.one-window-toggles input, .one-window-weekdays input { width: 18px; height: 18px; accent-color: #007aff; }
+.one-window-schedule-status { color: #6e6e73; font-size: 13px; margin-top: 16px; }
+.one-window-weekdays { display: flex; flex-wrap: wrap; gap: 16px; border: 0; padding: 0; margin: 0; }
+.one-window-weekdays legend { color: #6e6e73; font-size: 13px; margin-bottom: 8px; }
+.one-window-page .table-wrap { overflow: auto; }
+.one-window-page table { width: 100%; border-collapse: collapse; font-size: 13px; }
+.one-window-page th, .one-window-page td { text-align: left; padding: 14px 12px; border-bottom: 1px solid #eeeef0; white-space: nowrap; vertical-align: top; }
+.one-window-page th { font-weight: 500; color: #6e6e73; background: #f5f5f7; }
+.one-window-page tbody tr:hover { background: #f8fbff; }
+.one-window-page .empty { padding: 36px 16px; text-align: center; color: #86868b; }
+.one-window-search { display: flex; align-items: center; gap: 12px; margin: 18px 0; }
+.one-window-search label { flex: 1; min-width: 0; max-width: 520px; }
+.one-window-pagination { display: flex; align-items: center; justify-content: flex-end; gap: 12px; margin-top: 18px; color: #6e6e73; font-size: 13px; }
+.one-window-pagination > span { margin-right: auto; }
+.one-window-upload-error { white-space: normal; max-width: 250px; color: #b45309; margin-top: 6px; line-height: 1.5; }
+.one-window-partial { display: block; font-size: 12px; margin-top: 6px; color: #b45309; }
+.one-window-backdrop { position: fixed; inset: 0; z-index: 100; background: #0005; display: flex; justify-content: flex-end; }
+.one-window-detail { width: min(860px, 95vw); height: 100%; overflow: auto; padding: 32px; background: #fff; box-shadow: -12px 0 40px #0001; }
+.one-window-detail .panel-head { display: flex; justify-content: space-between; gap: 16px; margin-bottom: 24px; }
+.one-window-detail h2 { font-size: 21px; margin: 0 0 8px; }
+.one-window-detail p { margin: 0; color: #6e6e73; font-size: 13px; }
+.one-window-fields { margin: 0; font-size: 13px; }
+.one-window-fields > div { display: grid; grid-template-columns: minmax(120px, 28%) minmax(0, 1fr); gap: 16px; padding: 12px 0; border-bottom: 1px solid #eeeef0; }
+.one-window-fields dt { color: #6e6e73; overflow-wrap: anywhere; }
+.one-window-fields dd { margin: 0; min-width: 0; overflow-wrap: anywhere; }
+.one-window-value { white-space: pre-wrap; overflow-wrap: anywhere; line-height: 1.6; }
+.one-window-detail-section { border-top: 1px solid #e5e5ea; margin-top: 20px; padding-top: 16px; }
+.one-window-detail-section summary { cursor: pointer; font-size: 15px; font-weight: 600; padding: 10px 0; min-height: 44px; }
+.one-window-array-item { padding: 12px; background: #f5f5f7; border-radius: 10px; margin: 8px 0; }
+.one-window-array-item > .muted { font-size: 12px; }
+@media (max-width: 800px) { .one-window-controls, .one-window-batches, .one-window-data { padding: 18px; }.one-window-detail { padding: 22px; }.one-window-fields > div { grid-template-columns: 1fr; gap: 6px; } }
