@@ -6,11 +6,11 @@ import { validatePluginContract } from '../../core/plugins/types';
 import { createGuangdongHrssPlugin,HRSS_MATTER_DEFINITIONS } from './index';
 import { validateFilters } from '../../core/query/validation';
 
-it('opens the confirmed SSO login page and keeps the authenticated employment workspace separate',()=>{
+it('opens the SSO entry for login and restores the full portal instead of a single business page',()=>{
   const plugin=createGuangdongHrssPlugin();
   expect(plugin.loginPage?.url).toBe('https://hrss.gdgov.cn/sso/login.html');
   expect(plugin.loginPage?.allowedOrigin).toBe('https://hrss.gdgov.cn');
-  expect(plugin.sessionRecovery?.homeUrl()).toBe('https://hrss.gdgov.cn/employment/main/#/jysydj/jydj/jysyxxcx?_modulePartId_=1000000000002420304');
+  expect(plugin.sessionRecovery?.homeUrl()).toBe('https://hrss.gdgov.cn/portal/template/system.html');
 });
 
 describe('广东人社插件',()=>{

@@ -9,7 +9,7 @@
 - `constants/RSContants.java:8-179`：列表接口地址；`:207-253`：当前任务类型。旧控制器type编号与当前任务编号不同。
 - `service/impl/RSJYSYServiceImpl.java:75-91,114-119`：失业自2025-05-01起逐天查询，`aac004=""`、`bae085="01"`、`bae001="163374"`、`bbd068="01"`。先GET `/syxx/page/cnt`，再GET `/syxx/page`，列表字段为`records`。原 `RSRZServiceImpl.getSyXx` 将count的total另加到列表响应，故插件仅对这个拥有countPath的接口允许列表省略total，显式total仍须一致。count为0不请求列表页。
 - `service/impl/RSRZServiceImpl.java:160-181`：会话验证使用当日失业count，验证实参`aac004="1"`，与采集实参不同。原后端八小时Redis缓存不是远端凭据TTL；恢复快照后由主进程进行真实会话验证。
-- 用户于2026-11-04确认门户登录入口为 `https://hrss.gdgov.cn/sso/login.html`；`service/impl/RSRZServiceImpl.java:194-244` 中的就业SSO service目的页面仅用于已验证会话的业务首页，不能替代未登录入口。插件监听同分区已完成业务请求的`Access-Token`头，不猜测localStorage键，也不增加二维码接口链。
+- 门户登录入口为 `https://hrss.gdgov.cn/sso/login.html`；已登录打开原系统、重启恢复均进入 `https://hrss.gdgov.cn/portal/template/system.html`，保留系统列表及各业务入口，不进入原 Java SSO 的就业查询子页面。会话校验仍使用原只读接口，与页面导航地址独立。插件监听同分区已完成业务请求的`Access-Token`头，不猜测localStorage键，也不增加二维码接口链。
 - `service/impl/RSLHJYServiceImpl.java:68-72,168-171`：`LHJYBT_20`高校毕业生、`LHJYBT_10`困难人员。
 - `service/impl/RSNewGZFWServiceImpl.java:83,110-138`：101高校、102困难、103失业；103的创建时间为当月起至当前，其他两类无时间限制；使用pagenum/pagesize。地区、状态与范围参数保留原值。
 - `service/impl/RSYCXKGServiceImpl.java:61-96`：WGBT为独立Cookie，POST表单；confid和原whereCls保留，rowstart沿用1..N页号，pageSize=200。whereCls语义及rowstart真实服务端语义尚未实网验证，若返回重复/缺页会整体失败。

@@ -5,8 +5,8 @@ export const HRSS_ORIGIN = 'https://hrss.gdgov.cn';
 export const HRSS_PARTITION = 'persist:guangdong-hrss';
 /** Source portal login entry confirmed by the user. */
 export const HRSS_LOGIN_URL = `${HRSS_ORIGIN}/sso/login.html`;
-/** Authenticated employment workspace used as the original Java SSO service destination. */
-export const HRSS_HOME_URL = `${HRSS_ORIGIN}/employment/main/#/jysydj/jydj/jysyxxcx?_modulePartId_=1000000000002420304`;
+/** Restore the full authenticated portal; list APIs are only used for session validation. */
+export const HRSS_HOME_URL = `${HRSS_ORIGIN}/portal/template/system.html`;
 
 export interface HrssColumn { key: string; label: string; sources: string[]; sensitive?: boolean }
 export interface HrssListSource {
