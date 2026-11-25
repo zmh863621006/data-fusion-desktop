@@ -49,7 +49,8 @@ it('exports street-case history as one row per operation, including operations o
     expect(workbook.worksheets.map(sheet => sheet.name)).toEqual(['业务列表台账', '办理记录']);
     const cases = workbook.getWorksheet('业务列表台账')!, history = workbook.getWorksheet('办理记录')!;
     expect(cases.columnCount).toBe(5); expect(cases.rowCount).toBe(3);
-    expect(cases.getRow(3).getCell(5).value).toBe('待受理，未查询办理记录');
+    expect(cases.getRow(3).getCell(4).value).toBe(0);
+    expect(cases.getRow(3).getCell(5).value).toBe('待受理，暂无办理记录');
     expect(history.rowCount).toBe(3);
     expect(history.getRow(1).values).toEqual([undefined, '申请编号', '单位名称', '申请日期', '记录序号', '办理人员', '办理机构', '办理时间', '办理环节', '办理操作', '办理结果', '办理意见']);
     expect(history.getRow(3).values).toEqual([undefined, 'TEST-001', '测试单位', '2026-10-01', 2, '测试乙', '审核部门', '2026-11-20 10:00', '审核', '办结', '通过', '后续记录']);

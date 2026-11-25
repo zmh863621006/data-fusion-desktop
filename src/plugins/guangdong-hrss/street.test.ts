@@ -14,10 +14,10 @@ describe('街道办现代补贴列表与办理记录', () => {
       expect(profile.columns.some(column => column.key === 'handlingRecordCount')).toBe(true);
     }
   });
-  it('excludes only verified 待受理 code 02 before requesting records or checking its join id', async () => {
+  it('retains verified 待受理 code 02 with zero records without requesting history or requiring its join id', async () => {
     const requestHandlingRecords = vi.fn();
-    expect(await enrichHrssStreetRecord({ requestHandlingRecords }, { bbe955: '02', bbe955Name: '待受理' })).toBeNull();
-    expect(await enrichHrssStreetRecord({ requestHandlingRecords }, { bbe955Name: '待受理' })).toBeNull();
+    expect(await enrichHrssStreetRecord({ requestHandlingRecords }, { bbe955: '02', bbe955Name: '待受理' })).toEqual({handlingRecordCount:0,handlingRecordStatus:'skipped-pending',handlingRecords:[]});
+    expect(await enrichHrssStreetRecord({ requestHandlingRecords }, { bbe955Name: '待受理' })).toEqual({handlingRecordCount:0,handlingRecordStatus:'skipped-pending',handlingRecords:[]});
     expect(requestHandlingRecords).not.toHaveBeenCalled();
     expect(isHrssStreetPendingAcceptance({ bbe955: '01', bbe955Name: '待提交' })).toBe(false);
   });

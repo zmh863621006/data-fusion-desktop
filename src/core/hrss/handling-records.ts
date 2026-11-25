@@ -41,6 +41,6 @@ export function readHrssHandlingRecords(value: unknown): HrssHandlingRecord[] {
 
 export function hrssHandlingStatusLabel(value: unknown): string {
   if (value === 'collected') return '已采集';
-  if (value === 'skipped-pending') return '待受理，未查询办理记录';
+  if (value === 'skipped-pending') return '待受理，暂无办理记录';
   return '尚未采集办理记录';
 }

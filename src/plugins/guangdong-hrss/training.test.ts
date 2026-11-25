@@ -67,9 +67,9 @@ describe('创业培训列表与办理记录投影', () => {
     const lowerCaseProgress=caseRow(progress,'BT_SH');
     expect(projectTrainingListRecord(progress,{...lowerCaseProgress,XZ:undefined,xz:lowerCaseProgress.XZ}).currentLink).toBe('待审核');
   });
-  it('excludes BT_SL progress cases before querying any record and rejects unknown/contradictory statuses', async () => {
+  it('retains BT_SL progress cases with zero history requests and rejects unknown/contradictory statuses', async () => {
     const requestTrainingList = vi.fn();
-    expect(await enrichTrainingRecord({ requestTrainingList }, progress, caseRow(progress, 'BT_SL'), session)).toBeNull();
+    expect(await enrichTrainingRecord({ requestTrainingList }, progress, caseRow(progress, 'BT_SL'), session)).toEqual({handlingRecordCount:0,handlingRecordStatus:'skipped-pending',handlingRecords:[]});
     expect(requestTrainingList).not.toHaveBeenCalled();
     await expect(enrichTrainingRecord({ requestTrainingList }, progress, caseRow(progress, 'UNKNOWN'), session)).rejects.toThrow('办理状态');
     await expect(enrichTrainingRecord({ requestTrainingList }, progress, { ...caseRow(progress, 'BT_SH'), BHEA81: 'BT_SL' }, session)).rejects.toThrow('状态不一致');

@@ -67,21 +67,29 @@ describe('街道办列表筛选与办理记录回流',()=>{
     const request=vi.fn(async()=>({total:2,rows:[pending('P'),active('A')]}));
     const requestHandlingRecords=vi.fn(async()=>({total:2,rows:[handling('LOG-1','2026-10-31'),handling('LOG-2','2026-11-20')]}));
     const result=await queryHrssLedger({request,requestHandlingRecords},matter(),selected,now);
-    expect(result.total).toBe(1);expect(result.rows[0]).toMatchObject({applyBh:'A',handlingRecordCount:2,handlingRecordStatus:'collected',handlingRecords:[{handledAt:'2026-10-31'},{handledAt:'2026-11-20'}]});
+    expect(result.total).toBe(2);expect(result.rows[0]).toMatchObject({applyBh:'P',currentLink:'待受理',handlingRecordCount:0,handlingRecordStatus:'skipped-pending',handlingRecords:[]});
+    expect(result.rows[1]).toMatchObject({applyBh:'A',handlingRecordCount:2,handlingRecordStatus:'collected',handlingRecords:[{handledAt:'2026-10-31'},{handledAt:'2026-11-20'}]});
     expect(request).toHaveBeenCalledWith(matter().sources[0],expect.objectContaining({adc705Begin:'2026-11-01',adc705End:'2026-11-02'}),undefined,false,undefined);
     expect(requestHandlingRecords).toHaveBeenCalledTimes(1);
     expect(requestHandlingRecords).toHaveBeenCalledWith({current:1,size:200,bzd417:'FLOW-A',aaa025:'02'},undefined);
-    expect(result.rows[0]).not.toHaveProperty('bzd417');expect(result.rows[0]).not.toHaveProperty('adminToken');
-    expect((result.rows[0].handlingRecords as any[])[0]).not.toHaveProperty('adminToken');
+    expect(result.rows.every(row=>!Object.hasOwn(row,'bzd417')&&!Object.hasOwn(row,'adminToken'))).toBe(true);
+    expect((result.rows[1].handlingRecords as any[])[0]).not.toHaveProperty('adminToken');
   });
-  it('counts all list rows for completeness, including an entire page of excluded pending cases',async()=>{
+  it.each(Object.keys(HRSS_STREET_PROFILES))('saves pending applications for %s without requesting handling history',async id=>{
+    const request=vi.fn(async()=>({total:1,rows:[pending('P')]})),requestHandlingRecords=vi.fn();
+    const result=await queryHrssLedger({request,requestHandlingRecords},definition(id),selected,now);
+    expect(result.total).toBe(1);expect(result.rows[0]).toMatchObject({applyBh:'P',currentLink:'待受理',handlingRecordCount:0,handlingRecordStatus:'skipped-pending',handlingRecords:[]});
+    expect(requestHandlingRecords).not.toHaveBeenCalled();
+  });
+  it('saves an entire page of pending cases and then continues to later accepted cases',async()=>{
     const request=vi.fn(async(_source,params)=>({total:201,rows:params.current===1?Array.from({length:200},(_,i)=>pending(`P-${i}`)):[active('A')]}));
     const requestHandlingRecords=vi.fn(async()=>({total:0,rows:[]}));
     const result=await queryHrssLedger({request,requestHandlingRecords},matter(),selected,now);
-    expect(request).toHaveBeenCalledTimes(2);expect(result.total).toBe(1);expect(result.rows[0].handlingRecordCount).toBe(0);
+    expect(request).toHaveBeenCalledTimes(2);expect(result.total).toBe(201);expect(result.rows.slice(0,200).every(row=>row.handlingRecordStatus==='skipped-pending'&&row.handlingRecordCount===0)).toBe(true);
+    expect(result.rows[200]).toMatchObject({applyBh:'A',handlingRecordCount:0,handlingRecordStatus:'collected'});
     expect(requestHandlingRecords).toHaveBeenCalledTimes(1);
   });
-  it('rejects duplicate keys even when both duplicated cases would be excluded',async()=>{
+  it('still rejects duplicate pending business keys',async()=>{
     const request=vi.fn(async()=>({total:2,rows:[pending('P'),pending('P')]}));
     const requestHandlingRecords=vi.fn();
     await expect(queryHrssLedger({request,requestHandlingRecords},matter(),selected,now)).rejects.toThrow('重复业务编号');
@@ -117,7 +125,7 @@ describe('创业培训独立会话和旧版列表集成',()=>{
   const completed=(id:string)=>({CDB041:id,AAB004:'已办单位',CCD002:`APPLY-${id}`,BCE089:'2026-11-02',BJRQ:'2026-11-10'});
   const log={RN:'1',_DIC_CDB042:'审核',BFE086:'通过',CFE006:'同意',JBR:'经办甲',JBRQ:'2026-11-25',JBJG:'街道办'};
 
-  it('queries both application-date lists, excludes pending receipt and keeps later handling entries',async()=>{
+  it('queries both application-date lists, retains pending receipt and keeps later handling entries',async()=>{
     const matter=definition('startup-training');
     const request=vi.fn();const requestHandlingRecords=vi.fn();
     const prepareTrainingSession=vi.fn(async()=>session);
@@ -130,10 +138,17 @@ describe('创业培训独立会话和旧版列表集成',()=>{
     expect(requestTrainingList).toHaveBeenCalledWith(buildTrainingListParameters(matter.sources[0],1,'2026-11-01','2026-11-02',session),undefined);
     expect(requestTrainingList).toHaveBeenCalledWith(buildTrainingListParameters(matter.sources[1],1,'2026-11-01','2026-11-02',session),undefined);
     expect(requestTrainingList.mock.calls.filter(([params])=>params.confid===HRSS_TRAINING_HANDLING_CONFIG)).toHaveLength(2);
-    expect(result.total).toBe(2);expect(result.rows.map(row=>row.caseId)).toEqual(['A','C']);
-    expect(result.rows.map(row=>row.listSource)).toEqual(['办理进度列表','已办业务列表']);
-    expect(result.rows.every(row=>row.handlingRecordCount===1 && (row.handlingRecords as any[])[0].handledAt==='2026-11-25')).toBe(true);
+    expect(result.total).toBe(3);expect(result.rows.map(row=>row.caseId)).toEqual(['P','A','C']);
+    expect(result.rows.map(row=>row.listSource)).toEqual(['办理进度列表','办理进度列表','已办业务列表']);
+    expect(result.rows[0]).toMatchObject({currentLink:'待受理',handlingRecordCount:0,handlingRecordStatus:'skipped-pending',handlingRecords:[]});
+    expect(result.rows.slice(1).every(row=>row.handlingRecordCount===1 && (row.handlingRecords as any[])[0].handledAt==='2026-11-25')).toBe(true);
     expect(result.rows[0]).not.toHaveProperty('adminToken');
+  });
+  it('retains an all-pending training list and does not call its handling grid',async()=>{
+    const requestTrainingList=vi.fn(async(params:Record<string,unknown>)=>String(params.confid).includes('bljdcxjglb')?{total:1,rows:[progress('P','BT_SL')]}:{total:0,rows:[]});
+    const result=await queryHrssLedger({request:vi.fn(),prepareTrainingSession:vi.fn(async()=>session),requestTrainingList},definition('startup-training'),selected,now);
+    expect(result.rows).toEqual([expect.objectContaining({caseId:'P',applyBh:'APPLY-P',currentLink:'待受理',handlingRecordCount:0,handlingRecordStatus:'skipped-pending',handlingRecords:[]})]);
+    expect(requestTrainingList).toHaveBeenCalledTimes(2);expect(requestTrainingList.mock.calls.every(([params])=>params.confid!==HRSS_TRAINING_HANDLING_CONFIG)).toBe(true);
   });
   it('aborts before list reads if cancellation occurs while preparing the independent session',async()=>{
     const controller=new AbortController(),request=vi.fn(),requestTrainingList=vi.fn();

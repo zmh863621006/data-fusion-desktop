@@ -142,7 +142,7 @@ export async function queryHrssLedger(client:HrssQueryClient,definition:HrssMatt
         const previous=result.get(key);
         if(previous && JSON.stringify(previous)!==JSON.stringify(row)) throw completeness(`${label}第 ${page} 页：同一业务编号出现冲突记录`);
       }
-      // Validate every original list row, including excluded pending cases, before reading handling records.
+      // Retain pending cases as business rows with no handling requests; validate every list row.
       for(let index=0;index<rows.length;index++) {
         const row=rows[index];
         if(hasHandling) {
@@ -161,13 +161,12 @@ export async function queryHrssLedger(client:HrssQueryClient,definition:HrssMatt
             continue;
           }
           checkCancelled(context.signal);
-          if(!handling) continue;
           Object.assign(row,handling);
         }
         result.set(String(row.recordKey),row);
       }
       sourceFetched+=rows.length; fetched+=rows.length;
-      notify(`${label}：已获取 ${fetched} 条${hasHandling?`，已保留 ${result.size} 条非待受理办件`:''}`);
+      notify(`${label}：已获取 ${fetched} 条${hasHandling?`，已保留 ${result.size} 条办件`:''}`);
       if(sourceFetched===expected) break;
       if(page===MAX_PAGES) throw completeness('列表尚未获取完整');
     }

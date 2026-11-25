@@ -19,7 +19,8 @@ it('renders every saved handling record with separate step/action and masks oper
 
 it('distinguishes pending cases, empty remote history and old unsampled records', () => {
   const render = (data: Record<string, unknown>) => renderToStaticMarkup(<HrssHandlingRecords data={data} onClose={() => {}} />);
-  expect(render({ handlingRecordStatus: 'skipped-pending', handlingRecords: [] })).toContain('该办件为待受理，本批次未查询其办理记录');
+  expect(render({ handlingRecordStatus: 'skipped-pending', handlingRecords: [] })).toContain('该办件为待受理，已保留在业务列表中，暂无办理记录');
+  expect(render({ handlingRecordStatus: 'skipped-pending', handlingRecords: [] })).toContain('共 0 条');
   expect(render({ handlingRecordStatus: 'collected', handlingRecords: [] })).toContain('原系统未返回办理记录');
   expect(render({})).toContain('请重新回流后查看');
 });
@@ -28,7 +29,7 @@ it('restricts workflow history to the four human-resources street matters and re
   expect(hasHrssHandlingRecords('guangdong-hrss', 'startup-training')).toBe(true);
   expect(hasHrssHandlingRecords('guangdong-hrss', 'unemployment')).toBe(false);
   expect(hasHrssHandlingRecords('another-system', 'startup-training')).toBe(false);
-  expect(hrssDisplayValue({ key: 'handlingRecordStatus', label: '采集状态' }, 'skipped-pending')).toBe('待受理，未查询办理记录');
+  expect(hrssDisplayValue({ key: 'handlingRecordStatus', label: '采集状态' }, 'skipped-pending')).toBe('待受理，暂无办理记录');
   expect(hrssDisplayValue({ key: 'untrusted', label: '测试' }, { token: 'SECRET' })).toBe('—');
   expect(readHrssHandlingRecords([null, 'bad', [], { operator: { secret: 'SECRET' }, action: '通过', unknown: 'SECRET' }])).toEqual([
     { operator: '', organization: '', handledAt: '', step: '', action: '通过', result: '', opinion: '' },

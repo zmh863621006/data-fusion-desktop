@@ -132,10 +132,10 @@ export function projectTrainingListRecord(source: HrssListSource, raw: Record<st
   };
 }
 
-export async function enrichTrainingRecord(client: HrssTrainingClient, source: HrssListSource, raw: Record<string, unknown>, session: HrssTrainingSession, signal?: AbortSignal): Promise<{ handlingRecordCount: number; handlingRecordStatus: 'collected'; handlingRecords: HrssHandlingRecord[] } | null> {
+export async function enrichTrainingRecord(client: HrssTrainingClient, source: HrssListSource, raw: Record<string, unknown>, session: HrssTrainingSession, signal?: AbortSignal): Promise<{ handlingRecordCount: number; handlingRecordStatus: 'collected' | 'skipped-pending'; handlingRecords: HrssHandlingRecord[] }> {
   cancelled(signal);
   const identity = trainingIdentity(source, raw);
-  if (identity.pending) return null;
+  if (identity.pending) return { handlingRecordCount: 0, handlingRecordStatus: 'skipped-pending', handlingRecords: [] };
   // Original query-page detail config uses BZE453='1' for its handling-record list.
   const condition = ` CDB041 = '${identity.caseId}' and BZE453='1' `;
   const records: HrssHandlingRecord[] = [], keys = new Set<string>();

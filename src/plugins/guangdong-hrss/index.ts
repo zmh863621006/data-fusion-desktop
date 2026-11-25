@@ -27,7 +27,7 @@ export function createGuangdongHrssPlugin(options:HrssClientOptions={}):Business
     sessionRecovery:{snapshot:()=>client.exportSession(),restore:value=>client.restoreSession(value),validate:signal=>client.validateSession(signal),homeUrl:()=>HRSS_HOME_URL},
     matters:[...HRSS_MATTER_DEFINITIONS.map<BusinessMatter>(definition=>({
       id:definition.id,name:definition.name,departmentId:definition.departmentId,departmentName:definition.departmentName,departmentOrder:definition.departmentOrder,matterOrder:definition.matterOrder,
-      description:hasHrssHandlingRecords(HRSS_SYSTEM_ID,definition.id)?'按申请日期查询办件，采集非待受理办件的全部办理记录。':'提取原站列表字段；缺失字段保留为空。',executionMode:'one-click-return' as const,
+      description:hasHrssHandlingRecords(HRSS_SYSTEM_ID,definition.id)?'按申请日期查询并保留全部办件；待受理暂无办理记录，其他办件采集全部办理记录。':'提取原站列表字段；缺失字段保留为空。',executionMode:'one-click-return' as const,
       dateFilter:hrssDateFilter(definition.id),
       querySchema:[{key:'startDate',label:definition.id==='unemployment'?'登记开始日期':'开始日期',type:'date' as const,required:true},
         {key:'endDate',label:definition.id==='unemployment'?'登记结束日期':'结束日期',type:'date' as const,required:true}],

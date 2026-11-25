@@ -49,7 +49,7 @@ export interface HrssStreetHandlingRecord {
 }
 export interface HrssStreetHandlingResult {
   handlingRecordCount: number;
-  handlingRecordStatus: 'collected';
+  handlingRecordStatus: 'collected' | 'skipped-pending';
   handlingRecords: HrssStreetHandlingRecord[];
 }
 
@@ -69,9 +69,9 @@ export function isHrssStreetPendingAcceptance(raw: Record<string, unknown>): boo
 }
 
 /** Source SpHandlingRecord uses bzd417/aaa025, not the list's batch id bke910. */
-export async function enrichHrssStreetRecord(client: HrssStreetHandlingClient, raw: Record<string, unknown>, signal?: AbortSignal): Promise<HrssStreetHandlingResult | null> {
+export async function enrichHrssStreetRecord(client: HrssStreetHandlingClient, raw: Record<string, unknown>, signal?: AbortSignal): Promise<HrssStreetHandlingResult> {
   cancelled(signal);
-  if (isHrssStreetPendingAcceptance(raw)) return null;
+  if (isHrssStreetPendingAcceptance(raw)) return { handlingRecordCount: 0, handlingRecordStatus: 'skipped-pending', handlingRecords: [] };
   const businessId = scalar(raw.bzd417);
   if (!businessId || businessId.length > 256 || /[\s*•●\u0000-\u001f]/.test(businessId)) throw failed('街道办列表缺少可用的办理记录关联编号');
   const records: HrssStreetHandlingRecord[] = [], ids = new Set<string>(), pageFingerprints = new Set<string>();

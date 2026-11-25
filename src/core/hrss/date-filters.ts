@@ -11,7 +11,7 @@ export function hrssDateFilter(matterId: string): NonNullable<BusinessMatter['da
   const basis = hrssDateBasis(matterId);
   if (basis) return { mode: 'applied', message: matterId === 'youth-internship-agreement'
     ? '审核列表按申请日期、查询列表按见习开始日期筛选；两个列表分别保留。'
-    : `按所选${basis.label}查询原系统列表。${SUBDISTRICT_IDS.has(matterId) ? '仅非待受理办件继续提取全部办理记录。' : ''}` };
+    : `按所选${basis.label}查询原系统列表。${SUBDISTRICT_IDS.has(matterId) ? '保留待受理办件；其他办件继续提取全部办理记录。' : ''}` };
   return { mode: 'pending', message: matterId === 'poverty-alleviation-personnel'
     ? ''
     : '该事项日期条件尚未验证，所选日期仅记录到任务。' };
