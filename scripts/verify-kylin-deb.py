@@ -108,7 +108,10 @@ def check_owner(member, mode):
         raise ValueError('Incorrect archive owner, permission or timestamp: ' + member.name)
 
 
-def verify(package, stage, arch, version, compatibility=None):
+def verify(package, stage, arch, version, compatibility=None, deployment=None):
+    if deployment not in (None, 'huizhou-intranet'):
+        raise ValueError('Invalid fixed-shell deployment identity')
+    app_root = 'opt/huizhou-data-fusion' if deployment else 'opt/data-fusion'
     stage = stage.resolve()
     ar = ar_contents(package)
     for name in ('control.tar.xz', 'data.tar.xz'):
@@ -128,7 +131,8 @@ def verify(package, stage, arch, version, compatibility=None):
     if set(control) != {'control', 'md5sums'}:
         raise ValueError('Unexpected control files or maintainer scripts')
     fields = dict(line.split(':', 1) for line in control['control'].decode('utf-8').splitlines() if line and not line[0].isspace())
-    if fields.get('Package', '').strip() != 'data-fusion-desktop' or fields.get('Version', '').strip() != version or fields.get('Architecture', '').strip() != ('amd64' if arch == 'x64' else 'arm64'):
+    package_name = 'huizhou-data-fusion-desktop' if deployment else 'data-fusion-desktop'
+    if fields.get('Package', '').strip() != package_name or fields.get('Version', '').strip() != version or fields.get('Architecture', '').strip() != ('amd64' if arch == 'x64' else 'arm64'):
         raise ValueError('Control metadata mismatch')
     if control['control'] != (stage / 'DEBIAN/control').read_bytes():
         raise ValueError('Staged control bytes changed')
@@ -152,24 +156,28 @@ def verify(package, stage, arch, version, compatibility=None):
             expected[name] = path
             if path.is_dir():
                 pending.append(path)
-    executable_modes = {'opt/data-fusion/data-fusion': 0o755, 'opt/data-fusion/chrome_crashpad_handler': 0o755,
-                        'opt/data-fusion/chrome-sandbox': 0o4755}
+    if deployment and any(name == 'opt/data-fusion' or name.startswith('opt/data-fusion/')
+                          or name == 'usr/share/applications/cn.zzkj.datafusion.desktop'
+                          or name == 'usr/share/icons/hicolor/512x512/apps/data-fusion.png' for name in expected):
+        raise ValueError('Huizhou package cannot contain Shenzhen installation paths')
+    executable_modes = {app_root + '/data-fusion': 0o755, app_root + '/chrome_crashpad_handler': 0o755,
+                        app_root + '/chrome-sandbox': 0o4755}
     elf_names = set(executable_modes)
     if compatibility is not None:
         if compatibility != 'kirin990' or arch != 'arm64':
             raise ValueError('Kirin990 variant must use ARM64')
-        private = stage / 'opt/data-fusion/resources/compat/kirin990'
+        private = stage / app_root / 'resources/compat/kirin990'
         metadata = json.loads((private / 'provenance.json').read_text(encoding='utf-8'))
         if metadata.get('variant') != 'kirin990-arm64' or metadata.get('architecture') != 'arm64' or metadata.get('nativeExecutable') != 'data-fusion.bin' or metadata.get('rendererSandbox') is not True:
             raise ValueError('Invalid compatibility metadata')
-        wrapper = stage / 'opt/data-fusion/data-fusion'
+        wrapper = stage / app_root / 'data-fusion'
         reviewed = pathlib.Path(__file__).resolve().parent.parent / 'resources/kirin990-launcher.sh'
         if wrapper.read_bytes() != reviewed.read_bytes().replace(b'\r\n', b'\n') or digest_file(wrapper)[0] != metadata.get('launcherSha256'):
             raise ValueError('Compatibility launcher differs from reviewed source')
-        if digest_file(stage / 'opt/data-fusion/data-fusion.bin')[0] != metadata.get('nativeSha256'):
+        if digest_file(stage / app_root / 'data-fusion.bin')[0] != metadata.get('nativeSha256'):
             raise ValueError('Compatibility native executable changed')
-        executable_modes['opt/data-fusion/data-fusion.bin'] = 0o755
-        elf_names = set(executable_modes) - {'opt/data-fusion/data-fusion'}
+        executable_modes[app_root + '/data-fusion.bin'] = 0o755
+        elf_names = set(executable_modes) - {app_root + '/data-fusion'}
         if not any(entry.get('path') == 'libgbm.so.1' for entry in metadata.get('files', [])):
             raise ValueError('Private GBM is absent')
         for entry in metadata['files']:
@@ -177,7 +185,7 @@ def verify(package, stage, arch, version, compatibility=None):
             if safe_name(name) != name or '/' in name or digest_file(private / name)[0] != entry.get('sha256'):
                 raise ValueError('Private compatibility file changed')
             if entry.get('kind') == 'library':
-                elf_names.add('opt/data-fusion/resources/compat/kirin990/' + name)
+                elf_names.add(app_root + '/resources/compat/kirin990/' + name)
     seen, files, asar_hash, payload_bytes = set(), set(), None, 0
     with tarfile.open(fileobj=io.BytesIO(ar['data.tar.xz']), mode='r|xz',
                       encoding='utf-8', errors='surrogateescape') as archive:
@@ -212,7 +220,7 @@ def verify(package, stage, arch, version, compatibility=None):
                 raise ValueError('Payload or md5sums differ from staged bytes: ' + name)
             if name in elf_names and (prefix[:6] != b'\x7fELF\x02\x01' or int.from_bytes(prefix[18:20], 'little') != (62 if arch == 'x64' else 183)):
                 raise ValueError('ELF architecture mismatch')
-            if name == 'opt/data-fusion/resources/app.asar':
+            if name == app_root + '/resources/app.asar':
                 asar_hash = source_sha
     if seen != set(expected) or files != set(md5sums) or not asar_hash:
         raise ValueError('Payload inventory is incomplete')
@@ -226,7 +234,7 @@ def verify(package, stage, arch, version, compatibility=None):
             'allPayloadBytesMatched': True, 'permissionsVerified': True, 'rootOwnershipVerified': True,
             'gnuTarVerified': True, 'paxHeadersAbsent': True,
             'installedSizeKiB': installed_kib, 'installedSizeDeclared': declared_size is not None,
-            'compatibility': compatibility, 'targetExecuted': False}
+            'compatibility': compatibility, 'deployment': deployment, 'targetExecuted': False}
 
 
 if __name__ == '__main__':
@@ -236,5 +244,6 @@ if __name__ == '__main__':
     parser.add_argument('--arch', required=True, choices=['x64', 'arm64'])
     parser.add_argument('--version', required=True)
     parser.add_argument('--compatibility', choices=['kirin990'])
+    parser.add_argument('--deployment', choices=['huizhou-intranet'])
     args = parser.parse_args()
-    print(json.dumps(verify(args.package, args.stage, args.arch, args.version, args.compatibility), ensure_ascii=False))
+    print(json.dumps(verify(args.package, args.stage, args.arch, args.version, args.compatibility, args.deployment), ensure_ascii=False))

@@ -23,6 +23,7 @@ export type UpdateRecord = {
 };
 export type AuditRecord = { id: string; user_id: string; username: string; action: string; target_type?: string; target_id?: string; metadata_json?: string; created_at: number };
 export type BootstrapData = {
+  deployment?: 'huizhou-intranet' | 'standard';
   user?: { id: string; username: string; role: AdminUser['role']; passwordChangeRequired?:number };
   systems: SystemRecord[];
   tools: Array<{ id: string; name: string; version: string; description?: string }>;

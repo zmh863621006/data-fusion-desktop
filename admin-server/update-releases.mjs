@@ -4,7 +4,7 @@ import { spawn } from 'node:child_process';
 import { chmod, lstat, mkdir, open, rename, unlink } from 'node:fs/promises';
 import { dirname, join, resolve } from 'node:path';
 import { ossUpdateStorageFromFile } from './update-oss.mjs';
-import { RELEASE_VERSION_PATTERN as VERSION, installerName, installerVersion, isInstallerName, installerDisposition, releaseTarget } from './update-filenames.mjs';
+import { RELEASE_VERSION_PATTERN as VERSION, installerName, installerVersion, isInstallerName, installerDisposition, releaseTarget, installerProfile } from './update-filenames.mjs';
 
 const MAX_BYTES = 500 * 1024 * 1024;
 const NSIS_MARKER = Buffer.from('efbeadde4e756c6c736f6674496e7374', 'hex');
@@ -25,6 +25,151 @@ const KIRIN990_FILES = {
   'libffi.so.6': '4fca2d72d71008423fdc880c853ab4e8753946322960c265db199323aeb72e25',
   'COPYRIGHT.libffi6': '7258c8acc378030d8dbe1fcdf394e915769fa31dcbaf3d2991d9a79891f3bcdc',
 };
+
+/** Read the actual PE RT_VERSION resource as data, rather than trusting a renamed EXE. */
+async function windowsProductNames(path) {
+  const file = await open(path, 'r'), length = (await file.stat()).size;
+  async function bytes(offset, size) {
+    if (!Number.isSafeInteger(offset) || !Number.isSafeInteger(size) || offset < 0 || size < 0 || size > 256 * 1024 || offset + size > length) throw new Error('Invalid PE resource range');
+    const result = Buffer.alloc(size); let read = 0;
+    while (read < size) { const part = await file.read(result, read, size - read, offset + read); if (!part.bytesRead) throw new Error('Truncated PE resource'); read += part.bytesRead; }
+    return result;
+  }
+  try {
+    const dos = await bytes(0, 64), position = dos.readUInt32LE(60), coff = await bytes(position, 24);
+    if (dos.toString('ascii', 0, 2) !== 'MZ' || coff.toString('hex', 0, 4) !== '50450000') throw new Error('Invalid PE header');
+    const count = coff.readUInt16LE(6), optionalBytes = coff.readUInt16LE(20);
+    if (!count || count > 96 || optionalBytes < 120 || optionalBytes > 4096) throw new Error('Invalid PE sections');
+    const optional = await bytes(position + 24, optionalBytes), magic = optional.readUInt16LE(0);
+    const dataOffset = magic === 0x10b ? 96 : magic === 0x20b ? 112 : -1;
+    if (dataOffset < 0 || optionalBytes < dataOffset + 24) throw new Error('Invalid PE optional header');
+    const resourceRva = optional.readUInt32LE(dataOffset + 16), resourceBytes = optional.readUInt32LE(dataOffset + 20);
+    if (!resourceRva || !resourceBytes) return [];
+    const sections = await bytes(position + 24 + optionalBytes, count * 40);
+    function offsetFor(rva, size) {
+      for (let index = 0; index < count; index++) {
+        const at = index * 40, start = sections.readUInt32LE(at + 12), rawSize = sections.readUInt32LE(at + 16), rawOffset = sections.readUInt32LE(at + 20);
+        if (rva >= start && rva - start + size <= rawSize && rawOffset + rva - start + size <= length) return rawOffset + rva - start;
+      }
+      throw new Error('PE resource is not backed by file bytes');
+    }
+    const resourceOffset = offsetFor(resourceRva, Math.min(resourceBytes, 16));
+    async function resource(relative, size) {
+      if (!Number.isSafeInteger(relative) || relative < 0 || relative + size > resourceBytes) throw new Error('PE resource directory exceeds bounds');
+      return bytes(resourceOffset + relative, size);
+    }
+    async function directory(relative) {
+      const header = await resource(relative, 16), count = header.readUInt16LE(12) + header.readUInt16LE(14);
+      if (count > 256) throw new Error('PE resource directory exceeds limit');
+      const rows = await resource(relative + 16, count * 8);
+      return Array.from({ length: count }, (_, index) => ({ id: rows.readUInt32LE(index * 8), address: rows.readUInt32LE(index * 8 + 4) }));
+    }
+    const products = []; let blocks = 0;
+    function versionBlock(buffer, start, limit, depth = 0) {
+      if (depth > 8 || ++blocks > 4096 || start + 6 > limit) throw new Error('Invalid VERSIONINFO block');
+      const size = buffer.readUInt16LE(start), valueLength = buffer.readUInt16LE(start + 2), type = buffer.readUInt16LE(start + 4), end = start + size;
+      if (size < 6 || end > limit || ![0, 1].includes(type)) throw new Error('Invalid VERSIONINFO size');
+      let at = start + 6;
+      while (at + 2 <= end && buffer.readUInt16LE(at) !== 0) at += 2;
+      if (at + 2 > end) throw new Error('Unterminated VERSIONINFO key');
+      const key = buffer.toString('utf16le', start + 6, at); at = (at + 2 + 3) & ~3;
+      const valueEnd = at + valueLength * (type === 1 ? 2 : 1);
+      if (valueEnd > end) throw new Error('Invalid VERSIONINFO value');
+      if (!depth && key !== 'VS_VERSION_INFO') throw new Error('Invalid VERSIONINFO root');
+      if (key === 'ProductName') { if (type !== 1 || valueLength > 1024) throw new Error('Invalid installer ProductName'); products.push(buffer.toString('utf16le', at, valueEnd).replace(/\0+$/, '')); }
+      at = (valueEnd + 3) & ~3;
+      while (at + 6 <= end) { const consumed = versionBlock(buffer, at, end, depth + 1); if (!consumed) throw new Error('Empty VERSIONINFO child'); at = (at + consumed + 3) & ~3; }
+      return size;
+    }
+    const versions = (await directory(0)).filter(row => row.id === 16);
+    if (versions.length > 1) throw new Error('Duplicate PE version resource');
+    const visited = new Set();
+    async function visit(address, depth = 0) {
+      const relative = address & 0x7fffffff;
+      if (depth > 4 || visited.has(address)) throw new Error('Invalid PE resource tree'); visited.add(address);
+      if (address & 0x80000000) for (const row of await directory(relative)) await visit(row.address, depth + 1);
+      else {
+        const entry = await resource(relative, 16), size = entry.readUInt32LE(4);
+        if (size < 6 || size > 256 * 1024) throw new Error('Invalid PE version resource size');
+        const content = await bytes(offsetFor(entry.readUInt32LE(0), size), size);
+        versionBlock(content, 0, content.length);
+      }
+    }
+    for (const row of versions) await visit(row.address);
+    return products;
+  } finally { await file.close(); }
+}
+
+export async function validateWindowsDeployment(path, deploymentProfile = 'shenzhen') {
+  installerProfile(deploymentProfile);
+  let names;
+  try { names = await windowsProductNames(path); }
+  catch { if (deploymentProfile === 'huizhou') fail('惠州安装器缺少可验证的产品身份'); return; }
+  if (deploymentProfile === 'huizhou' ? !names.length || names.some(name => name !== '惠州数据融合助手') : names.includes('惠州数据融合助手'))
+    fail('Windows 安装器产品身份与当前部署不一致');
+}
+
+function fixedShellIdentity(bytes, version, arch, variant) {
+  if (bytes.length < 16 || bytes.length > 4 * 1024 * 1024 || bytes.readUInt32LE(0) !== 4) fail('惠州固定壳 ASAR 无效');
+  const headerBytes = bytes.readUInt32LE(4), dataOffset = 8 + headerBytes;
+  if (headerBytes < 8 || headerBytes % 4 || dataOffset > bytes.length || bytes.readUInt32LE(8) !== headerBytes - 4) fail('惠州固定壳 ASAR 头无效');
+  const jsonBytes = bytes.readUInt32LE(12);
+  if (jsonBytes < 2 || jsonBytes > headerBytes - 8 || headerBytes - 8 - jsonBytes > 3 || bytes.subarray(16 + jsonBytes, dataOffset).some(value => value !== 0)) fail('惠州固定壳 ASAR 范围无效');
+  let root;
+  try { root = JSON.parse(new TextDecoder('utf-8', { fatal: true }).decode(bytes.subarray(16, 16 + jsonBytes))); } catch { fail('惠州固定壳 ASAR 目录无效'); }
+  const required = ['business-bootstrap.cjs', 'business-preload.cjs', 'business-startup.html', 'business-updater.cjs', 'package.json', 'shell.json'];
+  if (!root || Object.keys(root).join(',') !== 'files' || !root.files || Object.keys(root.files).sort().join(',') !== [...required].sort().join(',')) fail('惠州固定壳文件身份不符');
+  const ranges = [];
+  for (const [name, entry] of Object.entries(root.files)) {
+    if (!entry || typeof entry !== 'object' || Array.isArray(entry) || entry.link || entry.files || entry.unpacked
+      || !Number.isSafeInteger(entry.size) || entry.size < 0 || typeof entry.offset !== 'string' || !/^(?:0|[1-9]\d*)$/.test(entry.offset)) fail('惠州固定壳条目无效');
+    const start = Number(entry.offset), end = start + entry.size;
+    if (!Number.isSafeInteger(start) || !Number.isSafeInteger(end) || dataOffset + end > bytes.length) fail('惠州固定壳条目越界');
+    ranges.push({ name, start, end });
+  }
+  let previous = 0;
+  for (const entry of ranges.filter(row => row.end > row.start).sort((a, b) => a.start - b.start)) { if (entry.start !== previous) fail('惠州固定壳条目重叠或不连续'); previous = entry.end; }
+  if (dataOffset + previous !== bytes.length) fail('惠州固定壳存在未声明内容');
+  function json(name) {
+    const entry = ranges.find(row => row.name === name); if (entry.end - entry.start > 64 * 1024) fail('惠州固定壳元数据过大');
+    try { return JSON.parse(new TextDecoder('utf-8', { fatal: true }).decode(bytes.subarray(dataOffset + entry.start, dataOffset + entry.end))); } catch { fail('惠州固定壳元数据无效'); }
+  }
+  const pkg = json('package.json'), shell = json('shell.json');
+  if (pkg?.name !== 'huizhou-data-fusion-desktop' || pkg.productName !== '惠州数据融合助手' || pkg.version !== version
+    || pkg.main !== 'business-bootstrap.cjs' || shell?.schema !== 1 || shell.product !== 'data-fusion-desktop'
+    || shell.deployment !== 'huizhou-intranet' || shell.shellVersion !== version || shell.target?.platform !== 'linux'
+    || shell.target.arch !== arch || shell.target.variant !== variant || shell.target.electronMajor !== 44) fail('惠州固定壳内部身份与发布目标不一致');
+}
+
+async function validateHuizhouDebIdentity(path, archive, names, version, arch, variant, base) {
+  const normalized = names.map(name => name.replace(/^\.\//, ''));
+  if (normalized.some(name => name.split('/').includes('..') || name.startsWith('/') || name.includes('\\')
+    || /^opt\/(?:data-fusion|数据融合助手)(?:\/|$)/.test(name)
+    || /^usr\/share\/applications\/(?:cn\.zzkj\.datafusion\.desktop|data-fusion(?:-desktop)?\.desktop)$/.test(name)
+    || /^usr\/share\/icons\/.*\/apps\/data-fusion\.png$/.test(name))) fail('惠州 DEB 包含其他部署的安装路径');
+  const one = relative => {
+    const matches = names.filter(name => name.replace(/^\.\//, '') === relative);
+    if (matches.length !== 1) fail('惠州 DEB 缺少独立安装身份文件：' + relative);
+    return matches[0];
+  };
+  const desktop = (await readTarMember(path, archive, ['-xO'], 64 * 1024, 64 * 1024,
+    one('usr/share/applications/cn.zzkj.datafusion.huizhou.desktop'))).toString('utf8');
+  let inEntry = false, groups = 0; const fields = new Map();
+  for (const line of desktop.split(/\r?\n/)) {
+    if (line.startsWith('[')) { inEntry = line.trim() === '[Desktop Entry]'; if (inEntry && ++groups > 1) fail('惠州桌面入口字段重复'); continue; }
+    if (!inEntry || !line || line.startsWith('#')) continue;
+    const at = line.indexOf('='); if (at < 1) continue;
+    const key = line.slice(0, at).trim(); if (fields.has(key)) fail('惠州桌面入口字段重复'); fields.set(key, line.slice(at + 1).trim());
+  }
+  if (fields.get('Name') !== '惠州数据融合助手' || fields.get('Type') !== 'Application' || fields.get('Icon') !== 'huizhou-data-fusion'
+    || fields.get('StartupWMClass') !== 'huizhou-data-fusion-desktop'
+    || !['/opt/huizhou-data-fusion/data-fusion %U', '"/opt/huizhou-data-fusion/data-fusion" %U'].includes(fields.get('Exec'))) fail('惠州桌面入口身份不符');
+  const icon = await readTarMember(path, archive, ['-xO'], 4 * 1024 * 1024, 4 * 1024 * 1024,
+    one('usr/share/icons/hicolor/512x512/apps/huizhou-data-fusion.png'));
+  if (!icon.subarray(0, 8).equals(Buffer.from('89504e470d0a1a0a', 'hex'))) fail('惠州独立图标不是有效 PNG');
+  const shell = await readTarMember(path, archive, ['-xO'], 4 * 1024 * 1024, 4 * 1024 * 1024, one(base + 'resources/app.asar'));
+  fixedShellIdentity(shell, version, arch, variant);
+}
 
 // Read archive members as data only. tar never extracts files or runs package
 // scripts, and both its elapsed time and output are bounded.
@@ -61,7 +206,9 @@ async function readTarMember(path, member, args, outputLimit, captureLimit = out
   });
 }
 
-export async function validateDebPackage(path, version, arch, length, variant = 'standard') {
+export async function validateDebPackage(path, version, arch, length, variant = 'standard', deploymentProfile = 'shenzhen') {
+  if (!['shenzhen', 'huizhou'].includes(deploymentProfile)) fail('安装器部署配置无效');
+  installerProfile(deploymentProfile);
   if (!VERSION.test(version) || !releaseTarget('linux', arch, variant)) fail('DEB 发布版本或架构无效');
   length ??= (await lstat(path)).size;
   if (!Number.isSafeInteger(length) || length > MAX_BYTES) fail('DEB 大小无效');
@@ -101,11 +248,13 @@ export async function validateDebPackage(path, version, arch, length, variant = 
     .map(line => { const colon = line.indexOf(':'); return [line.slice(0, colon), line.slice(colon + 1).trim()]; });
   if (new Set(pairs.map(([key]) => key.toLowerCase())).size !== pairs.length) fail('DEB 控制字段重复');
   const fields = Object.fromEntries(pairs);
-  if (fields.Package !== 'data-fusion-desktop' || fields.Version !== version || fields.Architecture !== (arch === 'x64' ? 'amd64' : 'arm64'))
+  if (fields.Package !== (deploymentProfile === 'huizhou' ? 'huizhou-data-fusion-desktop' : 'data-fusion-desktop') || fields.Version !== version || fields.Architecture !== (arch === 'x64' ? 'amd64' : 'arm64'))
     fail('DEB 包名、内部版本或芯片架构与发布目标不一致');
   const names = (await readTarMember(path, dataArchive, ['-t'], 8 * 1024 * 1024)).toString('utf8').trim().split(/\r?\n/);
-  const executables = names.filter(name => /^opt\/(?:data-fusion|数据融合助手)\/data-fusion$/.test(name.replace(/^\.\//, '')));
+  const executablePattern = deploymentProfile === 'huizhou' ? /^opt\/huizhou-data-fusion\/data-fusion$/ : /^opt\/(?:data-fusion|数据融合助手)\/data-fusion$/;
+  const executables = names.filter(name => executablePattern.test(name.replace(/^\.\//, '')));
   if (executables.length !== 1) fail('DEB 缺少唯一数据融合助手程序');
+  if (deploymentProfile === 'huizhou') await validateHuizhouDebIdentity(path, dataArchive, names, version, arch, variant, 'opt/huizhou-data-fusion/');
   const isElf = elf => elf.length >= 20 && elf.toString('hex', 0, 4) === '7f454c46' && elf[4] === 2 && elf[5] === 1
     && elf.readUInt16LE(18) === (arch === 'x64' ? 62 : 183);
   if (variant === 'kirin990') {
@@ -155,8 +304,9 @@ export function updatePublicOrigin(value) {
 
 /** Administrative uploads are deliberately distinct from the public web/readonly code tree. */
 export function createUpdateReleases(db, { directory, publicOrigin, transaction, audit, authorize,
-  maxBytes = MAX_BYTES, uploadTimeoutMs = 10 * 60_000, now = Date.now, ossStorage, storageMode = 'oss' } = {}) {
+  maxBytes = MAX_BYTES, uploadTimeoutMs = 10 * 60_000, now = Date.now, ossStorage, storageMode = 'oss', deploymentProfile = 'shenzhen' } = {}) {
   if (!['oss', 'local'].includes(storageMode)) fail('安装包存储模式无效', 503);
+  try { installerProfile(deploymentProfile); } catch { fail('安装器部署配置无效', 503); }
   const origin = updatePublicOrigin(publicOrigin);
   const root = directory ? resolve(directory) : null;
   if (!Number.isSafeInteger(maxBytes) || maxBytes < 1024 || maxBytes > MAX_BYTES) throw new Error('Invalid installer size limit');
@@ -206,7 +356,10 @@ export function createUpdateReleases(db, { directory, publicOrigin, transaction,
     return path;
   };
   const urlFor = (entry, version = entry.version) => mirror && entry.oss_key ? mirror.downloadUrl(entry.oss_key)
-    : origin ? `${origin}/api/releases/${entry.update_id}/${encodeURIComponent(entry.file_name ?? installerName(version))}` : null;
+    : origin ? `${origin}/api/releases/${entry.update_id}/${encodeURIComponent(entry.file_name ?? installerName(version, entry.platform, entry.arch, entry.variant, deploymentProfile))}` : null;
+  const profileMatches = entry => deploymentProfile === 'huizhou'
+    ? isInstallerName(entry.file_name, entry.version, entry.platform, entry.arch, entry.variant, deploymentProfile)
+    : installerVersion(entry.file_name, 'huizhou') === null;
   const describe = row => {
     const entry = artifact(row.id);
     const target = releaseTarget(row.platform ?? 'win32', row.arch ?? 'x64', row.variant);
@@ -249,7 +402,7 @@ export function createUpdateReleases(db, { directory, publicOrigin, transaction,
       try { notes = new TextDecoder('utf-8', { fatal: true }).decode(Buffer.from(encodedNotes, 'base64')); }
       catch { fail('更新说明必须为有效UTF-8'); }
     }
-    if (!VERSION.test(version) || !isInstallerName(name, version, target.platform, target.arch, target.variant) || notes.length > 1000) fail('版本号、安装包名称或更新说明无效');
+    if (!VERSION.test(version) || !isInstallerName(name, version, target.platform, target.arch, target.variant, deploymentProfile) || notes.length > 1000) fail('版本号、安装包名称或更新说明无效');
     const expected = request.headers['x-content-sha256'];
     if (expected !== undefined && !/^[a-f0-9]{64}$/.test(expected)) fail('客户端SHA256格式无效');
     const declared = request.headers['content-length'];
@@ -312,8 +465,8 @@ export function createUpdateReleases(db, { directory, publicOrigin, transaction,
       // may run without socket traffic. Keep the original total deadline above.
       request.setTimeout(uploadTimeoutMs);
       if (declared !== undefined && Number(declared) !== length) fail('安装包上传不完整，请重试');
-      if (target.platform === 'win32') validatePE(prefix, hasNsis);
-      else await validateDebPackage(temporary, version, target.arch, length, target.variant);
+      if (target.platform === 'win32') { validatePE(prefix, hasNsis); await validateWindowsDeployment(temporary, deploymentProfile); }
+      else await validateDebPackage(temporary, version, target.arch, length, target.variant, deploymentProfile);
       const sha256 = hash.digest('hex');
       if (expected && expected !== sha256) fail('安装包SHA256校验失败，未保留上传文件');
       const current = authorize(request);
@@ -342,6 +495,7 @@ export function createUpdateReleases(db, { directory, publicOrigin, transaction,
   async function publish(id, enabled, request, user) {
     const entry = artifact(id);
     if (!entry) return false;
+    if (enabled && !profileMatches(entry)) fail('安装器不属于当前部署，不能发布', 409);
     if (entry.state !== 'ready') fail('安装包尚未上传完成，不能发布', 409);
     if (publishing.has(id)) fail('该版本正在校验发布，请等待完成后操作', 409);
     publishing.add(id);
@@ -372,16 +526,16 @@ export function createUpdateReleases(db, { directory, publicOrigin, transaction,
     if (!match || !['GET', 'HEAD'].includes(request.method)) return false;
     let name;
     try { name = decodeURIComponent(match[2]); } catch { return false; }
-    if (!installerVersion(name)) return false;
+    if (!installerVersion(name, deploymentProfile)) return false;
     const entry = artifact(match[1]), row = update(match[1]);
-    if (!entry || entry.state !== 'ready' || !row?.enabled || entry.file_name !== name) fail('更新包不存在或尚未发布', 404);
+    if (!entry || !profileMatches(entry) || entry.state !== 'ready' || !row?.enabled || entry.file_name !== name) fail('更新包不存在或尚未发布', 404);
     if (url.searchParams.get('download') === 'oss' && mirror && entry.oss_key) {
       response.writeHead(302, { location: mirror.downloadUrl(entry.oss_key, request.method), 'cache-control': 'no-store' });
       response.end(); return true;
     }
     const path = await regularFile(entry), size = entry.bytes, etag = `"${entry.sha256}"`;
     response.setHeader('content-type', 'application/octet-stream');
-    response.setHeader('content-disposition', installerDisposition(entry.file_name, entry.version));
+    response.setHeader('content-disposition', installerDisposition(entry.file_name, entry.version, deploymentProfile));
     response.setHeader('cache-control', 'public, max-age=0, must-revalidate');
     response.setHeader('etag', etag); response.setHeader('accept-ranges', 'bytes');
     if (request.headers['if-none-match'] === etag) { response.writeHead(304); response.end(); return true; }
@@ -415,13 +569,13 @@ export function createUpdateReleases(db, { directory, publicOrigin, transaction,
       if (!entry) {
         // An intranet instance must never hand legacy external URLs to a
         // desktop merely because an old release row was imported with its DB.
-        if (storageMode === 'local') return null;
+        if (storageMode === 'local' || deploymentProfile === 'huizhou') return null;
         if (target.platform === 'linux') return null;
         // Preserve the legacy Windows external-link response, including its
         // optional MSI/manual-update behavior. Linux requires managed bytes.
         const { id, version, url, sha256, notes } = row; return { id, version, url, sha256, notes };
       }
-      if (entry.platform !== target.platform || entry.arch !== target.arch || entry.variant !== (target.variant ?? 'standard')) return null;
+      if (!profileMatches(entry) || entry.platform !== target.platform || entry.arch !== target.arch || entry.variant !== (target.variant ?? 'standard')) return null;
       if (entry.state !== 'ready' || !origin) return null;
       return { id: row.id, version: row.version, url: urlFor(entry), sha256: entry.sha256, notes: row.notes, bytes: entry.bytes, fileName: entry.file_name,
         ...target };

@@ -12,6 +12,8 @@ export async function stageBusinessShell(options = {}) {
   assert(inside(payloadPath, root), 'Payload receipt must stay in the project');
   const payload = await readJson(payloadPath), source = await readJson(join(root, 'package.json'));
   const metadata = payload.metadata, target = checkedTarget(metadata?.target);
+  assert(options.deployment === undefined || options.deployment === 'huizhou-intranet', 'Invalid fixed-shell deployment identity');
+  const huizhou = options.deployment === 'huizhou-intranet';
   assert.deepEqual(target, metadata.target, 'Unexpected business target fields');
   assert(metadata.schema === 1 && metadata.product === 'data-fusion-desktop' && metadata.entry === 'out/main/index.js', 'Invalid business payload identity');
   checkedVersion(metadata.version); checkedVersion(metadata.minShellVersion);
@@ -35,10 +37,11 @@ export async function stageBusinessShell(options = {}) {
   for (const name of resources) { const file = join(root, 'resources', name); await ordinary(file); await copyFile(file, join(appDirectory, name)); }
   await copyFile(payload.file, join(resourceDirectory, 'business/builtin.asar'));
   const shell = { schema: 1, product: 'data-fusion-desktop', shellVersion: version, baseBusinessVersion: metadata.version,
+    ...(huizhou ? { deployment: 'huizhou-intranet' } : {}),
     target, feedBase: checkedFeed(options.feedBase ?? DEFAULT_FEED_BASE), publicKey,
     builtin: { bytes: payload.bytes, sha256: payload.sha256, version: metadata.version, backend: metadata.backend, minShellVersion: metadata.minShellVersion } };
   await writeFile(join(appDirectory, 'shell.json'), JSON.stringify(shell, null, 2) + '\n');
-  await writeFile(join(appDirectory, 'package.json'), JSON.stringify({ name: source.name, productName: source.productName,
+  await writeFile(join(appDirectory, 'package.json'), JSON.stringify({ name: huizhou ? 'huizhou-data-fusion-desktop' : source.name, productName: huizhou ? '惠州数据融合助手' : source.productName,
     version, author: source.author, description: source.description, license: source.license, private: true,
     main: 'business-bootstrap.cjs', dependencies: {} }, null, 2) + '\n');
   const outputDirectory = resolve(root, options.outputRoot ?? join('release', version, 'shell'), laneForTarget(target));
@@ -53,6 +56,7 @@ export async function stageBusinessShell(options = {}) {
     assert.equal((await readFile(join(electronDist, 'version'), 'utf8')).trim(), electronVersion, 'Selected Electron distribution version differs from the shell target');
   }
   const receipt = { schema: 1, stage, appDirectory, resourceDirectory, outputDirectory, target, shellVersion: version,
+    ...(huizhou ? { deployment: 'huizhou-intranet' } : {}),
     baseBusinessVersion: metadata.version, payload: { file: payload.file, bytes: payload.bytes, sha256: payload.sha256 },
     electronVersion, electronDist, shellJson: join(appDirectory, 'shell.json') };
   await writeFile(join(stage, 'stage.json'), JSON.stringify(receipt, null, 2) + '\n');
@@ -60,7 +64,7 @@ export async function stageBusinessShell(options = {}) {
 }
 
 if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
-  const args = parseArguments(process.argv.slice(2), ['payload', 'shell-version', 'feed-base', 'output-root', 'electron-dist']);
+  const args = parseArguments(process.argv.slice(2), ['payload', 'shell-version', 'feed-base', 'output-root', 'electron-dist', 'deployment']);
   assert(args.payload, 'Usage: node scripts/stage-business-shell.mjs --payload <payload.json>');
   const options = Object.fromEntries(Object.entries(args).map(([key, value]) => [key.replace(/-([a-z])/g, (_, letter) => letter.toUpperCase()), value]));
   const stage = await stageBusinessShell(options); console.log(JSON.stringify(stage));

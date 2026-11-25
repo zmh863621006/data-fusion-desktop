@@ -4,8 +4,13 @@ Unicode true
 !include "x64.nsh"
 !include "FileFunc.nsh"
 
-Name "数据融合助手"
-Caption "数据融合助手 安装"
+!ifdef HUIZHOU_PRODUCT
+  Name "惠州数据融合助手"
+  Caption "惠州数据融合助手 安装"
+!else
+  Name "数据融合助手"
+  Caption "数据融合助手 安装"
+!endif
 OutFile "${OUTPUT_FILE}"
 Icon "${APP_ICON}"
 RequestExecutionLevel user
@@ -17,8 +22,13 @@ Page instfiles
 SetCompress off
 LoadLanguageFile "${NSISDIR}\Contrib\Language files\SimpChinese.nlf"
 VIProductVersion "${APP_VERSION}.0"
-VIAddVersionKey /LANG=2052 "ProductName" "数据融合助手"
-VIAddVersionKey /LANG=2052 "FileDescription" "数据融合助手通用安装程序"
+!ifdef HUIZHOU_PRODUCT
+  VIAddVersionKey /LANG=2052 "ProductName" "惠州数据融合助手"
+  VIAddVersionKey /LANG=2052 "FileDescription" "惠州数据融合助手通用安装程序"
+!else
+  VIAddVersionKey /LANG=2052 "ProductName" "数据融合助手"
+  VIAddVersionKey /LANG=2052 "FileDescription" "数据融合助手通用安装程序"
+!endif
 VIAddVersionKey /LANG=2052 "CompanyName" "数据融合助手"
 VIAddVersionKey /LANG=2052 "FileVersion" "${APP_VERSION}"
 
@@ -52,7 +62,11 @@ Function .onInit
   ${GetOptions} $ForwardArguments "/CHECKOS" $CheckOnly
   ${IfNot} ${Errors}
     ClearErrors
-    FileOpen $0 "$TEMP\DataFusion-Universal-${APP_VERSION}-platform.txt" w
+    !ifdef HUIZHOU_PRODUCT
+      FileOpen $0 "$TEMP\HuizhouDataFusion-Universal-${APP_VERSION}-platform.txt" w
+    !else
+      FileOpen $0 "$TEMP\DataFusion-Universal-${APP_VERSION}-platform.txt" w
+    !endif
     ${If} ${Errors}
       SetErrorLevel 23
       Quit
@@ -62,7 +76,11 @@ Function .onInit
     SetErrorLevel 0
     Quit
   ${EndIf}
-  System::Call 'kernel32::CreateMutexW(p 0, i 0, w "Local\DataFusionUniversal-${APP_VERSION}") p .r0 ?e'
+  !ifdef HUIZHOU_PRODUCT
+    System::Call 'kernel32::CreateMutexW(p 0, i 0, w "Local\HuizhouDataFusionUniversal-${APP_VERSION}") p .r0 ?e'
+  !else
+    System::Call 'kernel32::CreateMutexW(p 0, i 0, w "Local\DataFusionUniversal-${APP_VERSION}") p .r0 ?e'
+  !endif
   Pop $1
   StrCpy $BootstrapMutex $0
   ${If} $1 == 183

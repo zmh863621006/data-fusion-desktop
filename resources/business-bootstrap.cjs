@@ -6,13 +6,28 @@ const path = require('node:path');
 const fs = require('original-fs');
 const updater = require('./business-updater.cjs');
 const shell = require('./shell.json');
+// This is fixed, trusted base-package configuration, never a renderer/env value.
+if (shell.deployment !== undefined && shell.deployment !== 'huizhou-intranet') throw Error('INVALID_SHELL_DEPLOYMENT');
+const huizhou = shell.deployment === 'huizhou-intranet';
+const applicationId = huizhou ? 'cn.zzkj.datafusion.huizhou.desktop' : 'cn.zzkj.datafusion.desktop';
+const productName = huizhou ? '惠州数据融合助手' : '数据融合助手';
 
 if (process.platform === 'linux' && !app.commandLine.hasSwitch('password-store')) app.commandLine.appendSwitch('password-store', 'gnome-libsecret');
 const legacy = process.platform === 'win32' && Number(process.versions.electron.split('.')[0]) === 22;
 const profile = app.commandLine.getSwitchValue('user-data-dir');
-const profilePath = profile ? path.resolve(profile) : path.join(app.getPath('appData'), legacy ? 'data-fusion-desktop-win7' : 'data-fusion-desktop');
+const profileName = huizhou ? (legacy ? 'huizhou-data-fusion-desktop-win7' : 'huizhou-data-fusion-desktop')
+  : legacy ? 'data-fusion-desktop-win7' : 'data-fusion-desktop';
+const profilePath = profile ? path.resolve(profile) : path.join(app.getPath('appData'), profileName);
+// Frozen business payloads also read this switch before choosing their profile.
+// Supply it internally so they cannot reset Huizhou to the Shenzhen directory.
+if (huizhou && !profile) app.commandLine.appendSwitch('user-data-dir', profilePath);
 fs.mkdirSync(profilePath, { recursive: true }); app.setPath('userData', profilePath);
-if (process.platform === 'win32') app.setAppUserModelId('cn.zzkj.datafusion.desktop');
+if (huizhou) app.setName(productName);
+if (huizhou && process.platform === 'linux') {
+  app.commandLine.appendSwitch('class', 'huizhou-data-fusion-desktop');
+  app.setDesktopName('cn.zzkj.datafusion.huizhou.desktop');
+}
+if (process.platform === 'win32') app.setAppUserModelId(applicationId);
 const primaryInstance = app.requestSingleInstanceLock();
 let window = null, running, businessAttempted = false, businessStarted = false, quitting = false;
 const coldStartAbort = new AbortController();
@@ -56,7 +71,7 @@ function blocked(code) {
 function showWindow() {
   if (window && !window.isDestroyed()) { window.show(); window.focus(); return; }
   window = new BrowserWindow({ width: 380, height: state.status === 'blocked' ? 320 : 250, frame: false, resizable: false, maximizable: false, show: false, autoHideMenuBar: true, backgroundColor: '#ffffff',
-    title: '数据融合助手', webPreferences: { preload: path.join(__dirname, 'business-preload.cjs'), sandbox: true, contextIsolation: true, nodeIntegration: false } });
+    title: productName, webPreferences: { preload: path.join(__dirname, 'business-preload.cjs'), sandbox: true, contextIsolation: true, nodeIntegration: false } });
   window.webContents.setWindowOpenHandler(() => ({ action: 'deny' }));
   window.webContents.on('will-navigate', event => event.preventDefault());
   window.webContents.on('will-attach-webview', event => event.preventDefault());
@@ -115,6 +130,8 @@ async function start() {
       Object.defineProperty(globalThis, '__DATA_FUSION_BUSINESS_BOOTSTRAP__', { value: Object.freeze(context), writable: false, configurable: false });
       businessAttempted = true; record('business-load', { offline: context.offline });
       require(path.join(selected.root, 'out', 'main', 'index.js'));
+      // The frozen shared payload sets its historical model ID at module load.
+      if (huizhou && process.platform === 'win32') app.setAppUserModelId(applicationId);
     } catch (error) { if (!quitting) blocked(error.code || 'BUSINESS_START_FAILED'); }
   })();
   try { await running; } finally { running = null; }

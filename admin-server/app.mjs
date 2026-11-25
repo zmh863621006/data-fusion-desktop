@@ -303,6 +303,7 @@ const enterprises = createEnterpriseStore(database, {
 });
 const updateReleases = createUpdateReleases(database, {
   storageMode: updateStorageMode,
+  deploymentProfile: intranet ? 'huizhou' : 'shenzhen',
   directory: options.releaseDirectory ?? process.env.ADMIN_UPDATE_DIRECTORY ?? (dataPath === ':memory:' ? undefined : join(dirname(dataPath), 'releases')),
   publicOrigin: options.updatePublicOrigin ?? process.env.ADMIN_UPDATE_PUBLIC_ORIGIN ?? publicOrigin,
   transaction, audit, authorize: currentUser,
@@ -567,6 +568,7 @@ async function api(request, response, url) {
     const user = requireAdmin(request, response); if (!user) return;
     return json(response, 200, {
       user,
+      deployment: intranet ? 'huizhou-intranet' : 'standard',
       tools: toolCatalog,
       systems: all('SELECT * FROM systems ORDER BY name'), matters: all('SELECT * FROM system_matters ORDER BY system_id,department_order,matter_order,name'), customers: all('SELECT * FROM customers ORDER BY created_at DESC'),
       licenses: all(`SELECT l.*,c.name customer_name FROM licenses l JOIN customers c ON c.id=l.customer_id ORDER BY l.created_at DESC`),

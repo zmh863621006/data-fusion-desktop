@@ -34,7 +34,7 @@ export function uploadRelease(file: File, values: UploadReleaseValues, options: 
   // cannot change which release this upload is acknowledged as.
   values = { ...values };
   const target = releaseTarget(values);
-  const validation = releaseFileError(file, values.version, target);
+  const validation = releaseFileError(file, values.version, target, values.deploymentProfile);
   if (validation) return Promise.reject(new ApiError(validation, 400));
   if ((values.notes?.length ?? 0) > 1000) return Promise.reject(new ApiError('更新说明不能超过 1000 字', 400));
   if (options.signal?.aborted) return Promise.reject(new ApiError('上传已取消', 0, 'UPLOAD_CANCELLED'));

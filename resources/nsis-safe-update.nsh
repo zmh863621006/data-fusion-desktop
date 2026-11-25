@@ -31,7 +31,11 @@
       ReadRegStr $exportPreviousMachine HKLM "${INSTALL_REGISTRY_KEY}" InstallLocation
       System::Call 'kernel32::GetCurrentProcessId() i .r0'
       System::Call 'kernel32::GetTickCount() i .r1'
-      StrCpy $exportBackupPath "$APPDATA\data-fusion-desktop\updates\export-backups\${VERSION}-$0-$1"
+      !ifdef DATA_FUSION_HUIZHOU
+        StrCpy $exportBackupPath "$APPDATA\huizhou-data-fusion-desktop\updates\export-backups\${VERSION}-$0-$1"
+      !else
+        StrCpy $exportBackupPath "$APPDATA\data-fusion-desktop\updates\export-backups\${VERSION}-$0-$1"
+      !endif
       ; Environment transport preserves Unicode, quotes and trailing backslashes.
       ; The fixed helper does not run scripts or change Windows security policies.
       System::Call 'kernel32::SetEnvironmentVariable(t "DATA_FUSION_EXPORT_INSTALL", t "$INSTDIR")'

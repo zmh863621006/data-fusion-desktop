@@ -1,10 +1,10 @@
 # 惠州政务内网部署改造
 
-分支：`codex/huizhou-intranet`，基于已发布 1.1.11 的 `930cf9d`。本分支实现与隔离验证不等于惠州服务器已上线，未修改深圳更新通道、腾讯后台或政务云服务。源码根 `package.json` 版本仍是基础包版本，不用它冒充新的业务发布版本。
+分支：`codex/huizhou-intranet`，基于已发布 1.1.11 的 `930cf9d`。2026-11-26 已在惠州政务云部署独立后台，管理入口为 `https://sjrh.hzszsj.cn:10001/fusion-assistant/`；原域名首页保留。源码根 `package.json` 版本仍是基础包版本，不用它冒充新的业务发布版本。深圳更新通道和腾讯后台未变更。
 
 ## 内网后台与存储
 
-后台使用 Node 24、SQLite/WAL；当前模块运行依赖按实际导入完整交付，管理网页预构建。惠州业务记录直接以 JSON 接口上传、入库，不生成或上传 Excel 中间文件。后台是独立实例，业务数据库、更新 ASAR 和安装包保存在惠州服务器的数据盘，独立备份。Node24/Nginx Bookworm 镜像离线导入；旧 CentOS7 内核上的实际运行兼容性仍须在候选服务器验收。
+后台使用 Node 24、SQLite/WAL；当前模块运行依赖按实际导入完整交付，管理网页预构建。惠州业务记录直接以 JSON 接口上传、入库，不生成或上传 Excel 中间文件。后台是独立实例，业务数据库、更新 ASAR 和安装包保存在惠州服务器的数据盘。运行镜像已离线导入并在实际服务器验证 Node 24.22.0、SQLite 3.53.4、tar/xz 和非 root 只读容器运行。
 
 复制 `admin-server/deploy/huizhou-intranet.env.example` 到服务器私有配置目录，填写真实内网 HTTPS 域名、管理来源、证书、签名私钥和数据库/文件路径；容器部署时改成容器内挂载路径，`ADMIN_HOST=0.0.0.0` 仅在私有容器网络使用。Node 服务不直接发布公网端口。代理示例为 `nginx.conf.example` 或已有容器的 `docker-http-nginx.conf.example`；外层 HTTPS 入口仍需要正确配置。
 
@@ -29,7 +29,11 @@ npm run build:huizhou:win7
 node scripts/build-business-payload.mjs --version 1.2.0 --platform win32 --arch x64 --variant standard --electron-major 44 --source out-huizhou --backend-origin https://fusion.example.invalid --backend-revision 1
 ```
 
-固定启动器由现有 `scripts/stage-business-shell.mjs --payload <payload.json> --feed-base https://<实际内网域名>/business-updates/` 生成。Windows兼容通道和麒麟目标需使用各自现有打包流程，不能将一个目标包直接标成其他架构。惠州包与深圳包使用独立发布目录和清单，不在深圳通道上传惠州构建。现有深圳启动器不会自动转入惠州，首装需交付惠州专用基础包。若复用既有个人资料目录，须先备份并明确原授权归属，不能直接复制其他客户的许可证或会话。
+固定启动器由现有 `scripts/stage-business-shell.mjs --payload <payload.json> --deployment huizhou-intranet --feed-base https://<实际内网域名>/business-updates/` 生成。Windows兼容通道和麒麟目标需使用各自现有打包流程，不能将一个目标包直接标成其他架构。惠州包与深圳包使用独立发布目录和清单，不在深圳通道上传惠州构建。现有深圳启动器不会自动转入惠州，首装需交付惠州专用基础包。
+
+惠州基础包使用独立 appId `cn.zzkj.datafusion.huizhou.desktop`，Windows 进程 `HuizhouDataFusion.exe`、默认安装目录 `%LOCALAPPDATA%\Programs\HuizhouDataFusion`、快捷方式“惠州数据融合助手”，以及 `huizhou-data-fusion-desktop` 资料目录（Win7/22 带 `-win7` 后缀）。麒麟包名为 `huizhou-data-fusion-desktop`，安装到 `/opt/huizhou-data-fusion`，使用独立桌面入口和图标。不自动迁移、清空或读取深圳资料及 pending。冻结的 1.2.0 业务 ASAR 保持原字节，受信固定壳向其内部提供正确的资料目录；Windows 业务 main 加载后恢复惠州 AppUserModelId。
+
+管理端以受信 `bootstrap.deployment` 区分安装器身份，惠州上传要求专用文件名、Windows 真正 PE 产品名和 DEB 包名/路径/桌面入口/图标/固定壳元数据。内部 Win7 组件不作为正式下载通道；Windows 通道发布包含两种运行时的兼容通用安装器。同版本同目标不可替换。标准深圳部署保留原默认身份校验。
 
 管理后台支持本地业务包上传、发布和下载：保留 RSA-SHA256 签名、SHA256、目标与版本检查、后台地址修订和发布租约；本地清单与发布状态在同一 SQLite 事务提交，异常退出不会露出未发布草稿。ASAR 是只读文件，读取前检查文件身份、大小、摘要和路径。惠州部署还拒绝后台地址不匹配的业务包。当前强制版本不能直接下线，修复通过更高版本发布。
 
@@ -71,6 +75,20 @@ node scripts/build-business-payload.mjs --version 1.2.0 --platform win32 --arch 
 
 离线后台包使用 `node scripts/package-huizhou-server.mjs --output release/huizhou-intranet-server-api-20261126` 生成；包含实际管理网页、后台模块、所需业务目录JSON、纯JS运行依赖、部署样例与SHA256清单。输出目录拒绝覆盖不同内容，不在服务器启动时安装依赖。候选包不含真实环境文件、密钥、业务库和用户会话；`server-package.json` 可用于逐文件核验。
 
-该接口版候选包已移到项目以外的系统临时目录独立启动验证：健康接口200，管理端三个接口未登录401，接收能力声明启用，旧一窗Excel上传接口404；全部文件摘要通过，临时测试进程/数据库/密钥已清理。该结果是本地离线可运行验收，尚未部署到政务云服务器。
+接口版候选包曾移到项目外独立启动验证；实际服务器另以隔离临时库完成 503 条 JSON 记录、6 分块、幂等、分页、设备签名拒绝及管理员保护验收，不往生产库放合成业务记录。正式 HTTPS 已验证健康200、管理接口未登录401、接收能力启用、旧一窗Excel接口404及原首页字节未变。
 
-正式上线前仍需：实际内网域名/证书和终端信任，候选服务器容器兼容性及资源限制，惠州专用基础安装包五目标签名更新，真实业务小范围回流、备份恢复和持续容量验证。Windows/麒麟构建成功不等于对应系统实机验收。当前代码和离线候选包尚未发布到任何现网。
+## 实际部署与运维
+
+后端在 `192.168.71.58` 的独立容器 `huizhou-fusion-admin`，数据根 `/srv/data/huizhou-fusion-assistant`，配置与私钥放在 `/etc/huizhou-fusion-assistant`。沿用原 `192.168.71.39` TLS 入口及 `*.hzszsj.cn` 证书，仅新增助手路径代理。后端 `19087` 只绑定业务网地址，专用 Docker 网络和 DOCKER-USER 规则只允许 `.39` 访问；已从另一政务主机验证无法直连。原 Java 服务及其他应用未重启。
+
+容器使用非 root UID/GID 18087、只读根目录、只读代码/私钥挂载、cap-drop ALL、no-new-privileges、1 CPU/1GiB/128 PID限制、日志轮转和 unless-stopped 重启。SQLite 每日03:45做一致性同机备份，由 systemd timer 管理；这不代替异机灾备。切换新版代码前先做在线快照，旧容器/代码保留用于回退，不以旧快照覆盖新增业务。
+
+正式业务版本1.2.0、后台修订1，五路签名 ASAR 已在内网发布，并完成实际 TLS 下载、RSA 签名及 SHA256 验证。基础包最终目录为 `release/huizhou-intranet-1.2.0-isolated`；原原型目录的壳/安装器已标记作废，其五路原业务 ASAR 仍有效。新固定壳在本机分别以 Electron44/22 加载业务代码，实际检查页面、IPC、SQLite、JSON队列、默认资料隔离、最终appId和旧深圳pending哨兵保留；通用器只做 `/CHECKOS` 无安装检查。Windows安装器尚未做 Authenticode 签名。
+
+四个完整安装器通道（Windows兼容通用、麒麟x64、ARM64、海思990）也已通过真实管理API上传、密码确认发布、无跳转的完整HTTPS下载、SHA256和断点下载验证。正式数据目录保留4条安装器及5条业务更新发布记录。后台页面最后修订 `20261126-huizhou-web-r3` 已在正式域名完成1520px、390px、360px只读渲染验收，无页面横向溢出、外联或渲染错误。
+
+阿里云企业 APPCODE 已沿用并在管理API启用，部署期间未发起付费企业查询。管理员凭据和验证证据位于 ignored 的 `private/deploy/huizhou-20261126/`，不进入 Git 或安装包。生产初始为空客户/授权/设备/回流，真实用户需由管理员配置相应授权。
+
+尚需实际终端的小范围真实业务回流和持续容量观察。Win7操作系统、麒麟x64/ARM64/海思990硬件未做实机验收；构建、结构和本机运行检查不等于这些目标设备验收。
+
+本轮独立身份改造验证：后台172项、固定壳与打包55项、TypeScript及管理网页构建通过。全量Vitest其余1,135项通过，1项安装交接测试在并行构建期间达到5秒上限；该完整测试文件单独复跑30项全部通过。正式页面验收发现并修复窄屏通道选择控件溢出，生产构建已在360px、390px和桌面宽度复验。

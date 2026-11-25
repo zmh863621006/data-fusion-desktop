@@ -95,6 +95,15 @@ describe('admin interface regression', () => {
     expect(details).toContain('Windows · 64 位通用版');
     expect(details).toContain('&lt;script&gt;'); expect(details).not.toContain('<script>');
   });
+  it('uses the explicit Huizhou bootstrap identity for installer management while older bootstrap data stays standard', () => {
+    atPage('updates');
+    const local = render(<UpdatesPage data={{ ...emptyData, deployment: 'huizhou-intranet' }} reload={async () => {}} />);
+    expect(local).toContain('发布到 惠州数据融合助手');
+    const standard = render(<UpdatesPage data={emptyData} reload={async () => {}} />);
+    expect(standard).not.toContain('发布到 惠州数据融合助手');
+    const detail = render(<ReleaseDetails deploymentProfile="huizhou" release={{ version: '1.2.0', fileName: '惠州数据融合助手-安装包-1.2.0-x64.exe', bytes: 1024, sha256: 'a'.repeat(64), url: 'https://fixture.example.invalid/package.exe' }} />);
+    expect(detail).toContain('产品'); expect(detail).toContain('惠州数据融合助手'); expect(detail).toContain('Windows');
+  });
   it('offers platform and Kylin architecture controls with accurate release details', () => {
     atPage('updates');
     const onPlatformChange = () => {}, onArchitectureChange = () => {};

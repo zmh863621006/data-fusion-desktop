@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { RELEASE_MAX_BYTES, RELEASE_STATUS_LABELS, releaseFileError, releaseFileSize, releaseStatus, releaseTargetLabel, releasesForTarget } from './releases';
+import { RELEASE_MAX_BYTES, RELEASE_STATUS_LABELS, releaseDeploymentProfile, releaseFileError, releaseFileSize, releaseInstallerName, releaseStatus, releaseTargetLabel, releasesForTarget } from './releases';
 import type { UpdateRecord } from './types';
 
 const file = { name: 'DataFusion-Setup-1.0.3-x64.exe', size: 117414503 };
@@ -69,5 +69,38 @@ describe('managed release presentation and local preflight', () => {
     expect(releaseFileError({ ...file, name: '数据融合助手-麒麟版-1.0.3-arm64.deb' }, '1.0.3', target)).toContain('海思990');
     expect(releaseFileError(dedicated, '1.0.3', { ...target, arch: 'x64' })).toContain('无效');
     expect(releaseFileError(dedicated, '1.0.3', { ...target, platform: 'win32' })).toContain('无效');
+  });
+  it('selects the isolated Huizhou installer profile only from explicit deployment metadata', () => {
+    expect(releaseDeploymentProfile()).toBe('standard');
+    expect(releaseDeploymentProfile('standard')).toBe('standard');
+    expect(releaseDeploymentProfile('huizhou-intranet')).toBe('huizhou');
+    expect(releaseInstallerName('1.2.0')).toBe('数据融合助手-安装包-1.2.0-x64.exe');
+    expect(releaseInstallerName('1.2.0', { platform: 'win32', arch: 'x64' }, 'huizhou')).toBe('惠州数据融合助手-安装包-1.2.0-x64.exe');
+  });
+  it.each([
+    ['惠州数据融合助手-安装包-1.2.0-x64.exe', { platform: 'win32', arch: 'x64' }],
+    ['惠州数据融合助手-兼容通用安装包-1.2.0-x64.exe', { platform: 'win32', arch: 'x64' }],
+    ['惠州数据融合助手-麒麟版-1.2.0-x64.deb', { platform: 'linux', arch: 'x64' }],
+    ['惠州数据融合助手-麒麟版-1.2.0-arm64.deb', { platform: 'linux', arch: 'arm64' }],
+    ['惠州数据融合助手-麒麟海思990版-1.2.0-arm64.deb', { platform: 'linux', arch: 'arm64', variant: 'kirin990' }],
+  ] as const)('accepts only the matching isolated target for %s', (name, target) => {
+    const value = { name, size: 1000 };
+    expect(releaseFileError(value, '1.2.0', target, 'huizhou')).toBe('');
+    expect(releaseFileError(value, '1.2.0', target)).toContain('匹配当前平台与架构');
+    expect(releaseFileError(value, '1.2.1', target, 'huizhou')).toContain('名称需与版本号一致');
+    expect(releaseFileError({ ...value, size: 0 }, '1.2.0', target, 'huizhou')).toContain('为空');
+    expect(releaseFileError({ ...value, size: RELEASE_MAX_BYTES + 1 }, '1.2.0', target, 'huizhou')).toContain('500 MB');
+  });
+  it('rejects Shenzhen, internal component, wrong architecture and test package names in the Huizhou profile', () => {
+    const value = { size: 1000 };
+    const windows = { platform: 'win32', arch: 'x64' } as const;
+    const linux = { platform: 'linux', arch: 'arm64' } as const;
+    for (const name of ['数据融合助手-安装包-1.2.0-x64.exe', '数据融合助手-兼容通用安装包-1.2.0-x64.exe', 'DataFusion-Setup-1.2.0-x64.exe', 'HuizhouDataFusion-Win7-Component-1.2.0-x64.exe']) {
+      expect(releaseFileError({ ...value, name }, '1.2.0', windows, 'huizhou')).toContain('惠州数据融合助手-安装包');
+    }
+    for (const name of ['惠州数据融合助手-麒麟测试版-1.2.0-arm64.deb', '数据融合助手-麒麟版-1.2.0-arm64.deb', '惠州数据融合助手-麒麟版-1.2.0-x64.deb', '惠州数据融合助手-麒麟海思990版-1.2.0-arm64.deb']) {
+      expect(releaseFileError({ ...value, name }, '1.2.0', linux, 'huizhou')).toContain('匹配当前平台与架构');
+    }
+    expect(releaseFileError({ ...value, name: '惠州数据融合助手-麒麟版-1.2.0-arm64.deb' }, '1.2.0', { ...linux, variant: 'kirin990' }, 'huizhou')).toContain('海思990');
   });
 });

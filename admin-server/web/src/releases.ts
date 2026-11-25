@@ -6,9 +6,12 @@ export type ReleaseStatus = 'uploading' | 'draft' | 'published' | 'disabled';
 export type ReleasePlatform = 'win32' | 'linux';
 export type ReleaseArch = 'x64' | 'arm64';
 export type ReleaseVariant = 'standard' | 'kirin990';
+export type ReleaseDeploymentProfile = 'standard' | 'huizhou';
+export const releaseDeploymentProfile = (deployment?: 'huizhou-intranet' | 'standard'): ReleaseDeploymentProfile => deployment === 'huizhou-intranet' ? 'huizhou' : 'standard';
+export const releaseProductName = (profile: ReleaseDeploymentProfile) => profile === 'huizhou' ? '惠州数据融合助手' : '数据融合助手';
 export interface ReleaseTarget { platform: ReleasePlatform; arch: ReleaseArch; variant?: ReleaseVariant }
 export const WINDOWS_RELEASE_TARGET: ReleaseTarget = { platform: 'win32', arch: 'x64' };
-export interface UploadReleaseValues { version: string; notes?: string; platform?: ReleasePlatform; arch?: ReleaseArch; variant?: ReleaseVariant }
+export interface UploadReleaseValues { version: string; notes?: string; platform?: ReleasePlatform; arch?: ReleaseArch; variant?: ReleaseVariant; deploymentProfile?: ReleaseDeploymentProfile }
 export interface UploadedRelease {
   id: string; version: string; sha256: string; bytes: number; fileName: string; url: string;
   status: 'draft'; enabled: false; managed?: boolean; notes?: string;
@@ -32,11 +35,12 @@ export function releasesForTarget(rows: UpdateRecord[], target: ReleaseTarget): 
       && actual.variant === (target.variant ?? 'standard');
   });
 }
-export function releaseInstallerName(version: string, value: Partial<ReleaseTarget> = WINDOWS_RELEASE_TARGET): string {
+export function releaseInstallerName(version: string, value: Partial<ReleaseTarget> = WINDOWS_RELEASE_TARGET, profile: ReleaseDeploymentProfile = 'standard'): string {
   const target = releaseTarget(value);
+  const product = releaseProductName(profile);
   return target.platform === 'linux'
-    ? `数据融合助手-麒麟${target.variant === 'kirin990' ? '海思990' : ''}版-${version}-${target.arch}.deb`
-    : `数据融合助手-安装包-${version}-x64.exe`;
+    ? `${product}-麒麟${target.variant === 'kirin990' ? '海思990' : ''}版-${version}-${target.arch}.deb`
+    : `${product}-安装包-${version}-x64.exe`;
 }
 
 export function releaseStatus(row: UpdateRecord): ReleaseStatus {
@@ -47,16 +51,19 @@ export function releaseStatus(row: UpdateRecord): ReleaseStatus {
 export const RELEASE_STATUS_LABELS: Record<ReleaseStatus, string> = {
   uploading: '上传中', draft: '待发布', published: '已发布', disabled: '已下线',
 };
-export function releaseFileError(file: Pick<File, 'name' | 'size'> | null, version: string, value: Partial<ReleaseTarget> = WINDOWS_RELEASE_TARGET): string {
+export function releaseFileError(file: Pick<File, 'name' | 'size'> | null, version: string, value: Partial<ReleaseTarget> = WINDOWS_RELEASE_TARGET, profile: ReleaseDeploymentProfile = 'standard'): string {
   const target = releaseTarget(value);
+  if (!['standard', 'huizhou'].includes(profile)) return '发布环境无效';
   if (!['win32', 'linux'].includes(target.platform) || !['x64', 'arm64'].includes(target.arch)
     || target.platform === 'win32' && target.arch !== 'x64'
     || !['standard', 'kirin990'].includes(target.variant ?? '')
     || target.variant === 'kirin990' && (target.platform !== 'linux' || target.arch !== 'arm64')) return '发布平台或芯片架构无效';
   if (!RELEASE_VERSION_PATTERN.test(version) || version.length > 32) return '请输入正确版本号，例如 1.0.3';
   if (!file) return `请选择${target.platform === 'linux' ? '对应架构的麒麟 DEB' : ' Windows 64 位'}安装包`;
-  const expected = releaseInstallerName(version, target);
-  const names = target.platform === 'linux'
+  const expected = releaseInstallerName(version, target, profile);
+  const names = profile === 'huizhou'
+    ? target.platform === 'linux' ? [expected] : [expected, `惠州数据融合助手-兼容通用安装包-${version}-x64.exe`]
+    : target.platform === 'linux'
     ? target.variant === 'kirin990' ? [expected] : [expected, `数据融合助手-麒麟测试版-${version}-${target.arch}.deb`]
     : [expected, `DataFusion-Setup-${version}-x64.exe`, `数据融合助手-兼容通用安装包-${version}-x64.exe`];
   if (!names.includes(file.name)) return `请选择 ${expected}，安装包名称需与版本号一致，并匹配当前平台与架构`;

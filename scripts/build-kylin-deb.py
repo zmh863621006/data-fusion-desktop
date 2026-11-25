@@ -47,24 +47,31 @@ def file_hash(path, algorithm='sha256'):
     return digest.hexdigest()
 
 
-def compatibility_modes(stage, arch, compatibility):
-    modes = dict(EXECUTABLE_MODES)
+def application_root(deployment):
+    if deployment not in (None, 'huizhou-intranet'):
+        raise ValueError('Invalid fixed-shell deployment identity')
+    return 'opt/huizhou-data-fusion' if deployment else 'opt/data-fusion'
+
+
+def compatibility_modes(stage, arch, compatibility, deployment=None):
+    root = application_root(deployment)
+    modes = {name.replace('opt/data-fusion/', root + '/', 1): mode for name, mode in EXECUTABLE_MODES.items()}
     if compatibility is None:
         return modes, set(modes)
     if compatibility != 'kirin990' or arch != 'arm64':
         raise ValueError('Kirin990 compatibility requires ARM64')
-    private = stage / 'opt/data-fusion/resources/compat/kirin990'
+    private = stage / root / 'resources/compat/kirin990'
     metadata = json.loads((private / 'provenance.json').read_text(encoding='utf-8'))
     if metadata.get('variant') != 'kirin990-arm64' or metadata.get('architecture') != 'arm64' or metadata.get('nativeExecutable') != 'data-fusion.bin':
         raise ValueError('Invalid Kirin990 compatibility manifest')
-    launcher = stage / 'opt/data-fusion/data-fusion'
+    launcher = stage / root / 'data-fusion'
     expected = (PROJECT / 'resources/kirin990-launcher.sh').read_bytes().replace(b'\r\n', b'\n')
     if launcher.read_bytes() != expected or file_hash(launcher) != metadata.get('launcherSha256'):
         raise ValueError('Kirin990 launcher bytes do not match the reviewed launcher')
-    if file_hash(stage / 'opt/data-fusion/data-fusion.bin') != metadata.get('nativeSha256'):
+    if file_hash(stage / root / 'data-fusion.bin') != metadata.get('nativeSha256'):
         raise ValueError('Kirin990 native executable changed')
-    modes['opt/data-fusion/data-fusion.bin'] = 0o755
-    elf_names = set(modes) - {'opt/data-fusion/data-fusion'}
+    modes[root + '/data-fusion.bin'] = 0o755
+    elf_names = set(modes) - {root + '/data-fusion'}
     files = metadata.get('files')
     if not isinstance(files, list) or not files or not any(entry.get('path') == 'libgbm.so.1' for entry in files):
         raise ValueError('Missing Kirin990 private library inventory')
@@ -77,7 +84,7 @@ def compatibility_modes(stage, arch, compatibility):
         if file_hash(item) != entry.get('sha256'):
             raise ValueError('Private library digest changed')
         if entry.get('kind') == 'library':
-            elf_names.add('opt/data-fusion/resources/compat/kirin990/' + name)
+            elf_names.add(root + '/resources/compat/kirin990/' + name)
     return modes, elf_names
 
 
@@ -164,7 +171,8 @@ def ar_member(output, name, source, size):
         output.write(b'\n')
 
 
-def build(stage, arch, version, destination, compatibility=None):
+def build(stage, arch, version, destination, compatibility=None, deployment=None):
+    app_root = application_root(deployment)
     if arch not in ('x64', 'arm64') or not re.fullmatch(r'(?:0|[1-9][0-9]*)\.(?:0|[1-9][0-9]*)\.(?:0|[1-9][0-9]*)', version):
         raise ValueError('Invalid version or architecture')
     regular_kind(stage)
@@ -182,9 +190,10 @@ def build(stage, arch, version, destination, compatibility=None):
     control = control_path.read_bytes()
     fields = parse_control(control)
     expected_arch = 'amd64' if arch == 'x64' else 'arm64'
-    if fields.get('package') != 'data-fusion-desktop' or fields.get('version') != version or fields.get('architecture') != expected_arch:
+    package_name = 'huizhou-data-fusion-desktop' if deployment else 'data-fusion-desktop'
+    if fields.get('package') != package_name or fields.get('version') != version or fields.get('architecture') != expected_arch:
         raise ValueError('Control package/version/architecture does not match the build target')
-    modes, elf_names = compatibility_modes(stage, arch, compatibility)
+    modes, elf_names = compatibility_modes(stage, arch, compatibility, deployment)
     entries = inventory(stage)
     # Installed-Size is consumed by desktop package managers as well as APT.
     # Compute it after all private compatibility resources have been staged.
@@ -198,7 +207,11 @@ def build(stage, arch, version, destination, compatibility=None):
     control = ('\n'.join(lines) + '\n').encode('utf-8')
     control_path.write_bytes(control)
     names = {entry[1] for entry in entries}
-    for required in list(modes) + ['opt/data-fusion/resources/app.asar']:
+    if deployment and any(name == 'opt/data-fusion' or name.startswith('opt/data-fusion/')
+                          or name == 'usr/share/applications/cn.zzkj.datafusion.desktop'
+                          or name == 'usr/share/icons/hicolor/512x512/apps/data-fusion.png' for name in names):
+        raise ValueError('Huizhou package cannot contain Shenzhen installation paths')
+    for required in list(modes) + [app_root + '/resources/app.asar']:
         if required not in names:
             raise ValueError('Missing required staged resource: ' + required)
     for name in elf_names:
@@ -253,8 +266,8 @@ def build(stage, arch, version, destination, compatibility=None):
             partial.unlink()
     return {'file': str(destination), 'stage': str(stage), 'version': version, 'arch': arch,
             'bytes': destination.stat().st_size, 'sha256': file_hash(destination), 'dataEntries': len(entries),
-            'asarSha256': file_hash(stage / 'opt/data-fusion/resources/app.asar'), 'installedSizeKiB': installed_kib,
-            'compatibility': compatibility, 'targetExecuted': False}
+            'asarSha256': file_hash(stage / app_root / 'resources/app.asar'), 'installedSizeKiB': installed_kib,
+            'compatibility': compatibility, 'deployment': deployment, 'targetExecuted': False}
 
 
 if __name__ == '__main__':

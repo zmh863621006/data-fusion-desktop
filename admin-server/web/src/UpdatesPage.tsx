@@ -5,7 +5,7 @@ import { ModalForm, PageContainer, ProFormText, ProTable, type ProColumns } from
 import { adminApi, ApiError } from './api';
 import { adminTableSearch } from './presentation';
 import { RELEASE_STATUS_LABELS, RELEASE_VERSION_PATTERN, WINDOWS_RELEASE_TARGET, releaseFileError, releaseFileSize, releaseStatus,
-  releaseInstallerName, releaseTargetLabel, releasesForTarget, type ReleaseArch, type ReleasePlatform, type ReleaseVariant, type ReleaseTarget, type UploadedRelease, type UploadReleaseValues } from './releases';
+  releaseDeploymentProfile, releaseInstallerName, releaseProductName, releaseTargetLabel, releasesForTarget, type ReleaseArch, type ReleasePlatform, type ReleaseVariant, type ReleaseTarget, type ReleaseDeploymentProfile, type UploadedRelease, type UploadReleaseValues } from './releases';
 import type { BootstrapData, UpdateRecord } from './types';
 import { BusinessUpdatesPage } from './BusinessUpdatesPage';
 
@@ -29,8 +29,9 @@ export function ReleaseTargetPicker({ target, disabled, onPlatformChange, onArch
   </div>;
 }
 
-export function ReleaseDetails({ release }: { release: Pick<UpdateRecord, 'version' | 'fileName' | 'bytes' | 'sha256' | 'url' | 'notes' | 'platform' | 'arch' | 'variant' | 'installer'> }) {
+export function ReleaseDetails({ release, deploymentProfile = 'standard' }: { release: Pick<UpdateRecord, 'version' | 'fileName' | 'bytes' | 'sha256' | 'url' | 'notes' | 'platform' | 'arch' | 'variant' | 'installer'>; deploymentProfile?: ReleaseDeploymentProfile }) {
   return <Descriptions column={1} size="small" className="release-details">
+    {deploymentProfile === 'huizhou' && <Descriptions.Item label="产品">{releaseProductName(deploymentProfile)}</Descriptions.Item>}
     <Descriptions.Item label="版本号">{release.version}</Descriptions.Item>
     <Descriptions.Item label="适用环境">{releaseTargetLabel(release)} · {release.installer === 'deb' || release.platform === 'linux' ? 'DEB' : 'EXE'}</Descriptions.Item>
     <Descriptions.Item label="安装包">{release.fileName || '外链安装包'} · {releaseFileSize(release.bytes)}</Descriptions.Item>
@@ -48,6 +49,7 @@ export function UpdatesPage({ data, reload }: { data: BootstrapData; reload: () 
 }
 function BaseUpdatesPage({ data, reload }: { data: BootstrapData; reload: () => Promise<void> }) {
   const canManage = data.user?.role === 'admin';
+  const deploymentProfile = releaseDeploymentProfile(data.deployment);
   const { message } = App.useApp();
   const [open, setOpen] = useState(false), [uploading, setUploading] = useState(false);
   const [file, setFile] = useState<File | null>(null), [percent, setPercent] = useState(0);
@@ -61,19 +63,20 @@ function BaseUpdatesPage({ data, reload }: { data: BootstrapData; reload: () => 
   const [linuxVariant, setLinuxVariant] = useState<ReleaseVariant>('standard');
   const target: ReleaseTarget = { platform, arch: platform === 'linux' ? linuxArch : 'x64', variant: platform === 'linux' ? linuxVariant : 'standard' };
   const [uploadTarget, setUploadTarget] = useState<ReleaseTarget>({ ...WINDOWS_RELEASE_TARGET });
+  const [uploadDeploymentProfile, setUploadDeploymentProfile] = useState<ReleaseDeploymentProfile>(deploymentProfile);
   const [form] = Form.useForm<UploadReleaseValues>();
   const inputRef = useRef<HTMLInputElement>(null), uploadController = useRef<AbortController | null>(null), alive = useRef(true);
   useEffect(() => { alive.current = true; return () => { alive.current = false; uploadController.current?.abort(); }; }, []);
   const filteredRows = releasesForTarget(data.updates, target).filter(row => contains(row.version, filters.version)
     && contains(row.notes, filters.notes) && (!filters.status || releaseStatus(row) === filters.status));
-  const begin = () => { setUploadTarget({ ...target }); form.resetFields(); setFile(null); setUploaded(null); setUploadError(''); setPercent(0); setOpen(true); };
+  const begin = () => { setUploadTarget({ ...target }); setUploadDeploymentProfile(deploymentProfile); form.resetFields(); setFile(null); setUploaded(null); setUploadError(''); setPercent(0); setOpen(true); };
   const cancelUpload = () => { uploadController.current?.abort(); };
   const closeUpload = () => { if (uploading) { cancelUpload(); return; } setOpen(false); };
   const upload = async () => {
     if (uploadController.current) return;
     let values: UploadReleaseValues;
-    try { values = { ...await form.validateFields(), ...uploadTarget }; } catch { return; }
-    const validation = releaseFileError(file, values.version, uploadTarget);
+    try { values = { ...await form.validateFields(), ...uploadTarget, deploymentProfile: uploadDeploymentProfile }; } catch { return; }
+    const validation = releaseFileError(file, values.version, uploadTarget, uploadDeploymentProfile);
     if (validation) { setUploadError(validation); return; }
     if (uploadController.current) return;
     const controller = new AbortController(); uploadController.current = controller;
@@ -109,7 +112,7 @@ function BaseUpdatesPage({ data, reload }: { data: BootstrapData; reload: () => 
   ];
   return <PageContainer title="版本更新" subTitle="上传安装包、核对服务器摘要，再发布到桌面更新通道">
     <ReleaseTargetPicker target={target} disabled={open} onPlatformChange={value => { setPlatform(value); setFilters({}); }} onArchitectureChange={value => { setLinuxArch(value); setFilters({}); }} onVariantChange={value => { setLinuxVariant(value); setFilters({}); }} />
-    <Alert className="page-notice release-guidance" type="info" showIcon message={`发布到 ${releaseTargetLabel(target)}`}
+    <Alert className="page-notice release-guidance" type="info" showIcon message={`发布到 ${deploymentProfile === 'huizhou' ? '惠州数据融合助手 · ' : ''}${releaseTargetLabel(target)}`}
       description={platform === 'win32'
         ? '新版会自动检查并下载，经校验后在空闲时提示确认安装，不中断回流任务。旧客户端需在“设置 → 检查更新”中确认安装。离线授权仍通过安装包升级。'
         : linuxVariant === 'kirin990' ? '海思 990 专用包独立发布，不进入普通 ARM64 更新通道。1.0.25 专用客户端需手动下载并交给系统安装器安装，暂不支持自动更新。'
@@ -122,16 +125,14 @@ function BaseUpdatesPage({ data, reload }: { data: BootstrapData; reload: () => 
     <Modal title={`上传新版本 · ${releaseTargetLabel(uploadTarget)}`} width={700} open={open} onCancel={closeUpload} destroyOnClose maskClosable={!uploading} keyboard={!uploading} className="release-upload-modal"
       footer={uploaded ? [<Button key="close" onClick={closeUpload}>暂不发布</Button>, <Button key="publish" type="primary" onClick={publishUploaded}>核对并发布</Button>]
         : [<Button key="cancel" onClick={closeUpload}>{uploading ? '取消上传' : '取消'}</Button>, <Button key="upload" type="primary" disabled={uploading} loading={uploading} onClick={() => void upload()}>上传并校验</Button>]}>
-      {uploaded ? <><Alert type="success" showIcon message="上传完成 · 待发布" description="SHA256 和文件大小由服务器计算。请核对下列信息，只有再次确认发布才会推送给客户端。" /><ReleaseDetails release={uploaded} /></>
-        : <><Alert type="info" showIcon message="先上传为草稿，不会立即推送给客户端" description={`适用环境：${releaseTargetLabel(uploadTarget)}。服务器将核对安装包格式、版本与架构并计算摘要。`} />
+      {uploaded ? <><Alert type="success" showIcon message="上传完成 · 待发布" description="SHA256 和文件大小由服务器计算。请核对下列信息，只有再次确认发布才会推送给客户端。" /><ReleaseDetails release={uploaded} deploymentProfile={uploadDeploymentProfile} /></>
+        : <><Alert type="info" showIcon message="先上传为草稿，不会立即推送给客户端" description={`适用环境：${uploadDeploymentProfile === 'huizhou' ? '惠州数据融合助手 · ' : ''}${releaseTargetLabel(uploadTarget)}。服务器将核对安装包格式、版本与架构并计算摘要。`} />
           <Form form={form} layout="vertical" disabled={uploading} className="release-upload-form" preserve={false}>
             <Form.Item name="version" label="版本号" rules={[{ required: true, message: '请输入版本号' }, { pattern: RELEASE_VERSION_PATTERN, message: '请输入正确版本号，例如 1.0.3' }, { max: 32 }]}><Input placeholder="例如 1.0.3" autoComplete="off" /></Form.Item>
             <Form.Item label={uploadTarget.platform === 'linux' ? `麒麟 ${uploadTarget.arch === 'arm64' ? 'ARM64' : 'x86_64'} 安装包` : 'Windows 64 位通用安装包'} required>
               <div className="release-file-picker"><input ref={inputRef} type="file" accept={uploadTarget.platform === 'linux' ? '.deb' : '.exe'} aria-label={uploadTarget.platform === 'linux' ? '选择麒麟安装包' : '选择 Windows 安装包'} className="release-native-file" hidden disabled={uploading} onChange={event => { setFile(event.target.files?.[0] ?? null); setUploadError(''); }} />
                 <Button icon={<CloudUploadOutlined />} onClick={() => inputRef.current?.click()} disabled={uploading}>选择安装包</Button>
-                <div className="release-selected-file"><strong>{file?.name || '未选择文件'}</strong><span>{file ? releaseFileSize(file.size) : uploadTarget.platform === 'linux'
-                  ? `文件名：${releaseInstallerName('版本号', uploadTarget)}，最大 500 MB`
-                  : '文件名：数据融合助手-安装包-版本号-x64.exe，最大 500 MB'}</span></div>
+                <div className="release-selected-file"><strong>{file?.name || '未选择文件'}</strong><span>{file ? releaseFileSize(file.size) : `文件名：${releaseInstallerName('版本号', uploadTarget, uploadDeploymentProfile)}，最大 500 MB`}</span></div>
               </div>
             </Form.Item>
             <Form.Item name="notes" label="更新说明" rules={[{ max: 1000, message: '更新说明不能超过 1000 字' }]}><Input.TextArea maxLength={1000} showCount autoSize={{ minRows: 3, maxRows: 6 }} placeholder="简要说明本次修复和新增功能，供使用人员查看" /></Form.Item>
@@ -148,12 +149,12 @@ function BaseUpdatesPage({ data, reload }: { data: BootstrapData; reload: () => 
         catch (error) { setPublishError(errorText(error)); return false; }
       }}>
       <Alert type={changing?.enabled ? 'warning' : 'info'} showIcon message={changing?.enabled ? '下线只停止后续分发，不回退已安装的客户端' : '发布后会进入正式更新通道，请确认已经完成测试'} />
-      {changing && <ReleaseDetails release={changing} />}
+      {changing && <ReleaseDetails release={changing} deploymentProfile={deploymentProfile} />}
       {publishError && <Alert className="release-upload-error" type="error" showIcon message={publishError} />}
       <ProFormText.Password name="confirmPassword" label="请输入当前账号密码确认操作" fieldProps={{ autoComplete: 'current-password' }} rules={[{ required: true, message: '请输入当前账号密码' }]} />
     </ModalForm>
     <Modal title={`版本 ${inspecting?.version ?? ''}`} width={700} open={Boolean(inspecting)} onCancel={() => setInspecting(null)} footer={<Button onClick={() => setInspecting(null)}>关闭</Button>} destroyOnClose>
-      {inspecting && <><Tag color={releaseStatus(inspecting) === 'published' ? 'success' : 'default'}>{RELEASE_STATUS_LABELS[releaseStatus(inspecting)]}</Tag><ReleaseDetails release={inspecting} /></>}
+      {inspecting && <><Tag color={releaseStatus(inspecting) === 'published' ? 'success' : 'default'}>{RELEASE_STATUS_LABELS[releaseStatus(inspecting)]}</Tag><ReleaseDetails release={inspecting} deploymentProfile={deploymentProfile} /></>}
     </Modal>
   </PageContainer>;
 }

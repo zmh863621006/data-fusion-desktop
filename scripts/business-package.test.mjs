@@ -50,6 +50,18 @@ async function fixture(t) {
 }
 const options = root => ({ projectRoot: root, version: '1.1.0', minShellVersion: '1.1.0', ...target });
 
+test('Huizhou base identity is fixed in its trusted shell without changing the frozen business payload bytes', async t => {
+  const root = await fixture(t), payload = await buildBusinessPayload(options(root)), before = await readFile(payload.file);
+  const standard = await stageBusinessShell({ projectRoot: root, payload: payload.receipt });
+  const huizhou = await stageBusinessShell({ projectRoot: root, payload: payload.receipt, deployment: 'huizhou-intranet', outputRoot: 'release/huizhou-shell' });
+  assert.equal(JSON.parse(await readFile(standard.shellJson, 'utf8')).deployment, undefined);
+  assert.equal(JSON.parse(await readFile(huizhou.shellJson, 'utf8')).deployment, 'huizhou-intranet');
+  const metadata = JSON.parse(await readFile(join(huizhou.appDirectory, 'package.json'), 'utf8'));
+  assert.equal(metadata.name, 'huizhou-data-fusion-desktop'); assert.equal(metadata.productName, '惠州数据融合助手');
+  assert.deepEqual(await readFile(payload.file), before); assert.deepEqual(await readFile(join(huizhou.resourceDirectory, 'business/builtin.asar')), before);
+  await assert.rejects(stageBusinessShell({ projectRoot: root, payload: payload.receipt, deployment: 'renderer-selected-profile' }), /deployment identity/);
+});
+
 test('archive preparation waits for the returned writer to finish before measuring or hashing its bytes', async t => {
   const root = await fixture(t), path = join(root, 'delayed.asar'), bytes = Buffer.from('delayed final archive bytes');
   await createCompleteAsar(root, path, async (_source, destination) => {

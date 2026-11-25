@@ -23,6 +23,8 @@ function readStage() {
   const shell = JSON.parse(readFileSync(join(stage.appDirectory, 'shell.json'), 'utf8'));
   assert.equal(shell.product, 'data-fusion-desktop');
   assert.deepEqual(stage.target, shell.target); assert.equal(stage.shellVersion, shell.shellVersion);
+  assert(shell.deployment === undefined || shell.deployment === 'huizhou-intranet', 'Invalid fixed-shell deployment identity');
+  assert.equal(stage.deployment, shell.deployment, 'Shell deployment identity differs from stage');
   const builtin = join(stage.resourceDirectory, 'business/builtin.asar'); ordinary(builtin);
   const bytes = readFileSync(builtin);
   assert.equal(bytes.length, shell.builtin.bytes);
@@ -55,7 +57,7 @@ function afterPack(stage) {
       assert.equal(readFileSync(join(root, 'version'), 'utf8').trim(), stage.electronVersion);
       return;
     }
-    ordinary(join(root, 'DataFusion.exe'));
+    ordinary(join(root, stage.deployment === 'huizhou-intranet' ? 'HuizhouDataFusion.exe' : 'DataFusion.exe'));
     const compiler = join(root, 'd3dcompiler_47.dll'); ordinary(compiler);
     const bytes = readFileSync(compiler);
     assert.deepEqual(bytes, readFileSync(join(stage.electronDist, 'd3dcompiler_47.dll')), 'Keep the exact Electron-bundled graphics compiler');

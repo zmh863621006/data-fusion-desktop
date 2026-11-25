@@ -56,7 +56,8 @@ async function ordinaryFile(path) {
 export async function stageKirin990Compatibility(stagingInput, libraryInput, provenanceInput, options = {}) {
   const stageRoot = await realpath(options.stageRoot ?? defaultStageRoot), staging = await realpath(stagingInput), libraryRoot = await realpath(libraryInput);
   assert(contained(staging, stageRoot), 'Kirin compatibility staging must stay below the generated DEB staging root');
-  const application = join(staging, 'opt', 'data-fusion');
+  assert(options.deployment === undefined || options.deployment === 'huizhou-intranet', 'Invalid compatibility deployment');
+  const application = join(staging, 'opt', options.deployment === 'huizhou-intranet' ? 'huizhou-data-fusion' : 'data-fusion');
   const nativePath = join(application, 'data-fusion'), renamedPath = join(application, 'data-fusion.bin');
   assert.equal(await realpath(application), application, 'Application staging must not redirect through links');
   assert(!(await lstat(renamedPath).catch(() => null)), 'Compatibility launcher is already staged; use a fresh DEB staging tree');

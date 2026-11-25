@@ -22,6 +22,32 @@ beforeEach(() => { FakeXHR.instances = []; dispatchEvent.mockReset(); vi.stubGlo
 afterEach(() => vi.unstubAllGlobals());
 
 describe('binary managed-release upload API', () => {
+  it('uploads the isolated Huizhou product with existing progress, target and draft confirmation semantics', async () => {
+    const localFile = { name: '惠州数据融合助手-兼容通用安装包-1.2.0-x64.exe', size: 200 } as File;
+    const progress = vi.fn(), values = { version: '1.2.0', platform: 'win32' as const, arch: 'x64' as const, deploymentProfile: 'huizhou' as 'huizhou' | 'standard' };
+    const uploading = adminApi.uploadRelease(localFile, values, { onProgress: progress });
+    values.deploymentProfile = 'standard';
+    const xhr = FakeXHR.instances[0], query = new URL(xhr.url, 'https://fixture.example.invalid').searchParams;
+    expect(query.get('filename')).toBe(localFile.name);
+    expect(query.get('platform')).toBe('win32'); expect(query.get('arch')).toBe('x64');
+    expect(query.has('deploymentProfile')).toBe(false);
+    expect(xhr.withCredentials).toBe(true);
+    xhr.upload.onprogress?.({ loaded: 100, total: 200, lengthComputable: true } as ProgressEvent);
+    expect(progress).toHaveBeenLastCalledWith(50);
+    const acknowledgment = { ...result, version: '1.2.0', fileName: localFile.name, bytes: localFile.size, platform: 'win32', arch: 'x64', installer: 'nsis' };
+    xhr.respond(201, acknowledgment);
+    await expect(uploading).resolves.toEqual(acknowledgment);
+    expect(progress).toHaveBeenLastCalledWith(100);
+    expect(FakeXHR.instances).toHaveLength(1);
+  });
+  it('rejects product or architecture mismatches before sending any isolated release bytes', async () => {
+    await expect(adminApi.uploadRelease(file, { version: '1.0.3', deploymentProfile: 'huizhou' })).rejects.toThrow('惠州数据融合助手');
+    const localFile = { name: '惠州数据融合助手-安装包-1.0.3-x64.exe', size: 200 } as File;
+    await expect(adminApi.uploadRelease(localFile, { version: '1.0.3' })).rejects.toThrow('匹配当前平台与架构');
+    const linuxFile = { name: '惠州数据融合助手-麒麟版-1.0.3-arm64.deb', size: 200 } as File;
+    await expect(adminApi.uploadRelease(linuxFile, { version: '1.0.3', platform: 'linux', arch: 'x64', deploymentProfile: 'huizhou' })).rejects.toThrow('匹配当前平台与架构');
+    expect(FakeXHR.instances).toHaveLength(0);
+  });
   it('uses the fixed same-origin route, existing session cookies, binary body and encoded metadata, without auto-publishing', async () => {
     const progress = vi.fn(), notes = '修复 + 改进 & 测试';
     const uploading = adminApi.uploadRelease(file, { version: '1.0.3', notes }, { onProgress: progress });
