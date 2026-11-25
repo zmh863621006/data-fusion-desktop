@@ -18,15 +18,56 @@ describe('人社列表响应',()=>{
     expect(()=>decodeHrssList({code:401,data:{total:0,records:[]}},'records')).toThrow('会话已失效');
     expect(()=>decodeHrssList({data:{total:1,records:[null]}},'records')).toThrow('无法识别');
   });
-  it('uses an independently read list count only for a list envelope without its own total',()=>{
+  it('uses the independent count for a missing or zero count while preserving a nonzero mismatch',()=>{
     expect(decodeHrssList({data:{records:[{bce076:'A'}]}},'records',false,1)).toEqual({rows:[{bce076:'A'}],total:1});
     expect(decodeHrssList({data:{total:2,records:[{bce076:'A'}]}},'records',false,1).total).toBe(2);
+    expect(decodeHrssList({data:{total:0,records:[{bce076:'A'}]}},'records',false,129)).toEqual({rows:[{bce076:'A'}],total:129});
+    expect(decodeHrssList({data:{total:0,records:[{bce076:'A'}]}},'records').total).toBe(0);
     expect(()=>decodeHrssList({data:{total:'invalid',records:[]}},'records',false,1)).toThrow('结构不完整');
     expect(()=>decodeHrssList({data:{records:[]}},'records')).toThrow('结构不完整');
   });
 });
 
 describe('人社访问凭据与接口边界',()=>{
+  it('does not refresh observation time when the source repeats the same credential',()=>{
+    let time=100;const client=new HrssClient({now:()=>time});
+    client.acceptBrowserAccessToken('fixture-access');const saved=client.exportSession();
+    time=200;client.acceptBrowserAccessToken('fixture-access');expect(client.exportSession()).toEqual(saved);
+    client.acceptBrowserAccessToken('fixture-new-access');expect(client.exportSession()?.observedAt).toBe(200);
+  });
+  it('requests only the registered street handling list with its source association id',async()=>{
+    const fetcher=vi.fn(async(_url:string,_init:RequestInit)=>json({data:{records:[],total:0}}));
+    const client=new HrssClient({fetcher,minimumIntervalMs:0});client.acceptBrowserAccessToken('fixture-access');
+    await client.requestHandlingRecords({bzd417:'fixture-case',aaa025:'02',current:1,size:200});
+    expect(new URL(fetcher.mock.calls[0][0]).pathname).toBe('/subsidize/main/rest/subsidy/common/operate-log');
+    expect(JSON.parse(String(fetcher.mock.calls[0][1].body))).toEqual({bzd417:'fixture-case',aaa025:'02',current:1,size:200});
+  });
+  it('keeps the legacy training cookie independent and uses only its three approved list configurations',async()=>{
+    const html=`<form name="editform"><input name="BAE001" value="163374"></form><script>var WHEREKEY='fixture';var headtoken='hz_zxzj';</script>`;
+    const fetcher=vi.fn(async(url:string,_init:RequestInit)=>url.endsWith('cxjd.do')?new Response(html,{headers:{'content-type':'text/html'}}):new Response(JSON.stringify({FHZ:'1',rows:[],total:0,hz_zxzj:'rotated'}),{headers:{'content-type':'text/html; charset=UTF-8'}}));
+    const client=new HrssClient({fetcher,minimumIntervalMs:0});
+    client.acceptBrowserCookie('WGBT_SESSION=fixture');
+    await expect(client.prepareTrainingSession()).rejects.toThrow('独立会话');expect(fetcher).not.toHaveBeenCalled();
+    client.acceptTrainingCookie('ZXZJ_SESSION=fixture; hz_zxzj=training-csrf');
+    expect(await client.prepareTrainingSession()).toEqual({organizationId:'163374',whereKey:'fixture',csrfToken:'training-csrf'});
+    await client.requestTrainingList({confid:'jycyzjgl_cypxbt_cxjd_bljdcxjglb',whereCls:'encrypted',rowstart:1,pageSize:200});
+    const headers=fetcher.mock.calls[1][1].headers as Record<string,string>;
+    expect(headers.hz_zxzj).toBe('training-csrf');expect(headers.Cookie).not.toContain('WGBT');expect(headers).not.toHaveProperty('Access-Token');
+    expect(await client.prepareTrainingSession()).toMatchObject({csrfToken:'rotated'});
+    await expect(client.requestTrainingList({confid:'arbitrary-detail'})).rejects.toMatchObject({code:'QUERY_INVALID'});
+    expect(fetcher).toHaveBeenCalledTimes(2);
+    const restored=new HrssClient({fetcher,minimumIntervalMs:0});restored.restoreSession(client.exportSession()!);expect(restored.hasSession()).toBe(true);
+  });
+  it('rejects a training login page and a CSRF failure instead of returning an empty success',async()=>{
+    const client=new HrssClient({fetcher:async()=>new Response('<title>登录</title>',{headers:{'content-type':'text/html'}}),minimumIntervalMs:0});
+    client.acceptTrainingCookie('ZXZJ_SESSION=fixture; hz_zxzj=csrf');
+    await expect(client.prepareTrainingSession()).rejects.toMatchObject({code:'SESSION_EXPIRED'});
+    expect(client.exportSession()).toBeNull();
+    const fetcher=vi.fn(async(url:string)=>url.endsWith('cxjd.do')?new Response(`<form name="editform"><input name="BAE001" value="163374"></form><script>WHEREKEY='fixture';headtoken='hz_zxzj';</script>`):json({FHZ:'CSRF',rows:[],total:0}));
+    const rejected=new HrssClient({fetcher,minimumIntervalMs:0});rejected.acceptTrainingCookie('ZXZJ_SESSION=fixture; hz_zxzj=csrf');
+    await expect(rejected.requestTrainingList({confid:'jycyzjgl_cypxbt_cxjd_bljdcxjglb'})).rejects.toMatchObject({code:'SESSION_EXPIRED'});
+    expect(rejected.hasSession()).toBe(false);
+  });
   it('verifies a real-shaped portal session when the native server rejects a Chinese User-Agent',async()=>{
     const agent='Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) 数据融合助手/1.1.11 Chrome/152.0.7977.78 Electron/44.3.0 Safari/537.36';
     const nativeFetch=vi.fn(async(_url:string,init:RequestInit)=>{

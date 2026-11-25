@@ -78,7 +78,7 @@ describe('matter menu IPC serialization boundary', () => {
     expect((await list('government-info')).map((matter) => matter.id)).toEqual([allowed]);
   });
 
-  it('lists the 15 additional matters as regular entries and rejects runs before creating a task', async () => {
+  it('lists the remaining 11 unconnected matters normally and rejects their runs before creating a task', async () => {
     let count = 0;
     const run = fixtures.handlers.get(IPC_CHANNELS.matterRun)!;
     for (const plugin of addedCatalogs) {
@@ -91,7 +91,7 @@ describe('matter menu IPC serialization boundary', () => {
         await expect(run(trustedEvent, plugin.id, matter.id, matter.createDefaultContext!())).rejects.toThrow('当前事项暂时无法回流');
       }
     }
-    expect(count).toBe(15);
+    expect(count).toBe(11);
     expect(fixtures.tasksRun).not.toHaveBeenCalled();
   });
 

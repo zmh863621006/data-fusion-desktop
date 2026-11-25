@@ -11,6 +11,7 @@ import { createNanshanPermitWorkbook, validateNanshanPermit } from '../double-pu
 import { EQUIPMENT_SYSTEM_ID } from '../../plugins/guangdong-special-equipment/catalog';
 import { FOOD_DRUG_SYSTEM_ID } from '../../plugins/guangdong-food-drug/catalog';
 import { createCollectionJudicialWorkbook } from './collection-judicial-workbook';
+import { HRSS_HANDLING_COLUMNS, hasHrssHandlingRecords, hrssHandlingStatusLabel, readHrssHandlingRecords } from '../hrss/handling-records';
 
 const permitSystems = new Set(['government-info', 'oversize-transport', 'online-car-permit', 'transport-practitioner',
   'health-publicity', 'shenzhen-hazardous-chemicals', EQUIPMENT_SYSTEM_ID, FOOD_DRUG_SYSTEM_ID]);
@@ -67,20 +68,43 @@ export class LocalExportService {
     }
     if (records.some(record => record.systemId === 'guangdong-hrss')) {
       if (!records.every(record => record.systemId === 'guangdong-hrss') || !listColumns?.length) throw new Error('请按人社业务事项单独导出台账');
-      const values = records.map(record => Object.fromEntries(listColumns.map(column => [column.key, cellValue(record.data[column.key])])));
+      const columns = listColumns.filter(column => column.key !== 'handlingRecords');
+      if (!columns.length) throw new Error('请按人社业务事项单独导出台账');
+      const values = records.map(record => Object.fromEntries(columns.map(column => [column.key, column.key === 'handlingRecordStatus'
+        ? hrssHandlingStatusLabel(record.data[column.key]) : cellValue(record.data[column.key])])));
       if (format === 'xlsx') {
         const workbook = new ExcelJS.Workbook();
         workbook.creator = '数据融合助手';
         const sheet = workbook.addWorksheet('业务列表台账');
-        sheet.columns = listColumns.map(column => ({ header: column.label, key: column.key, width: Math.max(16, Math.min(36, column.label.length * 2 + 4)) }));
+        sheet.columns = columns.map(column => ({ header: column.label, key: column.key, width: Math.max(16, Math.min(36, column.label.length * 2 + 4)) }));
         values.forEach(row => sheet.addRow(row));
         sheet.getRow(1).font = { bold: true, color: { argb: 'FFFFFFFF' } };
         sheet.getRow(1).fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FF007AFF' } };
         sheet.views = [{ state: 'frozen', ySplit: 1 }];
-        sheet.autoFilter = { from: { row: 1, column: 1 }, to: { row: values.length + 1, column: listColumns.length } };
+        sheet.autoFilter = { from: { row: 1, column: 1 }, to: { row: values.length + 1, column: columns.length } };
+        const handlingCases = records.filter(record => hasHrssHandlingRecords(record.systemId, record.matterId));
+        if (handlingCases.length) {
+          const history = workbook.addWorksheet('办理记录');
+          history.columns = [
+            { header: '申请编号', key: 'applyBh', width: 26 }, { header: '单位名称', key: 'unitName', width: 36 },
+            { header: '申请日期', key: 'applyDate', width: 18 }, { header: '记录序号', key: 'historyNo', width: 12 },
+            ...HRSS_HANDLING_COLUMNS.map(column => ({ header: column.label, key: column.key, width: column.key === 'opinion' ? 48 : column.key === 'handledAt' ? 24 : 22 })),
+          ];
+          for (const record of handlingCases) {
+            for (const [index, item] of readHrssHandlingRecords(record.data.handlingRecords).entries()) {
+              history.addRow({ applyBh: cellValue(record.data.applyBh), unitName: cellValue(record.data.unitName),
+                applyDate: cellValue(record.data.applyDate), historyNo: index + 1, ...item });
+            }
+          }
+          history.getRow(1).font = { bold: true, color: { argb: 'FFFFFFFF' } };
+          history.getRow(1).fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FF007AFF' } };
+          history.views = [{ state: 'frozen', ySplit: 1 }];
+          history.autoFilter = { from: { row: 1, column: 1 }, to: { row: history.rowCount, column: history.columnCount } };
+          history.getColumn('opinion').alignment = { vertical: 'top', wrapText: true };
+        }
         await writeFile(path, Buffer.from(await workbook.xlsx.writeBuffer()), { flag: 'wx' });
       } else if (format === 'csv') {
-        const lines = [listColumns.map(column => csvCell(column.label)).join(','), ...values.map(row => listColumns.map(column => csvCell(row[column.key])).join(','))];
+        const lines = [columns.map(column => csvCell(column.label)).join(','), ...values.map(row => columns.map(column => csvCell(row[column.key])).join(','))];
         await writeFile(path, `\uFEFF${lines.join('\r\n')}`, { encoding: 'utf8', flag: 'wx' });
       } else await writeFile(path, JSON.stringify(values, null, 2), { encoding: 'utf8', flag: 'wx' });
       return { path, rowCount: records.length, createdAt: Date.now(), warningCount: 0, missingRequiredCount: 0 };

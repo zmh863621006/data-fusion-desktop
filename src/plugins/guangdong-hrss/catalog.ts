@@ -1,4 +1,6 @@
 import catalog from './matter-catalog.json';
+import { HRSS_STREET_PROFILES } from './street';
+import { HRSS_TRAINING_PROFILE } from './training-catalog';
 
 export const HRSS_SYSTEM_ID = 'guangdong-hrss';
 export const HRSS_ORIGIN = 'https://hrss.gdgov.cn';
@@ -11,7 +13,7 @@ export const HRSS_HOME_URL = `${HRSS_ORIGIN}/portal/template/system.html`;
 export interface HrssColumn { key: string; label: string; sources: string[]; sensitive?: boolean }
 export interface HrssListSource {
   id: string; path: string; method: 'GET' | 'POST';
-  pagination?: 'tracking' | 'wgbt'; params?: Record<string, unknown>;
+  pagination?: 'tracking' | 'wgbt' | 'training'; params?: Record<string, unknown>;
   countPath?: string; identity: string[][];
 }
 export interface HrssMatterDefinition {
@@ -58,6 +60,7 @@ for (const [id,type] of [['graduate-tracking-service','101'],['difficult-trackin
 
 export const HRSS_SUBDISTRICT_MATTERS = catalog.filter(meta => meta.departmentId === 'subdistrict-office');
 export const HRSS_MATTER_DEFINITIONS: HrssMatterDefinition[] = catalog
-  .filter(meta => meta.departmentId !== 'subdistrict-office')
-  .map(meta=>({ ...meta,...profiles[meta.id], columns:[f('listSource','列表来源'),...profiles[meta.id].columns] }));
+  .map(meta=>{const profile=profiles[meta.id]??HRSS_STREET_PROFILES[meta.id]??(meta.id==='startup-training'?HRSS_TRAINING_PROFILE:undefined);
+    if(!profile)throw new Error(`缺少人社事项配置：${meta.id}`);
+    return {...meta,...profile,columns:[f('listSource','列表来源'),...profile.columns]};});
 export const HRSS_MATTER_BY_ID = new Map(HRSS_MATTER_DEFINITIONS.map(definition=>[definition.id,definition]));

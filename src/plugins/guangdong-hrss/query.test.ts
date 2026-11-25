@@ -1,17 +1,20 @@
 import { describe,expect,it,vi } from 'vitest';
 import { HRSS_MATTER_BY_ID, HRSS_MATTER_DEFINITIONS, type HrssListSource } from './catalog';
 import { buildHrssListParameters,projectHrssListRecord,queryHrssLedger } from './query';
+import { HRSS_STREET_PROFILES } from './street';
+import { buildTrainingListParameters, HRSS_TRAINING_HANDLING_CONFIG } from './training';
 
 const now=Date.parse('2026-11-04T04:05:06Z');
 const definition=(id:string)=>HRSS_MATTER_BY_ID.get(id)!;
 const context={page:1,pageSize:200,filters:{}};
 const raw=(id:string)=>({bce097:id,aab004:'测试单位',aac147:'TEST-ID',aac003:'列表姓名',bce076:id,cdc151:id,bdzz77:id,CCD002:id,aab998:'UNIT',bae062:'2026-01-01'});
+const originalMatters=()=>HRSS_MATTER_DEFINITIONS.filter(m=>m.departmentId!=='subdistrict-office');
 
 describe('广东人社台账目录和列表投影',()=>{
   it('covers the 18 ledgers with Chinese labels, privacy flags and no detail-only education fields',()=>{
-    expect(HRSS_MATTER_DEFINITIONS).toHaveLength(18);
-    expect(new Set(HRSS_MATTER_DEFINITIONS.map(m=>m.id)).size).toBe(18);
-    for(const matter of HRSS_MATTER_DEFINITIONS){
+    expect(originalMatters()).toHaveLength(18);
+    expect(new Set(originalMatters().map(m=>m.id)).size).toBe(18);
+    for(const matter of originalMatters()){
       expect(new Set(matter.columns.map(c=>c.key)).size).toBe(matter.columns.length);
       expect(matter.columns.every(c=>/[\u3400-\u9fff]/.test(c.label))).toBe(true);
       expect(matter.columns.some(c=>c.key==='recordKey')).toBe(false);
@@ -39,6 +42,101 @@ describe('广东人社台账目录和列表投影',()=>{
   });
 });
 
+describe('街道办列表筛选与办理记录回流',()=>{
+  const matter=()=>({...definition('job-seeking-startup-subsidy'),id:'enterprise-hiring-difficult-personnel-subsidy',name:'企业招用困难人员补贴',departmentId:'subdistrict-office',...HRSS_STREET_PROFILES['enterprise-hiring-difficult-personnel-subsidy']});
+  const selected={...context,filters:{startDate:'2026-11-01',endDate:'2026-11-02'}};
+  const pending=(id:string)=>({...raw(id),bbe955:'02',bbe955Name:'待受理'});
+  const active=(id:string)=>({...raw(id),bbe955:'03',bbe955Name:'待审核',bzd417:`FLOW-${id}`,adminToken:'discard'});
+  const handling=(id:string,date='2026-11-20')=>({bcea9j:id,bzd408Name:'受理',bae045Name:'提交',bee071:'同意',bcbpjb:date,bae046Name:'经办甲',bab019Name:'街道办',adminToken:'discard'});
+
+  it('uses application dates for the cases and retains every handling entry even outside that interval',async()=>{
+    const request=vi.fn(async()=>({total:2,rows:[pending('P'),active('A')]}));
+    const requestHandlingRecords=vi.fn(async()=>({total:2,rows:[handling('LOG-1','2026-10-31'),handling('LOG-2','2026-11-20')]}));
+    const result=await queryHrssLedger({request,requestHandlingRecords},matter(),selected,now);
+    expect(result.total).toBe(1);expect(result.rows[0]).toMatchObject({applyBh:'A',handlingRecordCount:2,handlingRecordStatus:'collected',handlingRecords:[{handledAt:'2026-10-31'},{handledAt:'2026-11-20'}]});
+    expect(request).toHaveBeenCalledWith(matter().sources[0],expect.objectContaining({adc705Begin:'2026-11-01',adc705End:'2026-11-02'}),undefined,false,undefined);
+    expect(requestHandlingRecords).toHaveBeenCalledTimes(1);
+    expect(requestHandlingRecords).toHaveBeenCalledWith({current:1,size:200,bzd417:'FLOW-A',aaa025:'02'},undefined);
+    expect(result.rows[0]).not.toHaveProperty('bzd417');expect(result.rows[0]).not.toHaveProperty('adminToken');
+    expect((result.rows[0].handlingRecords as any[])[0]).not.toHaveProperty('adminToken');
+  });
+  it('counts all list rows for completeness, including an entire page of excluded pending cases',async()=>{
+    const request=vi.fn(async(_source,params)=>({total:201,rows:params.current===1?Array.from({length:200},(_,i)=>pending(`P-${i}`)):[active('A')]}));
+    const requestHandlingRecords=vi.fn(async()=>({total:0,rows:[]}));
+    const result=await queryHrssLedger({request,requestHandlingRecords},matter(),selected,now);
+    expect(request).toHaveBeenCalledTimes(2);expect(result.total).toBe(1);expect(result.rows[0].handlingRecordCount).toBe(0);
+    expect(requestHandlingRecords).toHaveBeenCalledTimes(1);
+  });
+  it('rejects duplicate keys even when both duplicated cases would be excluded',async()=>{
+    const request=vi.fn(async()=>({total:2,rows:[pending('P'),pending('P')]}));
+    const requestHandlingRecords=vi.fn();
+    await expect(queryHrssLedger({request,requestHandlingRecords},matter(),selected,now)).rejects.toThrow('重复业务编号');
+    expect(requestHandlingRecords).not.toHaveBeenCalled();
+  });
+  it('does not treat a failed or partial handling query as a successful batch',async()=>{
+    const request=vi.fn(async()=>({total:2,rows:[active('A'),active('B')]}));
+    const failed=vi.fn().mockResolvedValueOnce({total:1,rows:[handling('L1')]}).mockRejectedValueOnce(new Error('源系统办理记录暂不可用'));
+    await expect(queryHrssLedger({request,requestHandlingRecords:failed},matter(),selected,now)).rejects.toThrow('源系统办理记录暂不可用');
+    await expect(queryHrssLedger({request,requestHandlingRecords:vi.fn(async()=>({total:2,rows:[handling('L1')]}))},matter(),selected,now)).rejects.toThrow('办理记录分页条数');
+  });
+  it('checks cancellation immediately after a handling response',async()=>{
+    const controller=new AbortController();
+    const request=vi.fn(async()=>({total:1,rows:[active('A')]}));
+    const requestHandlingRecords=vi.fn(async()=>{controller.abort();return {total:0,rows:[]};});
+    await expect(queryHrssLedger({request,requestHandlingRecords},matter(),{...selected,signal:controller.signal},now)).rejects.toMatchObject({code:'TASK_CANCELLED'});
+  });
+  it('keeps every existing business list-only, even when it contains nonempty rows',async()=>{
+    const requestHandlingRecords=vi.fn(async()=>{throw new Error('不应读取办理记录');});
+    for(const original of originalMatters().filter(m=>m.id!=='poverty-alleviation-personnel')) {
+      const request=vi.fn(async(_source,_params,_signal,countOnly)=>({total:1,rows:countOnly?[]:[active('A')]}));
+      const result=await queryHrssLedger({request,requestHandlingRecords},original,{...context,filters:{startDate:'2026-11-01',endDate:'2026-11-01'}},now);
+      expect(result.rows.length).toBeGreaterThan(0);expect(result.rows.every(row=>!Object.hasOwn(row,'handlingRecords'))).toBe(true);
+    }
+    expect(requestHandlingRecords).not.toHaveBeenCalled();
+  });
+});
+
+describe('创业培训独立会话和旧版列表集成',()=>{
+  const session={organizationId:'163374',whereKey:'fixture-key',csrfToken:'fixture-csrf'};
+  const selected={...context,filters:{startDate:'2026-11-01',endDate:'2026-11-02'}};
+  const progress=(id:string,stage:string)=>({CDB041:id,BHEA81:stage,AAB004:'培训单位',CCD002:`APPLY-${id}`,BCE089:'2026-11-01',adminToken:'discard'});
+  const completed=(id:string)=>({CDB041:id,AAB004:'已办单位',CCD002:`APPLY-${id}`,BCE089:'2026-11-02',BJRQ:'2026-11-10'});
+  const log={RN:'1',_DIC_CDB042:'审核',BFE086:'通过',CFE006:'同意',JBR:'经办甲',JBRQ:'2026-11-25',JBJG:'街道办'};
+
+  it('queries both application-date lists, excludes pending receipt and keeps later handling entries',async()=>{
+    const matter=definition('startup-training');
+    const request=vi.fn();const requestHandlingRecords=vi.fn();
+    const prepareTrainingSession=vi.fn(async()=>session);
+    const requestTrainingList=vi.fn(async(params:Record<string,unknown>)=>{
+      if(params.confid===HRSS_TRAINING_HANDLING_CONFIG) return {total:1,rows:[log]};
+      return String(params.confid).includes('bljdcxjglb')?{total:2,rows:[progress('P','BT_SL'),progress('A','BT_SH')]}:{total:1,rows:[completed('C')]};
+    });
+    const result=await queryHrssLedger({request,requestHandlingRecords,prepareTrainingSession,requestTrainingList},matter,selected,now);
+    expect(prepareTrainingSession).toHaveBeenCalledTimes(1);expect(request).not.toHaveBeenCalled();expect(requestHandlingRecords).not.toHaveBeenCalled();
+    expect(requestTrainingList).toHaveBeenCalledWith(buildTrainingListParameters(matter.sources[0],1,'2026-11-01','2026-11-02',session),undefined);
+    expect(requestTrainingList).toHaveBeenCalledWith(buildTrainingListParameters(matter.sources[1],1,'2026-11-01','2026-11-02',session),undefined);
+    expect(requestTrainingList.mock.calls.filter(([params])=>params.confid===HRSS_TRAINING_HANDLING_CONFIG)).toHaveLength(2);
+    expect(result.total).toBe(2);expect(result.rows.map(row=>row.caseId)).toEqual(['A','C']);
+    expect(result.rows.map(row=>row.listSource)).toEqual(['办理进度列表','已办业务列表']);
+    expect(result.rows.every(row=>row.handlingRecordCount===1 && (row.handlingRecords as any[])[0].handledAt==='2026-11-25')).toBe(true);
+    expect(result.rows[0]).not.toHaveProperty('adminToken');
+  });
+  it('aborts before list reads if cancellation occurs while preparing the independent session',async()=>{
+    const controller=new AbortController(),request=vi.fn(),requestTrainingList=vi.fn();
+    const prepareTrainingSession=vi.fn(async()=>{controller.abort();return session;});
+    await expect(queryHrssLedger({request,requestTrainingList,prepareTrainingSession},definition('startup-training'),{...selected,signal:controller.signal},now)).rejects.toMatchObject({code:'TASK_CANCELLED'});
+    expect(requestTrainingList).not.toHaveBeenCalled();expect(request).not.toHaveBeenCalled();
+  });
+  it('does not return a partial batch if the completed list fails after progress records were collected',async()=>{
+    const requestTrainingList=vi.fn(async(params:Record<string,unknown>)=>{
+      if(params.confid===HRSS_TRAINING_HANDLING_CONFIG) return {total:1,rows:[log]};
+      if(String(params.confid).includes('bljdcxjglb')) return {total:1,rows:[progress('A','BT_SH')]};
+      throw new Error('已办业务列表读取失败');
+    });
+    await expect(queryHrssLedger({request:vi.fn(),prepareTrainingSession:vi.fn(async()=>session),requestTrainingList},definition('startup-training'),selected,now)).rejects.toThrow('已办业务列表读取失败');
+  });
+});
+
 describe('广东人社原列表参数',()=>{
   it('keeps both flexible employment category codes and the fixed area',()=>{
     expect(buildHrssListParameters(definition('graduate-flexible-employment-subsidy').sources[0],2,now)).toEqual({adc953:'LHJYBT_20',current:2,size:200});
@@ -57,15 +155,44 @@ describe('广东人社原列表参数',()=>{
 });
 
 describe('完整分页、稳定键与取消',()=>{
-  it('records new date selections without adding them to any of the 17 deferred source queries',async()=>{
-    for(const matter of HRSS_MATTER_DEFINITIONS.filter(m=>m.id!=='unemployment')){
+  it('sends the selected dates to all 15 verified original matters and retains their fixed filters',async()=>{
+    const expected:Record<string,Record<string,unknown>>={
+      'employment-difficulty-recognition':{cdc138Begin:'2020-01-01',cdc138End:'2020-01-31',cdc135:'163374'},
+      'graduate-tracking-service':{bae003:['2020-01-01 00:00:00','2020-01-31 23:59:59'],bdca42:'101'},
+      'difficult-tracking-service':{bae003:['2020-01-01 00:00:00','2020-01-31 23:59:59'],bdca42:'102'},
+      'unemployment-tracking-service':{bae003:['2020-01-01 00:00:00','2020-01-31 23:59:59'],bdca42:'103'},
+    };
+    const verified=originalMatters().filter(m=>!['unemployment','poverty-alleviation-personnel','one-time-job-expansion-subsidy'].includes(m.id));
+    expect(verified).toHaveLength(15);
+    for(const matter of verified){
       const request=vi.fn(async()=>({total:0,rows:[]}));
       await queryHrssLedger({request},matter,{...context,filters:{startDate:'2020-01-01',endDate:'2020-01-31'}},now);
-      const first=request.mock.calls.map(call=>call.slice(0,2));
-      request.mockClear();
-      await queryHrssLedger({request},matter,{...context,filters:{startDate:'2024-07-01',endDate:'2024-07-31'}},now);
-      expect(request.mock.calls.map(call=>call.slice(0,2))).toEqual(first);
+      for(const call of request.mock.calls as unknown as [HrssListSource,Record<string,unknown>][]) {
+        const [source,params]=call;
+        const range=matter.id==='youth-internship-agreement'&&source.id==='registration'
+          ? {bae062s:'2020-01-01',bae062e:'2020-01-31',bae001:'163374'}
+          : ['youth-internship-agreement','youth-internship-unit'].includes(matter.id)
+            ? {cdc111Start:'2020-01-01',cdc111End:'2020-01-31',bae001:'163374'}
+            : expected[matter.id]??{adc705Begin:'2020-01-01',adc705End:'2020-01-31'};
+        expect(params).toMatchObject({...source.params,...range});
+        expect(params).not.toHaveProperty('startDate');expect(params).not.toHaveProperty('endDate');
+      }
     }
+  });
+  it('does not ignore the selected interval for tracking and includes the entire end day',async()=>{
+    const request=vi.fn(async()=>({total:0,rows:[]}));
+    await queryHrssLedger({request},definition('unemployment-tracking-service'),{...context,filters:{startDate:'2024-02-29',endDate:'2024-02-29'}},now);
+    expect((request.mock.calls as any)[0][1]).toMatchObject({bae003:['2024-02-29 00:00:00','2024-02-29 23:59:59'],pagenum:1,pagesize:200});
+  });
+  it('refuses an unverified poverty date query without fetching any unbounded page',async()=>{
+    const request=vi.fn();
+    await expect(queryHrssLedger({request},definition('poverty-alleviation-personnel'),{...context,filters:{startDate:'2026-11-01',endDate:'2026-11-04'}},now)).rejects.toThrow('原站列表未提供日期条件');
+    expect(request).not.toHaveBeenCalled();
+  });
+  it('uses the same month default when a legacy caller omits date selection',async()=>{
+    const request=vi.fn(async()=>({total:0,rows:[]}));
+    await queryHrssLedger({request},definition('difficult-flexible-employment-subsidy'),context,now);
+    expect((request.mock.calls as any)[0][1]).toMatchObject({adc953:'LHJYBT_10',adc705Begin:'2026-11-01',adc705End:'2026-11-04'});
   });
   it('collects every page and reports progress, preserving stable keys across reruns',async()=>{
     const request=vi.fn(async(_source,params)=>({total:201,rows:params.current===1?Array.from({length:200},(_,i)=>raw(`A-${i}`)):[raw('A-200')]}));

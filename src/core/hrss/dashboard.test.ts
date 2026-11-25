@@ -50,12 +50,14 @@ describe('authorized local HRSS dashboard', () => {
   it('opens the dashboard for a street office grant and counts only matters with a list source', () => {
     const streetMatter = HRSS_SUBDISTRICT_MATTERS[0].id;
     expect(build({ allowedMatterIds: [streetMatter] })).toMatchObject({
-      authorizedMatterCount: 0, matters: [], syncState: 'not-synced', totalRecords: null,
+      authorizedMatterCount: 1, matters: [expect.objectContaining({id:streetMatter})], syncState: 'not-synced', totalRecords: null,
     });
     expect(build({ allowedMatterIds: [POPULATION, streetMatter], tasks: [success()] })).toMatchObject({
-      authorizedMatterCount: 1, syncState: 'synced', totalRecords: 0,
+      authorizedMatterCount: 2, syncState: 'partial', totalRecords: 0,
     });
-    expect(() => build({ allowedMatterIds: [streetMatter], records: [record({}, streetMatter)] })).toThrow(HrssDashboardAccessError);
+    expect(build({ allowedMatterIds: [streetMatter], records: [record({}, streetMatter)] })).toMatchObject({
+      authorizedMatterCount: 1, syncState: 'local-only', totalRecords: 1,
+    });
   });
 
   it('does not treat failed, cancelled, unrelated, incomplete or future tasks as successful evidence', () => {
