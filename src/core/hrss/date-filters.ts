@@ -2,9 +2,9 @@ import type { BusinessMatter } from '../query/types';
 
 function localDate(time: number): string { return new Date(time + 8 * 3_600_000).toISOString().slice(0, 10); }
 
-export function hrssDefaultDateFilters(matterId: string, now = Date.now()): { startDate: string; endDate: string } {
+export function hrssDefaultDateFilters(_matterId: string, now = Date.now()): { startDate: string; endDate: string } {
   const today = localDate(now);
-  return { startDate: matterId === 'unemployment' ? '2025-05-01' : `${today.slice(0, 7)}-01`, endDate: today };
+  return { startDate: `${today.slice(0, 7)}-01`, endDate: today };
 }
 
 export function hrssDateFilter(matterId: string): NonNullable<BusinessMatter['dateFilter']> {
@@ -37,7 +37,7 @@ export function hrssDateBasis(matterId: string): { field: string; label: string 
 
 export function validateHrssDateFilters(filters: Record<string, unknown>): void {
   const start = filters.startDate, end = filters.endDate;
-  // Old main-process callers with no date selection continue to use the original source defaults.
+  // Main-process callers with no date selection use the same current-month defaults as the UI.
   if (start === undefined && end === undefined) return;
   const valid = (value: unknown): value is string => {
     if (typeof value !== 'string' || !/^\d{4}-\d{2}-\d{2}$/.test(value)) return false;

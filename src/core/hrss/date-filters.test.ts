@@ -2,10 +2,15 @@ import { describe, expect, it } from 'vitest';
 import { hrssDateBasis, hrssDateFilter, hrssDefaultDateFilters, hrssReturnDateDetails, hrssTaskDateLabel, validateHrssDateFilters } from './date-filters';
 
 describe('requested dates and effective HRSS query scope', () => {
-  it('preserves the existing unemployment start and defaults other controls to the Shanghai calendar month', () => {
+  it('defaults unemployment and other controls to the Shanghai calendar month across a UTC month boundary', () => {
     const now = Date.parse('2026-10-31T23:30:00Z');
-    expect(hrssDefaultDateFilters('unemployment', now)).toEqual({ startDate: '2025-05-01', endDate: '2026-11-01' });
+    expect(hrssDefaultDateFilters('unemployment', now)).toEqual({ startDate: '2026-11-01', endDate: '2026-11-01' });
     expect(hrssDefaultDateFilters('job-seeking-startup-subsidy', now)).toEqual({ startDate: '2026-11-01', endDate: '2026-11-01' });
+  });
+  it('uses the first of this month through today for an ordinary mid-month launch',()=>{
+    const now=Date.parse('2026-11-25T09:00:00Z');
+    expect(hrssDefaultDateFilters('unemployment',now)).toEqual({startDate:'2026-11-01',endDate:'2026-11-25'});
+    expect(hrssDefaultDateFilters('startup-training',now)).toEqual(hrssDefaultDateFilters('unemployment',now));
   });
   it('keeps an unverified poverty selection separate and states that no unconstrained query runs', () => {
     const filters = { startDate: '2026-10-01', endDate: '2026-10-31' };

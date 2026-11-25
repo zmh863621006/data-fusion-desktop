@@ -239,6 +239,12 @@ describe('完整分页、稳定键与取消',()=>{
     const second=new AbortController();const cancelDuringRequest=vi.fn(async()=>{second.abort();return {total:0,rows:[]};});
     await expect(queryHrssLedger({request:cancelDuringRequest},definition('job-seeking-startup-subsidy'),{...context,signal:second.signal},now)).rejects.toMatchObject({code:'TASK_CANCELLED'});
   });
+  it('defaults an unemployment query without date selection to this month while still querying one day at a time',async()=>{
+    const request=vi.fn(async(_source:HrssListSource,_params:Record<string,unknown>,_signal?:AbortSignal,_countOnly?:boolean)=>({total:0,rows:[]}));
+    await queryHrssLedger({request},definition('unemployment'),context,now);
+    expect(request.mock.calls.map(c=>c[1])).toEqual(['01','02','03','04'].map(day=>expect.objectContaining({bce089Start:`2026-11-${day}`,bce089End:`2026-11-${day}`})));
+    expect(request.mock.calls.every(c=>c[3]===true)).toBe(true);
+  });
   it('queries unemployment per day with original parameters and only count/list routes',async()=>{
     const request=vi.fn(async(_source,_params,_signal,countOnly)=>({total:countOnly?1:1,rows:countOnly?[]:[raw('SAME-ACCEPTANCE')]}));
     const result=await queryHrssLedger({request},definition('unemployment'),{...context,filters:{startDate:'2026-11-03',endDate:'2026-11-04'}},now);

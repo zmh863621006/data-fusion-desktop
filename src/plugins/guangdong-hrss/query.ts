@@ -145,8 +145,8 @@ export async function queryHrssLedger(client:HrssQueryClient,definition:HrssMatt
     }
   };
   if(definition.id==='unemployment') {
-    const start=context.filters.startDate??'2025-05-01';
-    const end=context.filters.endDate??hrssLocalDate(now);
+    const start=dates.startDate;
+    const end=dates.endDate;
     if(!validDate(start)||!validDate(end)||start>end) throw invalid('失业登记查询日期范围无效');
     const from=Date.parse(`${start}T00:00:00Z`),to=Date.parse(`${end}T00:00:00Z`);
     if((to-from)/86_400_000>3_660) throw invalid('查询日期范围超过十年，请缩小范围');
