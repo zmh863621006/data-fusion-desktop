@@ -155,7 +155,8 @@ export function updatePublicOrigin(value) {
 
 /** Administrative uploads are deliberately distinct from the public web/readonly code tree. */
 export function createUpdateReleases(db, { directory, publicOrigin, transaction, audit, authorize,
-  maxBytes = MAX_BYTES, uploadTimeoutMs = 10 * 60_000, now = Date.now, ossStorage } = {}) {
+  maxBytes = MAX_BYTES, uploadTimeoutMs = 10 * 60_000, now = Date.now, ossStorage, storageMode = 'oss' } = {}) {
+  if (!['oss', 'local'].includes(storageMode)) fail('安装包存储模式无效', 503);
   const origin = updatePublicOrigin(publicOrigin);
   const root = directory ? resolve(directory) : null;
   if (!Number.isSafeInteger(maxBytes) || maxBytes < 1024 || maxBytes > MAX_BYTES) throw new Error('Invalid installer size limit');
@@ -191,7 +192,7 @@ export function createUpdateReleases(db, { directory, publicOrigin, transaction,
     }
     db.exec("DROP INDEX IF EXISTS updates_app_target_version; CREATE UNIQUE INDEX IF NOT EXISTS updates_app_target_variant_version ON updates(platform,arch,variant,version) WHERE target_type='app'; COMMIT");
   } catch (error) { db.exec('ROLLBACK'); throw error; }
-  const mirror = ossStorage ?? ossUpdateStorageFromFile(root ? join(dirname(root), 'update-oss.secure.json') : undefined);
+  const mirror = storageMode === 'local' ? null : ossStorage ?? ossUpdateStorageFromFile(root ? join(dirname(root), 'update-oss.secure.json') : undefined);
   const uploading = new Set();
   const publishing = new Set(), uploadCompletions = new Set();
   let closed = false;
@@ -412,6 +413,9 @@ export function createUpdateReleases(db, { directory, publicOrigin, transaction,
       const target = releaseTarget(row.platform ?? 'win32', row.arch ?? 'x64', row.variant);
       if (!target) return null;
       if (!entry) {
+        // An intranet instance must never hand legacy external URLs to a
+        // desktop merely because an old release row was imported with its DB.
+        if (storageMode === 'local') return null;
         if (target.platform === 'linux') return null;
         // Preserve the legacy Windows external-link response, including its
         // optional MSI/manual-update behavior. Linux requires managed bytes.

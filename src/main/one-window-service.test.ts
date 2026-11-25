@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { mkdtemp, readFile, rm } from 'node:fs/promises';
+import { mkdtemp, readFile, readdir, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import ExcelJS from 'exceljs';
@@ -11,6 +11,7 @@ import { SqlitePlatformStore } from '../core/storage/platform-store';
 import { DefaultLocalSyncEngine } from '../core/sync/engine';
 import { TaskEngine } from '../core/tasks/engine';
 import { OneWindowService } from './one-window-service';
+import * as workbooks from '../core/one-window/workbook';
 
 const systemId = 'shenzhen-one-window';
 const matterId = 'outdoor-advertising-approval';
@@ -53,7 +54,7 @@ describe('one-window local collection and direct-upload lifecycle', () => {
     };
   }
 
-  async function open() {
+  async function open(options: Partial<ConstructorParameters<typeof OneWindowService>[0]> = {}) {
     database = new NodeSqliteDriver(join(directory, 'local.sqlite'));
     repository = new SqliteLocalRepository(database);
     await repository.initialize();
@@ -62,7 +63,7 @@ describe('one-window local collection and direct-upload lifecycle', () => {
     tasks = new TaskEngine(platformStore);
     service = new OneWindowService({ database, platformStore, syncEngine: new DefaultLocalSyncEngine(repository),
       plugin: plugin(), tasks, exportDirectory: join(directory, 'exports'), authorize, upload,
-      businessOperation: operation => operation(), now: () => now });
+      businessOperation: operation => operation(), now: () => now, ...options });
     await service.initialize();
   }
 
@@ -87,6 +88,7 @@ describe('one-window local collection and direct-upload lifecycle', () => {
     await service.stop();
     await database.close();
     await rm(directory, { recursive: true, force: true });
+    vi.restoreAllMocks();
   });
 
   it('uploads every row in a batch larger than the UI page limit and retains exact batch snapshots', async () => {
@@ -222,5 +224,98 @@ describe('one-window local collection and direct-upload lifecycle', () => {
       await stopping;
     }
     expect((await database.get<{ upload_status: string }>('SELECT upload_status FROM one_window_batches WHERE task_id=?', [task.id]))?.upload_status).toBe('failed');
+  });
+
+  async function openRecords(extra: Partial<ConstructorParameters<typeof OneWindowService>[0]> = {}) {
+    await service.stop(); await database.close();
+    await open({ deliveryMode: 'records', capture: async () => {}, ...extra });
+  }
+
+  it('captures complete records and empty batches transactionally for API sync without generating or uploading any workbook', async () => {
+    const capture = vi.fn(async (taskId: string, _matterId: string, captured: Array<{ recordKey: string; data: Record<string, unknown> }>) => {
+      await database.run('INSERT INTO fixture_record_queue(task_id,total,state) VALUES(?,?,?)', [taskId, captured.length, 'pending']);
+      expect((await platformStore.listTaskOutput(taskId, 1, 500)).total).toBe(captured.length);
+    });
+    const retryRecords = vi.fn(async () => { await database.run("UPDATE fixture_record_queue SET state='completed'"); });
+    await openRecords({ capture, retryRecords, recordUploadState: async taskId => {
+      const result = await database.get<{ state: 'pending' | 'completed' }>('SELECT state FROM fixture_record_queue WHERE task_id=?', [taskId]);
+      return { state: result?.state ?? 'pending', completedAt: now };
+    } });
+    await database.exec('CREATE TABLE fixture_record_queue(task_id TEXT PRIMARY KEY,total INTEGER,state TEXT)');
+    const createWorkbook = vi.spyOn(workbooks, 'createOneWindowWorkbook');
+    const createFilename = vi.spyOn(workbooks, 'oneWindowWorkbookFilename');
+    authorize.mockImplementation(async (_id, _automatic, requireExport) => { if (requireExport) throw new Error('NO_EXPORT_PERMISSION'); });
+    rows = Array.from({ length: 503 }, (_, index) => sample(index));
+    const task = await service.run(matterId, filters);
+    expect(task.status).toBe('completed');
+    expect(task.result).toMatchObject({ total: 503, deliveryMode: 'records', uploadStatus: 'uploaded' });
+    expect(capture).toHaveBeenCalledTimes(1); expect(capture.mock.calls[0][2]).toHaveLength(503);
+    expect(capture.mock.calls[0][0]).toBe(task.id);
+    expect((await service.records(matterId, { batchId: task.id, pageSize: 500 })).total).toBe(503);
+    expect(await service.state(matterId)).toMatchObject({ deliveryMode: 'records', batches: [{
+      taskId: task.id, fileName: '', filePath: '', uploadStatus: 'uploaded', uploadedAt: now, objectKey: null,
+    }] });
+    await expect(service.folder(task.id)).rejects.toThrow('数据接口同步');
+    rows = [];
+    const empty = await service.run(matterId, filters);
+    expect(empty.status).toBe('completed'); expect(empty.result).toMatchObject({ total: 0, deliveryMode: 'records', uploadStatus: 'uploaded' });
+    expect(capture.mock.calls[1][2]).toEqual([]);
+    expect(retryRecords).toHaveBeenCalledTimes(2);
+    expect(createWorkbook).not.toHaveBeenCalled(); expect(createFilename).not.toHaveBeenCalled(); expect(upload).not.toHaveBeenCalled();
+    await expect(readdir(join(directory, 'exports'))).rejects.toMatchObject({ code: 'ENOENT' });
+  });
+
+  it('maps durable API queue status and retries the same saved records across a restart without recollecting', async () => {
+    const capture = vi.fn(async (taskId: string) => { await database.run('INSERT INTO fixture_record_queue(task_id,state,last_error) VALUES(?,?,?)', [taskId, 'pending', null]); });
+    let deliver = false;
+    const retryRecords = vi.fn(async () => {
+      if (deliver) await database.run("UPDATE fixture_record_queue SET state='completed',last_error=NULL");
+    });
+    const recordUploadState = async (taskId: string) => {
+      const row = await database.get<{ state: 'pending' | 'blocked' | 'completed'; last_error: string | null }>('SELECT state,last_error FROM fixture_record_queue WHERE task_id=?', [taskId]);
+      return { state: row?.state ?? 'pending', lastError: row?.last_error ?? undefined, completedAt: now };
+    };
+    await openRecords({ capture, retryRecords, recordUploadState });
+    await database.exec('CREATE TABLE fixture_record_queue(task_id TEXT PRIMARY KEY,state TEXT,last_error TEXT)');
+    const task = await service.run(matterId, filters);
+    expect(task.result).toMatchObject({ uploadStatus: 'pending', deliveryMode: 'records' });
+    await database.run("UPDATE fixture_record_queue SET state='blocked',last_error='后台暂不可达'");
+    expect((await service.state(matterId)).batches[0]).toMatchObject({ taskId: task.id, uploadStatus: 'failed', uploadError: '后台暂不可达' });
+    await openRecords({ capture, retryRecords, recordUploadState });
+    expect((await service.state(matterId)).batches[0]).toMatchObject({ taskId: task.id, uploadStatus: 'failed' });
+    deliver = true;
+    expect(await service.retry(task.id)).toMatchObject({ taskId: task.id, uploadStatus: 'uploaded', uploadError: null, fileName: '', filePath: '' });
+    expect(query).toHaveBeenCalledTimes(1); expect(capture).toHaveBeenCalledTimes(1); expect(upload).not.toHaveBeenCalled();
+    expect((await platformStore.listTaskOutput(task.id)).total).toBe(1);
+    await expect(readdir(join(directory, 'exports'))).rejects.toMatchObject({ code: 'ENOENT' });
+  });
+
+  it('rolls back local records, output rows, batch metadata and the API queue together if durable capture fails', async () => {
+    await openRecords({ capture: async taskId => {
+      await database.run('INSERT INTO fixture_record_queue(task_id) VALUES(?)', [taskId]);
+      throw new Error('SYNTHETIC_CAPTURE_FAILURE');
+    } });
+    await database.exec('CREATE TABLE fixture_record_queue(task_id TEXT PRIMARY KEY)');
+    const task = await service.run(matterId, filters);
+    expect(task.status).toBe('failed'); expect(task.error).toBe('SYNTHETIC_CAPTURE_FAILURE');
+    for (const table of ['fixture_record_queue', 'one_window_batches', 'task_output_rows', 'local_records']) {
+      expect((await database.get<{ count: number }>(`SELECT COUNT(*) AS count FROM ${table}`))?.count).toBe(0);
+    }
+    expect(upload).not.toHaveBeenCalled();
+    await expect(readdir(join(directory, 'exports'))).rejects.toMatchObject({ code: 'ENOENT' });
+  });
+
+  it('does not let the old Excel retry scheduler run or expose old file actions after switching to records delivery', async () => {
+    upload.mockRejectedValueOnce(new Error('synthetic old workbook failure'));
+    const legacy = await service.run(matterId, filters), saved = (await service.state(matterId)).batches[0];
+    expect(saved.filePath).toBeTruthy(); const original = await readFile(saved.filePath);
+    const retryRecords = vi.fn(async () => {});
+    await openRecords({ retryRecords, recordUploadState: async () => ({ state: 'pending' }) });
+    now += 600_000;
+    await service.tick();
+    expect(upload).toHaveBeenCalledTimes(1); expect(retryRecords).not.toHaveBeenCalled();
+    expect((await service.state(matterId)).batches[0]).toMatchObject({ taskId: legacy.id, fileName: '', filePath: '', objectKey: null, uploadStatus: 'pending', uploadError: null });
+    await expect(service.folder(legacy.id)).rejects.toThrow('数据接口同步');
+    expect(await readFile(saved.filePath)).toEqual(original);
   });
 });

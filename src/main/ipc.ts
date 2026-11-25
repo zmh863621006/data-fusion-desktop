@@ -42,6 +42,7 @@ export function registerIpcHandlers(getTrustedWebContentsId: () => number | unde
     return choice.response === 1;
   };
   const businessChannels = new Set<string>([
+    IPC_CHANNELS.returnUploadRetry,
     IPC_CHANNELS.oneWindowRun, IPC_CHANNELS.oneWindowRetry, IPC_CHANNELS.oneWindowSavePlan,
     IPC_CHANNELS.licenseActivate, IPC_CHANNELS.licenseImport, IPC_CHANNELS.licenseDeactivate, IPC_CHANNELS.licenseRefresh,
     IPC_CHANNELS.healthToolImport, IPC_CHANNELS.healthToolUpdate, IPC_CHANNELS.healthToolSettings, IPC_CHANNELS.healthToolRemove, IPC_CHANNELS.healthToolExport,
@@ -67,6 +68,12 @@ export function registerIpcHandlers(getTrustedWebContentsId: () => number | unde
   handle(IPC_CHANNELS.oneWindowState, async (event, matterId, page) => {
     trusted(event);
     return (await appRuntime.oneWindow()).state(parseIdentifier(matterId, '事项标识'), page);
+  });
+  handle(IPC_CHANNELS.returnUploadState, async event => { trusted(event); return appRuntime.returnUploadState(); });
+  handle(IPC_CHANNELS.returnUploadRetry, async (event, includeHistory = false) => {
+    trusted(event);
+    if (typeof includeHistory !== 'boolean') throw new Error('补传参数无效');
+    return appRuntime.retryReturnUploads(includeHistory);
   });
   handle(IPC_CHANNELS.oneWindowSavePlan, async (event, matterId, plan) => {
     trusted(event);

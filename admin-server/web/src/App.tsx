@@ -17,6 +17,7 @@ import { adminApi, ApiError, loadAdminSession } from './api';
 import { offerBrowserPasswordSave } from './browser-password';
 import { SecurityPage } from './SecurityPage';
 import { EnterprisePage } from './EnterprisePage';
+import { ReturnDataPage } from './ReturnDataPage';
 import { LicenseScopeEditor } from './LicenseScopeEditor';
 import { UpdatesPage } from './UpdatesPage';
 import { emptyScope, licenseScopeSnapshot, scopeValidationError, type LicenseScopeValues } from './license-scope';
@@ -24,7 +25,7 @@ import { LicenseScopePicker } from './LicenseScopePicker';
 import { adminTableSearch } from './presentation';
 import type { AuditRecord, BootstrapData, CustomerRecord, DeviceRecord, LicenseRecord, SystemRecord } from './types';
 
-type PageKey = 'overview' | 'customers' | 'licenses' | 'devices' | 'systems' | 'updates' | 'audits' | 'security' | 'enterprises';
+type PageKey = 'overview' | 'customers' | 'licenses' | 'devices' | 'systems' | 'updates' | 'audits' | 'security' | 'enterprises' | 'returns';
 type LoginValues = { username: string; password: string; captcha: string };
 type CustomerValues = { name: string; contact?: string };
 type SystemValues = { name: string; version: string; enabled: boolean };
@@ -372,11 +373,11 @@ function AuditPage() {
 export function AdminShell({ initialData, onLoggedOut }: { initialData: BootstrapData; onLoggedOut: () => void }) {
   const { message } = AntApp.useApp();
   const [data, setData] = useState(initialData);
-  const [page, setPage] = useState<PageKey>(() => { const value=window.location.hash.slice(2); return ['overview','customers','enterprises','licenses','devices','systems','updates','audits','security'].includes(value) ? value as PageKey : 'overview'; });
+  const [page, setPage] = useState<PageKey>(() => { const value=window.location.hash.slice(2); return ['overview','customers','enterprises','returns','licenses','devices','systems','updates','audits','security'].includes(value) ? value as PageKey : 'overview'; });
   const [collapsed, setCollapsed] = useState(false);
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
   useEffect(()=>{window.location.hash=`/${page}`;},[page]);
-  useEffect(()=>{const handler=()=>{const value=window.location.hash.slice(2);if(['overview','customers','enterprises','licenses','devices','systems','updates','audits','security'].includes(value))setPage(value as PageKey);};window.addEventListener('hashchange',handler);return()=>window.removeEventListener('hashchange',handler);},[]);
+  useEffect(()=>{const handler=()=>{const value=window.location.hash.slice(2);if(['overview','customers','enterprises','returns','licenses','devices','systems','updates','audits','security'].includes(value))setPage(value as PageKey);};window.addEventListener('hashchange',handler);return()=>window.removeEventListener('hashchange',handler);},[]);
   const reload = useCallback(async () => {
     try { setData(await adminApi.bootstrap()); }
     catch (error) { if (error instanceof ApiError && error.status === 401) onLoggedOut(); else message.error(error instanceof Error ? error.message : '数据刷新失败'); }
@@ -395,6 +396,7 @@ export function AdminShell({ initialData, onLoggedOut }: { initialData: Bootstra
     { path: '/overview', name: '运营概览', icon: <DashboardOutlined /> },
     { path: '/customers', name: '客户管理', icon: <TeamOutlined /> },
     { path: '/enterprises', name: '企业信息', icon: <TeamOutlined /> },
+    { path: '/returns', name: '回流数据', icon: <HistoryOutlined /> },
     { path: '/licenses', name: '授权管理', icon: <KeyOutlined /> },
     { path: '/devices', name: '设备管理', icon: <DesktopOutlined /> },
     { path: '/systems', name: '业务系统', icon: <CodeSandboxOutlined /> },
@@ -402,7 +404,7 @@ export function AdminShell({ initialData, onLoggedOut }: { initialData: Bootstra
     { path: '/audits', name: '操作审计', icon: <HistoryOutlined /> },
     { path: '/security', name: '账号与安全', icon: <LockOutlined /> },
   ] };
-  const content = page === 'overview' ? <Overview data={data} onNavigate={setPage} /> : page === 'customers' ? <CustomersPage data={data} reload={reload} /> : page === 'licenses' ? <LicensesPage data={data} reload={reload} /> : page === 'devices' ? <DevicesPage data={data} reload={reload} /> : page === 'systems' ? <SystemsPage data={data} reload={reload} /> : page === 'updates' ? <UpdatesPage data={data} reload={reload} /> : page === 'security' ? <SecurityPage role={data.user?.role} onLoggedOut={onLoggedOut} /> : <AuditPage />;
+  const content = page === 'overview' ? <Overview data={data} onNavigate={setPage} /> : page === 'customers' ? <CustomersPage data={data} reload={reload} /> : page === 'licenses' ? <LicensesPage data={data} reload={reload} /> : page === 'devices' ? <DevicesPage data={data} reload={reload} /> : page === 'systems' ? <SystemsPage data={data} reload={reload} /> : page === 'updates' ? <UpdatesPage data={data} reload={reload} /> : page === 'returns' ? <ReturnDataPage data={data} /> : page === 'security' ? <SecurityPage role={data.user?.role} onLoggedOut={onLoggedOut} /> : <AuditPage />;
   return <div className={`apple-admin-layout ${collapsed ? 'is-collapsed' : ''}`}>
     <button type="button" className="skip-to-content" onClick={() => document.getElementById('admin-main')?.focus()}>跳到主要内容</button>
     {mobileMenuOpen && <button type="button" className="admin-menu-backdrop" aria-label="关闭导航菜单" onClick={() => setMobileMenuOpen(false)} />}

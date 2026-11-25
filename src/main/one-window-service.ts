@@ -8,7 +8,7 @@ import type { RuntimeTask, TaskContext, TaskEngine } from '../core/tasks/engine'
 import type { BusinessSystemPlugin } from '../core/plugins/types';
 import { DEFAULT_ONE_WINDOW_SCHEDULE, nextScheduleTime, parseOneWindowSchedule } from '../core/one-window/scheduler';
 import { createOneWindowWorkbook, oneWindowWorkbookFilename } from '../core/one-window/workbook';
-import type { OneWindowBatch, OneWindowFilters, OneWindowPlan, OneWindowState } from '../core/one-window/types';
+import type { OneWindowBatch, OneWindowDeliveryMode, OneWindowFilters, OneWindowPlan, OneWindowRecordUploadState, OneWindowState } from '../core/one-window/types';
 import { validateFilters } from '../core/query/validation';
 
 interface ScheduleRow {
@@ -28,8 +28,12 @@ interface ServiceOptions {
   plugin: BusinessSystemPlugin;
   tasks: TaskEngine;
   exportDirectory: string;
+  deliveryMode?: OneWindowDeliveryMode;
   authorize(matterId: string, automatic?: boolean, requireExport?: boolean): Promise<void>;
-  upload(input: { taskId: string; matterId: string; fileName: string; bytes: Buffer }, signal?: AbortSignal): Promise<UploadReceipt>;
+  upload?(input: { taskId: string; matterId: string; fileName: string; bytes: Buffer }, signal?: AbortSignal): Promise<UploadReceipt>;
+  capture?(taskId: string, matterId: string, rows: Array<{ recordKey: string; data: Record<string, unknown> }>): Promise<void>;
+  recordUploadState?(taskId: string): Promise<OneWindowRecordUploadState>;
+  retryRecords?(): Promise<void>;
   businessOperation<T>(operation: () => Promise<T>): Promise<T>;
   now?: () => number;
 }
@@ -53,7 +57,23 @@ export class OneWindowService {
   private readonly operations = new Set<Promise<unknown>>();
   private readonly now: () => number;
 
-  constructor(private readonly options: ServiceOptions) { this.now = options.now ?? Date.now; }
+  constructor(private readonly options: ServiceOptions) {
+    this.now = options.now ?? Date.now;
+    if (options.deliveryMode && !['records', 'workbook'].includes(options.deliveryMode)) throw new Error('一窗回流交付方式无效');
+    if (this.deliveryMode === 'records' && !options.capture) throw new Error('一窗数据同步队列尚未配置');
+  }
+
+  private get deliveryMode(): OneWindowDeliveryMode { return this.options.deliveryMode ?? 'workbook'; }
+
+  private async describeBatch(row: BatchRow): Promise<OneWindowBatch> {
+    if (this.deliveryMode !== 'records') return batchFromRow(row);
+    const status = await this.options.recordUploadState?.(row.task_id);
+    return { taskId: row.task_id, matterId: row.matter_id, createdAt: row.created_at, total: row.total,
+      partialCount: row.partial_count, fileName: '', filePath: '', objectKey: null,
+      uploadStatus: status?.state === 'completed' ? 'uploaded' : status?.state === 'blocked' || status?.lastError ? 'failed' : 'pending',
+      uploadError: status?.state === 'completed' ? null : status?.lastError ?? (status?.state === 'blocked' ? '数据同步需重试' : null),
+      uploadedAt: status?.state === 'completed' ? status.completedAt ?? null : null };
+  }
 
   async initialize(): Promise<void> {
     await this.options.database.exec(`
@@ -67,7 +87,7 @@ export class OneWindowService {
         upload_error TEXT, uploaded_at INTEGER, receipt_json TEXT, attempted_at INTEGER);
       CREATE INDEX IF NOT EXISTS one_window_batch_matter ON one_window_batches(matter_id,created_at DESC);
     `);
-    await this.options.database.run(`UPDATE one_window_batches SET upload_status='failed',
+    if (this.deliveryMode === 'workbook') await this.options.database.run(`UPDATE one_window_batches SET upload_status='failed',
       upload_error='上次推送被中断，将自动重试' WHERE upload_status='uploading'`);
   }
 
@@ -111,7 +131,8 @@ export class OneWindowService {
     const input = value as Record<string, unknown>;
     if (Object.keys(input).some(key => !['schedule', 'filters'].includes(key))) throw new Error('定时设置包含未知字段');
     const schedule = parseOneWindowSchedule(input.schedule);
-    await this.options.authorize(matterId, schedule.enabled || schedule.loginAutoRun, schedule.enabled || schedule.loginAutoRun);
+    await this.options.authorize(matterId, schedule.enabled || schedule.loginAutoRun,
+      this.deliveryMode === 'workbook' && (schedule.enabled || schedule.loginAutoRun));
     const filters = this.filters(matterId, input.filters);
     const next = schedule.enabled ? nextScheduleTime(schedule, this.now()) : null;
     await this.options.database.run(`INSERT INTO one_window_schedules(matter_id,schedule_json,filters_json,next_run_at)
@@ -129,7 +150,7 @@ export class OneWindowService {
       this.options.database.get<{ count: number }>('SELECT COUNT(*) AS count FROM one_window_batches WHERE matter_id=?', [matterId]),
       this.options.plugin.getSessionState(),
     ]);
-    return { plan, batches: rows.map(batchFromRow), batchTotal: count?.count ?? 0,
+    return { deliveryMode: this.deliveryMode, plan, batches: await Promise.all(rows.map(row => this.describeBatch(row))), batchTotal: count?.count ?? 0,
       running: this.collecting.has(matterId), sessionStatus: session.status };
   }
 
@@ -148,7 +169,7 @@ export class OneWindowService {
     if (this.collecting.has(matterId)) return Promise.reject(new Error('当前事项正在回流，请等待完成'));
     this.collecting.add(matterId);
     const operation = this.options.businessOperation(async () => {
-      await this.options.authorize(matterId, automatic, true);
+      await this.options.authorize(matterId, automatic, this.deliveryMode === 'workbook');
       const filters = this.filters(matterId, filtersInput);
       const session = await this.options.plugin.getSessionState({ force: true });
       if (session.status !== 'authenticated') throw new Error(session.message ?? '请先在原系统标签页完成登录');
@@ -165,23 +186,35 @@ export class OneWindowService {
     const matter = this.matter(matterId);
     const result = await matter.query({ page: 1, pageSize: 100, filters: { ...filters }, signal: context.signal, onProgress: context.report });
     context.signal.throwIfAborted();
-    await this.options.authorize(matterId, false, true);
+    await this.options.authorize(matterId, false, this.deliveryMode === 'workbook');
     const summary = await syncEngine.preview(plugin.id, matterId, matter.uniqueKey, result.rows, matter.mergeRecord);
     const rows = summary.changes.map(change => change.current);
     const collectedAt = this.now();
-    const fileName = oneWindowWorkbookFilename({ businessName: matter.name, batchId: context.taskId,
-      startDate: filters.startDate, endDate: filters.endDate, collectedAt });
+    const fileName = this.deliveryMode === 'workbook' ? oneWindowWorkbookFilename({ businessName: matter.name, batchId: context.taskId,
+      startDate: filters.startDate, endDate: filters.endDate, collectedAt }) : '';
     const partialCount = rows.filter(row => row.detailStatus !== 'complete').length;
     await database.transaction(async () => {
       context.signal.throwIfAborted();
-      await this.options.authorize(matterId, false, true);
+      await this.options.authorize(matterId, false, this.deliveryMode === 'workbook');
       await syncEngine.commit(plugin.id, matterId, summary);
       await platformStore.replaceTaskOutput(context.taskId, plugin.id, matterId,
+        summary.changes.map(change => ({ recordKey: change.key, data: change.current })));
+      await this.options.capture?.(context.taskId, matterId,
         summary.changes.map(change => ({ recordKey: change.key, data: change.current })));
       await database.run(`INSERT INTO one_window_batches(task_id,matter_id,created_at,total,partial_count,file_name,file_path,upload_status)
         VALUES(?,?,?,?,?,?,?,'pending')`, [context.taskId, matterId, collectedAt, rows.length, partialCount, fileName, '']);
       context.signal.throwIfAborted();
     });
+    if (this.deliveryMode === 'records') {
+      context.report({ current: rows.length, total: rows.length, message: '业务详情已保存，正在同步至后台' });
+      try { await this.options.retryRecords?.(); }
+      catch { context.signal.throwIfAborted(); }
+      const batch = await this.describeBatch(await this.batch(context.taskId));
+      context.report({ current: rows.length, total: rows.length,
+        message: batch.uploadStatus === 'uploaded' ? `已回流 ${rows.length} 条，数据已同步至后台`
+          : `已回流 ${rows.length} 条，${batch.uploadStatus === 'failed' ? '数据同步需重试' : '等待同步至后台'}` });
+      return { total: rows.length, partialCount, uploadStatus: batch.uploadStatus, taskId: context.taskId, deliveryMode: this.deliveryMode };
+    }
     context.report({ current: rows.length, total: rows.length, message: '业务详情已保存，正在生成 Excel 并推送' });
     try { await this.uploadBatch(context.taskId, context.signal); }
     catch {
@@ -203,8 +236,14 @@ export class OneWindowService {
 
   async retry(taskId: string): Promise<OneWindowBatch> {
     const batch = await this.batch(taskId);
-    await this.options.authorize(batch.matter_id, false, true);
+    await this.options.authorize(batch.matter_id, false, this.deliveryMode === 'workbook');
     const operation = this.options.businessOperation(async () => {
+      if (this.deliveryMode === 'records') {
+        if (!this.options.retryRecords) throw new Error('数据同步重试队列尚未就绪');
+        if (this.stopped) throw new Error('应用正在退出');
+        await this.options.retryRecords();
+        return this.describeBatch(await this.batch(taskId));
+      }
       await this.uploadBatch(taskId);
       return batchFromRow(await this.batch(taskId));
     }).finally(() => this.operations.delete(operation));
@@ -213,6 +252,7 @@ export class OneWindowService {
   }
 
   private async uploadBatch(taskId: string, parentSignal?: AbortSignal): Promise<void> {
+    if (this.deliveryMode !== 'workbook') throw new Error('当前使用数据接口同步');
     if (this.stopped) throw new Error('应用正在退出');
     if (this.uploading.has(taskId)) throw new Error('该批次正在推送');
     const controller = new AbortController();
@@ -256,6 +296,7 @@ export class OneWindowService {
       }
       controller.signal.throwIfAborted();
       await this.options.authorize(batch.matter_id, false, true);
+      if (!this.options.upload) throw new Error('Excel 推送服务尚未配置');
       const receipt = await this.options.upload({ taskId, matterId: batch.matter_id, fileName: batch.file_name, bytes }, controller.signal);
       await database.run("UPDATE one_window_batches SET upload_status='uploaded',upload_error=NULL,uploaded_at=?,receipt_json=? WHERE task_id=?",
         [this.now(), JSON.stringify(receipt), taskId]);
@@ -272,6 +313,7 @@ export class OneWindowService {
   }
 
   async folder(taskId: string): Promise<string> {
+    if (this.deliveryMode === 'records') throw new Error('当前使用数据接口同步，没有批次文件夹');
     const batch = await this.batch(taskId);
     await this.options.authorize(batch.matter_id, false, true);
     const root = resolve(this.options.exportDirectory);
@@ -285,9 +327,9 @@ export class OneWindowService {
     if (this.stopped || this.ticking) return;
     this.ticking = true;
     try {
-      const retry = await this.options.database.get<BatchRow>(`SELECT b.* FROM one_window_batches b
+      const retry = this.deliveryMode === 'workbook' ? await this.options.database.get<BatchRow>(`SELECT b.* FROM one_window_batches b
         JOIN runtime_tasks t ON t.id=b.task_id WHERE b.upload_status IN ('pending','failed') AND t.status!='cancelled'
-        AND (b.attempted_at IS NULL OR b.attempted_at<?) ORDER BY b.created_at LIMIT 1`, [this.now() - 5 * 60_000]);
+        AND (b.attempted_at IS NULL OR b.attempted_at<?) ORDER BY b.created_at LIMIT 1`, [this.now() - 5 * 60_000]) : undefined;
       if (this.stopped) return;
       if (retry && !this.uploading.has(retry.task_id)) {
         await this.retry(retry.task_id).catch(() => {});

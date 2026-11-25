@@ -18,6 +18,10 @@ import type { AppSettings } from '../core/settings/types';
 import type { OneWindowState, OneWindowPlan, OneWindowBatch } from '../core/one-window/types';
 
 const desktopApi = {
+  returnUploads: {
+    state: (): Promise<import('../core/returns/upload-queue').ReturnUploadState> => ipcRenderer.invoke(IPC_CHANNELS.returnUploadState),
+    retry: (includeHistory = false): Promise<import('../core/returns/upload-queue').ReturnUploadState> => ipcRenderer.invoke(IPC_CHANNELS.returnUploadRetry, includeHistory),
+  },
   oneWindow: {
     state: (matterId: string, page = 1): Promise<OneWindowState> => ipcRenderer.invoke(IPC_CHANNELS.oneWindowState, matterId, page),
     savePlan: (matterId: string, plan: Pick<OneWindowPlan, 'schedule' | 'filters'>): Promise<OneWindowPlan> => ipcRenderer.invoke(IPC_CHANNELS.oneWindowSavePlan, matterId, plan),

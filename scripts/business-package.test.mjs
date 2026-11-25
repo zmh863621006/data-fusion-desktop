@@ -1,11 +1,12 @@
 import assert from 'node:assert/strict';
 import { generateKeyPairSync } from 'node:crypto';
+import { createWriteStream } from 'node:fs';
 import { mkdtemp, mkdir, readFile, writeFile, rm, symlink, lstat, copyFile } from 'node:fs/promises';
 import { createRequire } from 'node:module';
 import { dirname, join, resolve } from 'node:path';
 import { test } from 'node:test';
 import { listPackage, extractFile, createPackage } from '@electron/asar';
-import { buildBusinessPayload } from './build-business-payload.mjs';
+import { buildBusinessPayload, createCompleteAsar } from './build-business-payload.mjs';
 import { stageBusinessShell } from './stage-business-shell.mjs';
 import { PROJECT, checkedTarget } from './business-package-common.mjs';
 
@@ -48,6 +49,16 @@ async function fixture(t) {
   return root;
 }
 const options = root => ({ projectRoot: root, version: '1.1.0', minShellVersion: '1.1.0', ...target });
+
+test('archive preparation waits for the returned writer to finish before measuring or hashing its bytes', async t => {
+  const root = await fixture(t), path = join(root, 'delayed.asar'), bytes = Buffer.from('delayed final archive bytes');
+  await createCompleteAsar(root, path, async (_source, destination) => {
+    const stream = createWriteStream(destination);
+    setTimeout(() => stream.end(bytes), 20);
+    return stream;
+  });
+  assert.deepEqual(await readFile(path), bytes);
+});
 
 test('business ASAR includes complete business output and only resolved production dependencies', async t => {
   const root = await fixture(t), result = await buildBusinessPayload(options(root));

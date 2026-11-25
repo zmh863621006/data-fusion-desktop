@@ -3,9 +3,17 @@ import { createRequire } from 'node:module';
 import { mkdir, mkdtemp, readFile, readdir, rename, unlink, writeFile } from 'node:fs/promises';
 import { dirname, join, relative, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { finished } from 'node:stream/promises';
 import { createPackage, listPackage } from '@electron/asar';
 import { PROJECT, inside, parseArguments, checkedVersion, checkedTarget, laneForTarget, checkedBackend,
   ordinary, digestFile, copyTree, excludedPath, readJson } from './business-package-common.mjs';
+
+export async function createCompleteAsar(source, destination, pack = createPackage) {
+  // This @electron/asar version resolves with out.end(), before the final
+  // writable buffers have finished. Reading size/hash sooner can sign a partial size.
+  const stream = await pack(source, destination);
+  if (stream && typeof stream.on === 'function') await finished(stream, { cleanup: true });
+}
 
 function packageDirectory(name, parent) {
   assert(/^(?:@[a-z0-9_.-]+\/)?[a-z0-9_.-]+$/i.test(name), 'Invalid dependency name');
@@ -60,7 +68,7 @@ export async function buildBusinessPayload(options = {}) {
   await writeFile(join(stage, 'business.json'), JSON.stringify(metadata, null, 2) + '\n');
   await mkdir(output, { recursive: true }); await ordinary(output, true);
   const temporary = join(output, `business-${version}.${Date.now()}.asar.tmp`), file = join(output, `business-${version}.asar`);
-  await createPackage(stage, temporary);
+  await createCompleteAsar(stage, temporary);
   const bytes = (await ordinary(temporary)).size, sha256 = await digestFile(temporary);
   assert(bytes > 0 && bytes <= 256 * 1024 * 1024, 'Business payload exceeds 256 MB');
   const entries = listPackage(temporary).map(name => name.replaceAll('\\', '/').replace(/^\//, ''));

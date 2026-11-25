@@ -70,6 +70,16 @@ http {
             send_timeout 600s;
             proxy_pass http://data-fusion-admin:8787;
         }
+        # If TLS terminates at an outer intranet proxy, keep signed program
+        # files reachable independently of the management page allowlist.
+        # This path must match ADMIN_BUSINESS_LOCAL_FEED_BASE.
+        location ^~ /business-updates/ {
+            limit_req zone=df_api burst=60 nodelay;
+            proxy_buffering off;
+            proxy_read_timeout 600s;
+            send_timeout 600s;
+            proxy_pass http://data-fusion-admin:8787;
+        }
         location /api/ {
             limit_req zone=df_api burst=60 nodelay;
             proxy_pass http://data-fusion-admin:8787;

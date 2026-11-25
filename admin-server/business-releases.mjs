@@ -3,18 +3,21 @@ import { createReadStream } from 'node:fs';
 import { chmod, lstat, mkdir, open, rename, unlink } from 'node:fs/promises';
 import { dirname, join, resolve } from 'node:path';
 import { businessOssStorageFromFile } from './business-oss.mjs';
+import { createBusinessLocalStorage } from './business-local-storage.mjs';
 import { BUSINESS_MAX_BYTES, BUSINESS_VERSION, businessTarget, businessLane, businessFileName, compareBusinessVersion, inspectBusinessAsar, validateBusinessMetadata } from './business-asar.mjs';
 
 const fail = (message, status = 400) => { throw Object.assign(Error(message), { status }); };
 export function createBusinessReleases(db, { directory, publicOrigin, privateKey, transaction, audit = () => {}, authorize,
-  ossStorage, maxBytes = BUSINESS_MAX_BYTES, uploadTimeoutMs = 600_000, now = Date.now } = {}) {
+  ossStorage, storageMode = 'oss', localFeedBase, requiredBackendOrigin, maxBytes = BUSINESS_MAX_BYTES, uploadTimeoutMs = 600_000, now = Date.now } = {}) {
   const root = directory ? resolve(directory) : null;
   const configDirectory = root ? dirname(root) : undefined;
-  const mirror = ossStorage ?? (configDirectory && (
+  const publicKey = createPublicKey(privateKey);
+  if (!['oss', 'local'].includes(storageMode)) fail('业务更新存储模式无效', 503);
+  const mirror = storageMode === 'local' ? createBusinessLocalStorage({ database: db, directory: root,
+    publicOrigin, publicKey, feedBase: localFeedBase ?? `${publicOrigin}/business-updates/` }) : ossStorage ?? (configDirectory && (
     businessOssStorageFromFile(join(configDirectory, 'business-oss.secure.json'))
     ?? businessOssStorageFromFile(join(configDirectory, 'update-oss.secure.json'))
   ));
-  const publicKey = createPublicKey(privateKey);
   db.exec(`CREATE TABLE IF NOT EXISTS business_releases(
     id TEXT PRIMARY KEY,version TEXT NOT NULL,platform TEXT NOT NULL,arch TEXT NOT NULL,variant TEXT NOT NULL,electron_major INTEGER NOT NULL,
     storage_name TEXT NOT NULL UNIQUE,file_name TEXT NOT NULL,state TEXT NOT NULL,bytes INTEGER NOT NULL DEFAULT 0,sha256 TEXT NOT NULL DEFAULT '',
@@ -53,14 +56,14 @@ export function createBusinessReleases(db, { directory, publicOrigin, privateKey
   function decodeLatest(latest, target) {
     if (!latest) return null;
     const envelope = latest.envelope;
-    if (!envelope || envelope.algorithm !== 'RSA-SHA256' || typeof envelope.payload !== 'string' || typeof envelope.signature !== 'string') fail('OSS 现有清单格式无效', 409);
+    if (!envelope || envelope.algorithm !== 'RSA-SHA256' || typeof envelope.payload !== 'string' || typeof envelope.signature !== 'string') fail('业务更新现有清单格式无效', 409);
     const bytes = Buffer.from(envelope.payload, 'base64url');
-    if (!verify('RSA-SHA256', bytes, publicKey, Buffer.from(envelope.signature, 'base64url'))) fail('OSS 现有清单签名无效，停止发布', 409);
-    let payload; try { payload = JSON.parse(bytes); } catch { fail('OSS 现有清单无效', 409); }
+    if (!verify('RSA-SHA256', bytes, publicKey, Buffer.from(envelope.signature, 'base64url'))) fail('业务更新现有清单签名无效，停止发布', 409);
+    let payload; try { payload = JSON.parse(bytes); } catch { fail('业务更新现有清单无效', 409); }
     if (payload?.schema !== 1 || payload.product !== 'data-fusion-desktop' || !BUSINESS_VERSION.test(payload.version)
-      || Object.keys(target).some(key => payload.target?.[key] !== target[key]) || !/^[a-f0-9]{64}$/.test(payload.sha256)) fail('OSS 现有清单目标无效', 409);
+      || Object.keys(target).some(key => payload.target?.[key] !== target[key]) || !/^[a-f0-9]{64}$/.test(payload.sha256)) fail('业务更新现有清单目标无效', 409);
     try { validateBusinessMetadata({ schema: payload.schema, product: payload.product, version: payload.version, minShellVersion: payload.minShellVersion,
-      target: payload.target, backend: payload.backend, entry: 'out/main/index.js' }); } catch { fail('OSS 现有清单后台配置无效', 409); }
+      target: payload.target, backend: payload.backend, entry: 'out/main/index.js' }); } catch { fail('业务更新现有清单后台配置无效', 409); }
     return payload;
   }
   async function upload(request, response, url, user) {
@@ -94,6 +97,7 @@ export function createBusinessReleases(db, { directory, publicOrigin, privateKey
     try {
       await mkdir(root, { recursive: true, mode: 0o700 }); const info = await lstat(root);
       if (!info.isDirectory() || info.isSymbolicLink()) fail('业务存储目录不允许链接', 503);
+      await mirror?.assertRoot?.();
       if (recoverable) { await unlink(pathFor(previous) + '.upload').catch(error => { if (error.code !== 'ENOENT') throw error; }); await unlink(pathFor(previous)).catch(error => { if (error.code !== 'ENOENT') throw error; }); }
       transaction(() => {
         if (recoverable) {
@@ -109,6 +113,7 @@ export function createBusinessReleases(db, { directory, publicOrigin, privateKey
       if (declared !== undefined && Number(declared) !== bytes) fail('业务包上传不完整');
       const sha256 = digest.digest('hex'); if (expected && sha256 !== expected) fail('业务包摘要与声明不一致');
       const inspected = await inspectBusinessAsar(temporary, { version, target }); reauthorize(request, user);
+      if (requiredBackendOrigin && inspected.metadata.backend.origin !== requiredBackendOrigin) fail('此部署的业务包必须使用当前内网后台地址', 409);
       await file.sync(); await file.close(); file = null; await chmod(temporary, 0o400); await rename(temporary, path); moved = true;
       if (mirror) await mirror.ensurePrivate({ path, version, target, bytes, sha256 });
       if (closed) fail('发布服务正在关闭', 503); reauthorize(request, user);
@@ -126,6 +131,7 @@ export function createBusinessReleases(db, { directory, publicOrigin, privateKey
     if (!mirror) fail('请先配置独立 OSS 业务更新存储', 503);
     if (row.state !== 'ready') fail('业务包尚未上传完成', 409);
     const target = targetFor(row), lane = businessLane(target), token = randomUUID(), metadata = JSON.parse(row.metadata_json);
+    if (requiredBackendOrigin && metadata.backend.origin !== requiredBackendOrigin) fail('此部署的业务包必须使用当前内网后台地址', 409);
     const checkBackendRevision = previous => {
       if (previous && (metadata.backend.revision < previous.revision || metadata.backend.revision === previous.revision && metadata.backend.origin !== previous.origin))
         fail('后台地址修订不能降低；更换后台地址必须提高修订号', 409);
@@ -149,14 +155,19 @@ export function createBusinessReleases(db, { directory, publicOrigin, privateKey
         transaction(() => { db.prepare('UPDATE business_releases SET enabled=0 WHERE id=?').run(id); audit(user, 'business_update.disabled', 'business_update', id, { version: row.version, target }); });
         return describe(lookup(id));
       }
-      if (current && (compareBusinessVersion(row.version, current.version) < 0 || row.version === current.version && row.sha256 !== current.sha256)) fail('OSS 已有更高版本或同版本不同内容，请刷新核对', 409);
+      if (current && (compareBusinessVersion(row.version, current.version) < 0 || row.version === current.version && row.sha256 !== current.sha256)) fail('业务更新已有更高版本或同版本不同内容，请刷新核对', 409);
       checkBackendRevision(current?.backend);
       await checkStored(row); await mirror.ensurePrivate(objectEntry(row)); assertLease();
       const payload = { schema: 1, product: 'data-fusion-desktop', version: row.version, minShellVersion: metadata.minShellVersion,
         target, url: mirror.payloadUrl(objectEntry(row)), bytes: row.bytes, sha256: row.sha256, backend: metadata.backend };
       const bytes = Buffer.from(JSON.stringify(payload)), envelope = { algorithm: 'RSA-SHA256', payload: bytes.toString('base64url'), signature: sign('RSA-SHA256', bytes, privateKey).toString('base64url') };
-      await mirror.setPublic(objectEntry(row), true); assertLease(); await mirror.writeLatest(target, envelope, latest?.etag ?? null); assertLease();
+      await mirror.setPublic(objectEntry(row), true); assertLease();
+      if (!mirror.commitLatest) { await mirror.writeLatest(target, envelope, latest?.etag ?? null); assertLease(); }
       transaction(() => {
+        assertLease();
+        // Local discovery and all release state become visible atomically. A
+        // crash/failed audit cannot expose a draft or advance only one side.
+        mirror.commitLatest?.(target, envelope, latest?.etag ?? null);
         db.prepare('UPDATE business_releases SET enabled=1,published_once=1,published_at=? WHERE id=?').run(now(), id);
         db.prepare('UPDATE business_release_channels SET current_id=?,max_version=?,backend_origin=?,backend_revision=? WHERE lane=? AND lease_token=?')
           .run(id, row.version, metadata.backend.origin, metadata.backend.revision, lane, token);
@@ -177,11 +188,18 @@ export function createBusinessReleases(db, { directory, publicOrigin, privateKey
     }
   }
   async function serve(request, response, url) {
+    if (mirror?.serve && await mirror.serve(request, response, url, (target, version, requireHead = false) => {
+      const row = db.prepare('SELECT * FROM business_releases WHERE platform=? AND arch=? AND variant=? AND electron_major=? AND version=?')
+        .get(target.platform, target.arch, target.variant, target.electronMajor, version);
+      if (requireHead && db.prepare('SELECT current_id FROM business_release_channels WHERE lane=?').get(businessLane(target))?.current_id !== row?.id) return null;
+      return row?.enabled && row.published_once && row.state === 'ready' ? objectEntry(row) : null;
+    })) return true;
     const match = /^\/api\/business-releases\/([a-f0-9-]{36})\/(business-[0-9.]+\.asar)$/.exec(url.pathname);
     if (!match || !['GET', 'HEAD'].includes(request.method)) return false;
     const row = lookup(match[1]); if (!row || !row.enabled || row.state !== 'ready' || match[2] !== row.file_name || !mirror) fail('业务包不存在或尚未发布', 404);
+    if (mirror.mode === 'local') return mirror.sendPayload(request, response, objectEntry(row));
     response.writeHead(302, { location: mirror.payloadUrl(objectEntry(row)), 'cache-control': 'no-store' }); response.end(); return true;
   }
-  return { upload, publish, serve, list: () => ({ rows: db.prepare('SELECT * FROM business_releases ORDER BY created_at DESC,id DESC').all().map(describe), configured: Boolean(mirror), feedBase: mirror?.feedBase ?? null }),
+  return { upload, publish, serve, list: () => ({ rows: db.prepare('SELECT * FROM business_releases ORDER BY created_at DESC,id DESC').all().map(describe), configured: Boolean(mirror), storageMode, feedBase: mirror?.feedBase ?? null }),
     close() { closed = true; for (const request of requests) request.destroy(); if (completions.size) return Promise.allSettled([...completions]); } };
 }

@@ -1,4 +1,6 @@
 export const IPC_CHANNELS = {
+  returnUploadState: 'return-upload:state',
+  returnUploadRetry: 'return-upload:retry',
   oneWindowState: 'one-window:state',
   oneWindowSavePlan: 'one-window:save-plan',
   oneWindowRun: 'one-window:run',

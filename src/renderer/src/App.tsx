@@ -33,6 +33,7 @@ import type { QueryPage } from '../../core/query/types';
 import { OneWindowPage } from './OneWindowPage';
 import { BatchReturnPanel } from './BatchReturnPanel';
 import { TaskCenterPage } from './TaskCenterPage';
+import { ReturnUploadStatus } from './ReturnUploadStatus';
 
 type SessionState = {
   status: 'logged-out' | 'logging-in' | 'authenticated' | 'unverified' | 'expiring' | 'expired';
@@ -635,6 +636,7 @@ function Workspace({ license, onLicenseChanged }: { license: LicenseStatus; onLi
           <div className="browser-remote-stage"><div className="browser-loading">{loginTab.error ?? '正在显示原系统页面…'}</div></div>
         </>}
       <main className={`content${activePage === 'workspace' && selectedSystem?.workspaceMode === 'list-ledger' && matterSection === 'data' ? ' hrss-ledger-content' : ''}`} hidden={Boolean(loginTab)}>
+        <ReturnUploadStatus />
         <UpdateBanner state={updateState} onOpen={() => setActivePage('settings')} />
         {activePage === 'home' && message && <div className="message page-message" role="status">{message}</div>}
         {activePage === 'home' ? <HomePage systems={systems} license={license} loading={loading} onSelect={(id) => { setSelectedSystemId(id); setActivePage('workspace'); }} onLogin={(id) => { void login(id); }} onTool={() => setActivePage('tools')} onTask={openTaskData} /> : activePage === 'tools' ? <HealthPublicityPage licensed={Boolean(license.grant?.allowedTools?.includes('health-publicity'))} allowExport={Boolean(license.grant?.allowExport)} /> : activePage !== 'workspace' ? (

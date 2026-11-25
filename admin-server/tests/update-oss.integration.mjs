@@ -124,6 +124,20 @@ test('only successful publication exposes OSS URLs; stable fast links redirect a
   assert.equal(f.db.prepare('SELECT oss_key FROM update_artifacts').get().oss_key, key);
 });
 
+test('explicit local installers ignore invalid OSS files and injected storage, including legacy external manifest rows', async t => {
+  const f = await releaseFixture(t, { ensureUploaded: () => assert.fail('Local mode must not upload to OSS'), downloadUrl: () => assert.fail('Local mode must not sign OSS URLs') });
+  await writeFile(join(f.directory, 'update-oss.secure.json'), 'unread invalid OSS configuration');
+  const local = createUpdateReleases(f.db, { ...f.options, storageMode: 'local' }); t.after(() => local.close());
+  f.db.prepare('UPDATE update_artifacts SET oss_key=? WHERE update_id=?').run(key, f.id);
+  assert.equal(await local.publish(f.id, true, {}, f.user), true);
+  assert.equal(local.manifest(f.row()).url, `https://backend.example.invalid/api/releases/${f.id}/DataFusion-Setup-1.0.6-x64.exe`);
+  assert(!local.manifest(f.row()).url.includes('aliyuncs'));
+  assert.equal(local.manifest({ id: 'unmanaged-fixture', version: '1.0.7', url: 'https://fixture-bucket.oss-cn-shenzhen.aliyuncs.com/external.exe', platform: 'win32', arch: 'x64', variant: 'standard' }), null);
+  assert.throws(() => createUpdateReleases(f.db, { ...f.options, storageMode: 'unknown' }), { status: 503 });
+  // Default mode is intentionally unchanged and still rejects the bad OSS file.
+  assert.throws(() => createUpdateReleases(f.db, { ...f.options, ossStorage: undefined }), /OSS 更新配置文件无法读取/);
+});
+
 test('failed OSS publication or revoked authorization leaves the existing publication state and URL unchanged', async t => {
   const f = await releaseFixture(t, { ensureUploaded: async () => { throw new Error('fixture denied'); }, downloadUrl: () => assert.fail('No unverified URL') });
   const before = f.row(); await assert.rejects(f.releases.publish(f.id, true, {}, f.user)); assert.deepEqual(f.row(), before);

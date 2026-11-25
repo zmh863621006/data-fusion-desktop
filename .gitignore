@@ -1,6 +1,8 @@
 node_modules/
 out/
 out-win7/
+out-huizhou/
+out-huizhou-win7/
 dist/
 release/
 *.log

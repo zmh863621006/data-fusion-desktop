@@ -8,6 +8,7 @@ import { createEnterpriseStore, aliyunProvider } from './enterprises.mjs';
 import { createUpdateReleases } from './update-releases.mjs';
 import { createBusinessReleases } from './business-releases.mjs';
 import { createOneWindowUploads } from './one-window-uploads.mjs';
+import { createReturnBatches } from './return-batches.mjs';
 import { releaseTarget, RELEASE_VERSION_PATTERN } from './update-filenames.mjs';
 import { establishmentImporterFromEnv } from './establishment-oss-import.mjs';
 import { createReadStream, existsSync, mkdirSync, readFileSync, statSync } from 'node:fs';
@@ -38,6 +39,17 @@ const privateKey = options.privateKey ?? readFileSync(privateKeyPath, 'utf8');
 const secureCookie = options.secureCookie ?? process.env.ADMIN_COOKIE_SECURE === 'true';
 const database = new DatabaseSync(dataPath, { allowExtension: false });
 const publicOrigin = options.publicOrigin ?? process.env.ADMIN_PUBLIC_ORIGIN;
+const intranet = (options.deployment ?? process.env.ADMIN_DEPLOYMENT) === 'huizhou-intranet';
+const updateStorageMode = options.updateStorageMode ?? process.env.ADMIN_UPDATE_STORAGE_MODE ?? (intranet ? 'local' : 'oss');
+const businessStorageMode = options.businessStorageMode ?? process.env.ADMIN_BUSINESS_STORAGE_MODE ?? (intranet ? 'local' : 'oss');
+const returnUploadsEnabled = options.returnUploadsEnabled ?? (process.env.ADMIN_RETURN_UPLOADS_ENABLED === 'true' || intranet);
+if (intranet) {
+  const origin = publicOrigin && new URL(publicOrigin);
+  if (!origin || origin.protocol !== 'https:' && !(origin.protocol === 'http:' && ['127.0.0.1', 'localhost', '[::1]'].includes(origin.hostname))) throw new Error('惠州内网部署必须配置 HTTPS 入口');
+  if ([updateStorageMode, businessStorageMode].some(mode => mode !== 'local')
+    || !returnUploadsEnabled || process.env.ESTABLISHMENT_OSS_ENABLED === 'true'
+    || (options.updatePublicOrigin ?? process.env.ADMIN_UPDATE_PUBLIC_ORIGIN ?? publicOrigin) !== publicOrigin) throw new Error('惠州部署必须使用内网存储和同源更新，并关闭深圳 OSS 导入');
+}
 const managementPublic = options.managementPublic ?? process.env.ADMIN_MANAGEMENT_PUBLIC === 'true';
 const managementIps = new Set((managementPublic ? [] : options.managementAllowedIps ?? (process.env.ADMIN_MANAGEMENT_ALLOWED_IPS ?? '').split(',').map(value=>value.trim()).filter(Boolean)).map(value=>{
   if (!isIP(value)) throw new Error('管理入口白名单必须是明确的 IP 地址');
@@ -290,6 +302,7 @@ const enterprises = createEnterpriseStore(database, {
   configured: Boolean(options.enterpriseProvider || process.env.ALIYUN_ENTERPRISE_APPCODE), audit, transaction,
 });
 const updateReleases = createUpdateReleases(database, {
+  storageMode: updateStorageMode,
   directory: options.releaseDirectory ?? process.env.ADMIN_UPDATE_DIRECTORY ?? (dataPath === ':memory:' ? undefined : join(dirname(dataPath), 'releases')),
   publicOrigin: options.updatePublicOrigin ?? process.env.ADMIN_UPDATE_PUBLIC_ORIGIN ?? publicOrigin,
   transaction, audit, authorize: currentUser,
@@ -300,10 +313,13 @@ const businessReleases = createBusinessReleases(database, {
   directory: options.businessReleaseDirectory ?? process.env.ADMIN_BUSINESS_UPDATE_DIRECTORY ?? (dataPath === ':memory:' ? undefined : join(dirname(dataPath), 'business-releases')),
   publicOrigin: options.updatePublicOrigin ?? process.env.ADMIN_UPDATE_PUBLIC_ORIGIN ?? publicOrigin,
   privateKey, transaction, audit, authorize: currentUser,
+  storageMode: businessStorageMode,
+  requiredBackendOrigin: intranet ? publicOrigin : undefined,
+  localFeedBase: options.businessLocalFeedBase ?? process.env.ADMIN_BUSINESS_LOCAL_FEED_BASE,
   ...(options.businessOssStorage ? { ossStorage: options.businessOssStorage } : {}),
   ...(options.uploadTimeoutMs ? { uploadTimeoutMs: options.uploadTimeoutMs } : {}),
 });
-const oneWindowUploads = createOneWindowUploads({ database,
+const oneWindowUploads = intranet ? undefined : createOneWindowUploads({ database,
   configDirectory: dataPath === ':memory:' ? undefined : dirname(dataPath),
   storage: options.oneWindowOssStorage,
   authorize(body, { systemId, matterId }) {
@@ -331,12 +347,75 @@ const oneWindowUploads = createOneWindowUploads({ database,
     return { customerId: license.customer_id, licenseId: license.id, deviceId: body.deviceId };
   },
 });
+function authorizeReturnUpload(body, { systemId, matterId }) {
+  const reject = () => { throw Object.assign(new Error('回流上传需要有效的设备及事项授权'), { status: 403 }); };
+  let grant;
+  try {
+    const proof = body.proof;
+    if (proof?.algorithm !== 'RSA-SHA256' || typeof proof.payload !== 'string' || proof.payload.length > 32768
+      || typeof proof.signature !== 'string' || proof.signature.length > 2048
+      || !verify('RSA-SHA256', Buffer.from(proof.payload, 'base64url'), createPublicKey(privateKey), Buffer.from(proof.signature, 'base64url'))) reject();
+    grant = JSON.parse(Buffer.from(proof.payload, 'base64url').toString('utf8'));
+    // Match the desktop's signed legacy-scope normalization without widening live permissions.
+    if (grant.allowedMatters?.['government-info']?.includes('double-publicity-return')) grant.allowedMatters['government-info'] =
+      [...new Set([...grant.allowedMatters['government-info'].filter(id => id !== 'double-publicity-return'), ...governmentMatters.map(matter => matter.id)])];
+    if (grant.allowedSystems?.includes('guangdong-hrss') && !grant.allowedMatters?.['guangdong-hrss']) grant.allowedMatters = {
+      ...grant.allowedMatters, 'guangdong-hrss': hrssMatters.filter(matter => matter.departmentId !== 'subdistrict-office').map(matter => matter.id) };
+    if (!Number.isSafeInteger(grant.expiresAt) || grant.expiresAt <= Date.now() || grant.deviceId !== body.deviceId
+      || !/^[a-f0-9]{64}$/.test(body.deviceId) || grant.notBefore && grant.notBefore > Date.now()
+      || !grant.allowedSystems?.includes(systemId)
+      || grant.allowedMatters?.[systemId] && !grant.allowedMatters[systemId].includes(matterId)) reject();
+  } catch { reject(); }
+  const license = database.prepare(`SELECT l.* FROM licenses l JOIN customers c ON c.id=l.customer_id
+    JOIN devices d ON d.license_id=l.id WHERE l.id=? AND d.device_id=? AND d.status='active'
+    AND c.enabled=1 AND l.status='active' AND l.expires_at>?`).get(String(grant.licenseId), String(body.deviceId), Date.now());
+  const scope = license && storedLicenseScope(license);
+  if (!license || !scope?.allowedSystems.includes(systemId)
+    || scope.allowedMatters?.[systemId] && !scope.allowedMatters[systemId].includes(matterId)
+    || !database.prepare(`SELECT 1 FROM systems s JOIN system_matters m ON s.id=m.system_id
+      WHERE s.id=? AND m.id=? AND s.enabled=1 AND m.enabled=1`).get(systemId, matterId)) reject();
+  return { customerId: license.customer_id, licenseId: license.id, deviceId: body.deviceId };
+}
+const returnBatches = createReturnBatches(database, { transaction, authorize: authorizeReturnUpload, revalidate: authorizeReturnUpload });
 async function api(request, response, url) {
   if (request.method === 'GET' && url.pathname === '/api/health') return json(response,200,{status:'ok'});
+  if (request.method === 'GET' && url.pathname === '/api/returns/capabilities') return json(response, 200, { schema: 1, enabled: returnUploadsEnabled });
+  if (url.pathname.startsWith('/api/returns/')) {
+    if (!returnUploadsEnabled) return json(response, 503, { error: '回流数据接收尚未启用' });
+    if (request.method !== 'POST') return json(response, 404, { error: '接口不存在' });
+    if (String(request.headers['content-type'] ?? '').split(';')[0].trim().toLowerCase() !== 'application/json') return json(response, 415, { error: '仅接受 application/json' });
+    security.limit(`return-upload:${security.ip(request)}`, 600, 60_000);
+    return json(response, 200, await returnBatches.handle(url.pathname, await readJson(request)));
+  }
+  if (url.pathname === '/api/admin/returns' || url.pathname.startsWith('/api/admin/returns/')) {
+    const user = requireAdmin(request, response); if (!user) return;
+    if (request.method !== 'GET') return json(response, 404, { error: '接口不存在' });
+    if (url.pathname === '/api/admin/returns') return json(response, 200, returnBatches.list(url.searchParams));
+    const match = /^\/api\/admin\/returns\/([a-f0-9-]{36})(\/export)?$/.exec(url.pathname);
+    if (!match) return json(response, 404, { error: '批次不存在' });
+    if (!match[2]) return json(response, 200, returnBatches.detail(match[1], url.searchParams));
+    const exported = returnBatches.export(match[1]);
+    audit(user, 'return_batch.exported', 'return_batch', match[1], { rowCount: exported.batch.rowCount });
+    response.writeHead(200, { 'content-type': 'application/json; charset=utf-8', 'cache-control': 'no-store',
+      'content-disposition': `attachment; filename="return-${match[1]}.json"` });
+    response.write('{"batch":' + JSON.stringify(exported.batch) + ',"rows":[');
+    let first = true;
+    for (const row of exported.rows) {
+      if (response.destroyed) break;
+      // Honor slow readers without accumulating the complete export in memory.
+      const writable = response.write((first ? '' : ',') + JSON.stringify(row)); first = false;
+      if (!writable && !response.destroyed) await new Promise(resolve => {
+        const done = () => { response.off('drain', done); response.off('close', done); resolve(); };
+        response.once('drain', done); response.once('close', done);
+      });
+    }
+    if (!response.destroyed) response.end(']}'); return;
+  }
   if (url.pathname.startsWith('/api/releases/') && await updateReleases.serve(request, response, url)) return;
   if (url.pathname.startsWith('/api/business-releases/') && await businessReleases.serve(request, response, url)) return;
   if (request.method === 'GET' && url.pathname === '/api/admin/captcha') return json(response, 200, security.captcha(request, response));
   if (request.method === 'POST' && url.pathname.startsWith('/api/one-window/uploads/')) {
+    if (!oneWindowUploads) return json(response, 404, { error: '此部署通过回流数据接口上传记录' });
     const body = await readJson(request);
     security.limit(`one-window-upload:${security.ip(request)}`, 120, 60_000);
     return json(response, 200, await oneWindowUploads.handle(url.pathname, body));
@@ -756,6 +835,7 @@ const server = createServer(async (request, response) => {
   if (secureCookie) response.setHeader('strict-transport-security','max-age=31536000');
   try {
     const url = new URL(request.url ?? '/', `http://${request.headers.host ?? 'localhost'}`);
+    if (await businessReleases.serve(request, response, url)) return;
     request.setTimeout(['/api/admin/updates/upload', '/api/admin/business-releases/upload'].includes(url.pathname) ? 60_000 : 30_000);
     if (managementIps.size && (url.pathname.startsWith('/api/admin/') || !url.pathname.startsWith('/api/')) && !managementIps.has(security.ip(request))) return json(response,403,{error:'当前来源地址不在管理入口白名单内'});
     if (url.pathname.startsWith('/api/admin/') && request.headers['sec-fetch-site'] === 'cross-site') return json(response,403,{error:'请求来源不允许'});

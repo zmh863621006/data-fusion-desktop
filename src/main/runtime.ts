@@ -62,6 +62,7 @@ import { OneWindowUploader } from '../core/one-window/uploader';
 import { ReturnBatchService } from './return-batch-service';
 import { createOneWindowWorkbook } from '../core/one-window/workbook';
 import { writeFile } from 'node:fs/promises';
+import { ReturnUploadQueue, type ReturnUploadState } from '../core/returns/upload-queue';
 
 const PRODUCT_PUBLIC_KEY = `-----BEGIN PUBLIC KEY-----
 MIIBojANBgkqhkiG9w0BAQEFAAOCAY8AMIIBigKCAYEAn2Th5TQoO3juKQte8Ai+
@@ -159,6 +160,7 @@ export class AppRuntime {
   private hrssReturnPending = 0;
   private oneWindowService?: OneWindowService;
   private returnBatchService?: ReturnBatchService;
+  private returnUploads?: ReturnUploadQueue;
 
   returnBatches(): ReturnBatchService {
     if (!this.platformStore) throw new Error('回流任务模块未就绪');
@@ -251,6 +253,11 @@ export class AppRuntime {
       allowDevelopmentLicense,
     });
     await this.license.refreshOnline().catch((error) => console.warn('在线授权状态刷新失败，将使用本地签名授权', error));
+    if (process.env.DATA_FUSION_DEPLOYMENT === 'huizhou-intranet') {
+      this.returnUploads = new ReturnUploadQueue(database, backend.origin, () => this.license!.clientAuthorization());
+      await this.returnUploads.initialize();
+      this.returnUploads.start();
+    }
     this.enterpriseService = new EnterpriseEnrichmentService(backend.enterpriseUrl,
       () => this.license!.enterpriseAuthorization(), fetch, backend.insecureHttpOrigin);
     this.updateService = new UpdateService(backend.updateUrl, releaseTrustedKey(PRODUCT_PUBLIC_KEY, process.env.DATA_FUSION_UPDATE_PUBLIC_KEY, allowDevelopmentLicense), runtimeUpdateTarget(process.platform, process.arch));
@@ -306,6 +313,9 @@ export class AppRuntime {
     this.licenseMonitor.start();
     const uploader = new OneWindowUploader(backend.origin, () => this.license!.clientAuthorization());
     this.oneWindowService = new OneWindowService({ database, platformStore: this.platformStore,
+      deliveryMode: this.returnUploads ? 'records' : 'workbook',
+      recordUploadState: taskId => this.returnUploads!.batchState(taskId),
+      retryRecords: async () => { await this.returnUploads!.retry(); },
       syncEngine: this.syncEngine, plugin: oneWindowPlugin, tasks: this.tasks,
       exportDirectory: this.exportDirectory?.directory ?? join(userDataPath, 'exports'),
       authorize: async (matterId, automatic, requireExport) => {
@@ -314,6 +324,7 @@ export class AppRuntime {
         if (automatic) assertFeatureLicensed(grant, 'auto-sync');
       },
       upload: (input, signal) => uploader.upload(input, signal),
+      capture: (taskId, matterId, rows) => this.captureReturn(taskId, oneWindowCatalog.id, matterId, rows),
       businessOperation: operation => this.businessOperation(operation),
     });
     await this.oneWindowService.initialize();
@@ -630,8 +641,10 @@ export class AppRuntime {
           await this.syncEngine!.commit(systemId, matterId, summary);
           await this.platformStore!.replaceTaskOutput(context.taskId, systemId, matterId,
             summary.changes.map(change => ({ recordKey: change.key, data: change.current })));
+          await this.captureReturn(context.taskId, systemId, matterId, summary.changes.map(change => ({ recordKey: change.key, data: change.current })));
           if (context.signal.aborted) throw new Error('任务已取消');
         });
+        void this.returnUploads?.flush();
         let completion = queryCompletionMessage ?? `${skippedRequests ? '回流结束' : '列表回流完成'}，共 ${summary.total} 条`;
         if (skippedRequests && !completion.includes('结果含缺项')) {
           completion += `；超时请求已尝试5次后跳过 ${skippedRequests} 项，结果含缺项`;
@@ -677,6 +690,7 @@ export class AppRuntime {
       await this.syncEngine!.commit(systemId, matterId, summary);
       await this.platformStore!.replaceTaskOutput(context.taskId, systemId, matterId,
         summary.changes.map(change => ({ recordKey: change.key, data: change.current })));
+      await this.captureReturn(context.taskId, systemId, matterId, summary.changes.map(change => ({ recordKey: change.key, data: change.current })));
       if (context.signal.aborted) throw new Error('任务已取消');
       return summary;
     };
@@ -687,6 +701,7 @@ export class AppRuntime {
       if (!this.practitionerNumbers) throw new Error('编号模块未就绪');
       return this.practitionerNumbers.withNumbers(matterId, enriched, commitRows);
     });
+    void this.returnUploads?.flush();
     const undated = result.undatedExcludedCount;
     const warning = undated ? `。另有 ${undated} 条许可决定日期无法确认，未纳入本批次。可清空日期回流后核对。` : '';
     context.report({ current: 4, total: 4, message: `回流完成，共 ${summary.total} 条${warning}` });
@@ -838,18 +853,63 @@ export class AppRuntime {
     if (!pending || !this.syncEngine) throw new Error('同步预览已失效，请重新预览');
     this.pendingPreviews.delete(previewId);
     try {
-      await this.syncEngine.commit(pending.systemId, pending.matterId, pending.summary);
+      if (!this.platformStore) throw new Error('数据模块未就绪');
+      await this.platformStore.transaction(async () => {
+        await this.syncEngine!.commit(pending.systemId, pending.matterId, pending.summary);
+        await this.captureReturn(previewId, pending.systemId, pending.matterId,
+          pending.summary.changes.map(change => ({ recordKey: change.key, data: change.current })));
+      });
     } catch (error) {
       this.pendingPreviews.set(previewId, pending);
       throw error;
     }
     const { total, inserted, updated, unchanged } = pending.summary;
+    void this.returnUploads?.flush();
     return { total, inserted, updated, unchanged };
+  }
+
+  private async captureReturn(taskId: string, systemId: string, matterId: string, rows: Array<{ recordKey: string; data: Record<string, unknown> }>): Promise<void> {
+    if (!this.returnUploads) return;
+    const task = await this.platformStore?.getTask(taskId), finishedAt = Date.now();
+    await this.returnUploads.capture({ clientBatchId: taskId, systemId, matterId,
+      startedAt: task?.startedAt ?? task?.createdAt ?? finishedAt, finishedAt,
+      rows: rows.map(row => ({ ...row, firstSeenAt: task?.createdAt ?? finishedAt, updatedAt: finishedAt })) });
+  }
+
+  async returnUploadState(): Promise<ReturnUploadState> {
+    return this.returnUploads?.snapshot() ?? { enabled: false, pending: 0, completed: 0, blocked: 0, sending: false };
+  }
+
+  async retryReturnUploads(includeHistory = false): Promise<ReturnUploadState> {
+    if (!this.returnUploads || !this.platformStore) throw new Error('此客户端未启用后台数据同步');
+    if (includeHistory) {
+      // History is explicit: only the currently licensed business scopes may be backfilled.
+      let page = 1;
+      for (;;) {
+        const grant = await this.currentGrant();
+        if (!grant || grant.expiresAt <= Date.now()) throw new Error('请刷新当前设备授权后补传');
+        const scopes = grant.allowedSystems.map(systemId => ({ systemId, matterIds: grant.allowedMatters?.[systemId] }));
+        const tasks = await this.platformStore.taskPage({ completedBatches: true, page, pageSize: 50 }, scopes);
+        for (const task of tasks.rows) {
+          if (!task.systemId || !task.matterId) continue;
+          if (await this.returnUploads.hasCaptured(task.id)) continue;
+          await this.requireLicense(task.systemId, task.matterId);
+          const rows = await this.platformStore.taskRowsForExport(task.id);
+          await this.captureReturn(task.id, task.systemId, task.matterId, rows);
+        }
+        if (page * 50 >= tasks.total) break;
+        page++;
+      }
+    }
+    return this.returnUploads.retry();
   }
 
   async shutdown(): Promise<void> {
     this.shuttingDown = true;
+    // Abort the queue before waiting for collectors that may be awaiting its HTTP work.
+    const uploadsStopped = this.returnUploads?.stop();
     await this.oneWindowService?.stop();
+    await uploadsStopped;
     await this.licenseMonitor?.stop();
     await loginTabController.flushSessionStorage();
     await this.sessionRecovery?.flush();

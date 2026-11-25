@@ -11,6 +11,8 @@
     "postinstall": "node node_modules/electron/install.js",
     "dev": "electron-vite dev",
     "build": "electron-vite build",
+    "build:huizhou": "node scripts/build-huizhou-intranet.mjs",
+    "build:huizhou:win7": "node scripts/build-huizhou-intranet.mjs --win7",
     "build:win7": "electron-vite build --config electron.vite.win7.config.ts",
     "package:universal": "node scripts/build-universal-installer.mjs",
     "icons": "node scripts/create-app-icons.mjs",

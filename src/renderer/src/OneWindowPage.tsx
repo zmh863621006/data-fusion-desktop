@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react';
-import type { OneWindowBatch, OneWindowFilters, OneWindowPlan, OneWindowState } from '../../core/one-window/types';
+import type { OneWindowBatch, OneWindowDeliveryMode, OneWindowFilters, OneWindowPlan, OneWindowState } from '../../core/one-window/types';
 import { DEFAULT_ONE_WINDOW_SCHEDULE } from '../../core/one-window/scheduler';
 import { ONE_WINDOW_STATES } from '../../plugins/shenzhen-one-window/catalog';
 import { AppIcon } from './AppIcon';
@@ -7,7 +7,9 @@ import { Modal } from './Modal';
 import './OneWindowPage.css';
 
 const dateTime = (value: number | null | undefined) => value ? new Date(value).toLocaleString('zh-CN', { timeZone: 'Asia/Shanghai' }) : '—';
-const uploadLabel = (batch: OneWindowBatch) => ({ pending: '待推送', uploading: '正在推送', uploaded: '已推送至后台', failed: '推送失败' })[batch.uploadStatus];
+const uploadLabel = (batch: OneWindowBatch, records = false) => (records
+  ? { pending: '等待同步', uploading: '正在同步', uploaded: '已同步至后台', failed: '同步需重试' }
+  : { pending: '待推送', uploading: '正在推送', uploaded: '已推送至后台', failed: '推送失败' })[batch.uploadStatus];
 const sections: Record<string, string> = {
   identifiers: '关联编号', base: '主体基本信息', item: '事项信息', opinions: '办理意见', form: '电子表单',
   materials: '申请材料', files: '受理文件', licenses: '证照目录', processFiles: '过程文件', printFiles: '打印文件',
@@ -23,6 +25,31 @@ const fieldLabels: Record<string, string> = {
   code0: '广告形式', code1: '其他形式', code2: '广告材质', code3: '其他材质', code4: '长度', code5: '宽度', code6: '厚度', code7: '下沿距地高度',
 };
 const display = (value: unknown) => value === null || value === undefined || value === '' ? '—' : String(value);
+
+export function OneWindowDeliveryDescription({ deliveryMode, batches = false }: { deliveryMode?: OneWindowDeliveryMode; batches?: boolean }) {
+  return <p>{deliveryMode === 'records'
+    ? batches ? '业务详情直接通过接口同步，后台可查看每个批次的数据。' : '获取办件列表与完整业务详情，直接同步至后台。'
+    : deliveryMode === 'workbook'
+      ? batches ? '本批次 Excel 同时保存在应用导出目录。' : '获取办件列表与完整业务详情，生成 Excel 后自动推送至后台。'
+      : batches ? '正在加载批次同步状态。' : '获取办件列表与完整业务详情。'}</p>;
+}
+
+export function OneWindowUploadStatus({ batch, deliveryMode }: { batch: OneWindowBatch; deliveryMode: OneWindowDeliveryMode }) {
+  return <><span className={`status-chip ${batch.uploadStatus === 'uploaded' ? 'ready' : batch.uploadStatus === 'failed' ? 'warning' : ''}`}>{uploadLabel(batch, deliveryMode === 'records')}</span>
+    {batch.uploadError && <div className="one-window-upload-error">{batch.uploadError}</div>}</>;
+}
+
+export function OneWindowBatchActions({ batch, deliveryMode, allowExport, retrying, onView, onFolder, onRetry }: {
+  batch: OneWindowBatch; deliveryMode: OneWindowDeliveryMode; allowExport: boolean; retrying: string;
+  onView(taskId: string): void; onFolder(taskId: string): void; onRetry(taskId: string): void;
+}) {
+  const records = deliveryMode === 'records';
+  return <div className="button-row"><button className="link-button" onClick={() => onView(batch.taskId)}>查看数据</button>
+    {!records && batch.filePath && <button className="link-button" onClick={() => onFolder(batch.taskId)}>打开文件夹</button>}
+    {(records || allowExport) && (batch.uploadStatus === 'failed' || records && batch.uploadStatus === 'pending')
+      && <button className="link-button" disabled={Boolean(retrying)} onClick={() => onRetry(batch.taskId)}>{retrying === batch.taskId ? records ? '同步中…' : '重推中…' : records ? '重试同步' : '重新推送'}</button>}
+  </div>;
+}
 
 function SectionValue({ section }: { section: unknown }) {
   if (!section || typeof section !== 'object' || Array.isArray(section)) return <DetailValue value={section} />;
@@ -121,15 +148,23 @@ export function OneWindowPage({ matterId, matterName, section, batchId, onBatchC
       const task = await window.desktopApi.oneWindow.run(matterId, plan.filters);
       if (!mounted.current) return;
       if (task.status !== 'completed') throw new Error(task.error ?? '本批次回流未完成');
-      const result = task.result as { total?: number; uploadStatus?: string };
-      setMessage(`本批次已保存 ${result?.total ?? 0} 条业务详情，${result?.uploadStatus === 'uploaded' ? 'Excel 已推送至后台' : 'Excel 待重新推送，请查看批次推送状态'}`);
+      const result = task.result as { total?: number; uploadStatus?: string; deliveryMode?: string };
+      const records = result?.deliveryMode === 'records' || state?.deliveryMode === 'records';
+      setMessage(`本批次已保存 ${result?.total ?? 0} 条业务详情，${records
+        ? result?.uploadStatus === 'uploaded' ? '数据已同步至后台' : '请查看批次的数据同步状态'
+        : result?.uploadStatus === 'uploaded' ? 'Excel 已推送至后台' : 'Excel 待重新推送，请查看批次推送状态'}`);
       setRevision(value => value + 1);
     } catch (error) { if (mounted.current) setError(error instanceof Error ? error.message : '回流失败'); }
     finally { if (mounted.current) setBusy(false); }
   };
   const retry = async (id: string) => {
     setRetrying(id); setError('');
-    try { await window.desktopApi.oneWindow.retry(id); if (mounted.current) setMessage('本批次 Excel 已补推至后台'); }
+    try {
+      const batch = await window.desktopApi.oneWindow.retry(id);
+      if (mounted.current) setMessage(state?.deliveryMode === 'records'
+        ? batch.uploadStatus === 'uploaded' ? '本批次数据已同步至后台' : '已请求重新同步，请查看批次状态'
+        : '本批次 Excel 已补推至后台');
+    }
     catch (error) { if (mounted.current) setError(error instanceof Error ? error.message : '重新推送失败'); }
     finally { if (mounted.current) { setRetrying(''); setRevision(value => value + 1); } }
   };
@@ -140,23 +175,25 @@ export function OneWindowPage({ matterId, matterName, section, batchId, onBatchC
   const running = busy || Boolean(state?.running);
   const authenticated = (state?.sessionStatus ?? sessionStatus) === 'authenticated';
   const nextRunAt = state?.plan.nextRunAt;
+  const recordsDelivery = state?.deliveryMode === 'records';
+  const canDeliver = recordsDelivery || allowExport;
 
   return <div className="one-window-page">
     {message && <div className="message" role="status">{message}</div>}
     {error && <div className="inline-error" role="alert">{error}</div>}
     {section === 'return' && <>
       <section className="panel one-window-controls">
-        <div className="panel-head"><div><h2>{matterName}</h2><p>获取办件列表与完整业务详情，生成 Excel 后自动推送至后台。</p></div></div>
+        <div className="panel-head"><div><h2>{matterName}</h2><OneWindowDeliveryDescription deliveryMode={state ? state.deliveryMode ?? 'workbook' : undefined} /></div></div>
         <div className="one-window-form">
           <label><span>日期条件</span><select value={plan.filters.dateType} onChange={event => setFilters({ dateType: event.target.value as OneWindowFilters['dateType'] })}><option value="all">全部日期</option><option value="received">接收／受理日期</option><option value="finished">办结日期</option></select></label>
           {plan.filters.dateType !== 'all' && <><label><span>开始日期</span><input type="date" value={plan.filters.startDate} onChange={event => setFilters({ startDate: event.target.value })} /></label><label><span>结束日期</span><input type="date" value={plan.filters.endDate} onChange={event => setFilters({ endDate: event.target.value })} /></label></>}
           <label><span>办理状态</span><select value={plan.filters.state} onChange={event => setFilters({ state: event.target.value })}>{ONE_WINDOW_STATES.map(option => <option key={option.value} value={option.value}>{option.label}</option>)}</select></label>
         </div>
-        <div className="one-window-actions"><button className="primary" disabled={running || !authenticated || !allowExport} onClick={() => void run()}><AppIcon name="refresh" size={17} />{running ? '正在回流…' : '立即回流并推送'}</button><span className="muted">{authenticated ? '会话已验证' : '请先在原系统标签页完成登录'}</span></div>
+        <div className="one-window-actions"><button className="primary" disabled={!state || running || !authenticated || !canDeliver} onClick={() => void run()}><AppIcon name="refresh" size={17} />{running ? '正在回流…' : recordsDelivery ? '立即回流并同步' : '立即回流并推送'}</button><span className="muted">{authenticated ? '会话已验证' : '请先在原系统标签页完成登录'}</span></div>
       </section>
       <section className="panel one-window-controls" aria-label="当前业务定时回流设置">
         <div className="panel-head"><div><h3>定时回流</h3><p>应用运行期间按北京时间执行，使用本页保存的日期和状态条件。</p></div><button className="secondary" disabled={!dirty || saving || !initialized.current} onClick={() => void save()}>{saving ? '正在保存…' : '保存设置'}</button></div>
-        <div className="one-window-toggles"><label><input type="checkbox" checked={plan.schedule.loginAutoRun} disabled={!allowAutoSync || !allowExport} onChange={event => setSchedule({ loginAutoRun: event.target.checked })} /><span>识别登录后立即回流一次</span></label><label><input type="checkbox" checked={plan.schedule.enabled} disabled={!allowAutoSync || !allowExport} onChange={event => setSchedule({ enabled: event.target.checked })} /><span>开启定时回流</span></label></div>
+        <div className="one-window-toggles"><label><input type="checkbox" checked={plan.schedule.loginAutoRun} disabled={!allowAutoSync || !canDeliver} onChange={event => setSchedule({ loginAutoRun: event.target.checked })} /><span>识别登录后立即回流一次</span></label><label><input type="checkbox" checked={plan.schedule.enabled} disabled={!allowAutoSync || !canDeliver} onChange={event => setSchedule({ enabled: event.target.checked })} /><span>开启定时回流</span></label></div>
         <div className="one-window-form">
           <label><span>执行方式</span><select value={plan.schedule.mode} onChange={event => setSchedule({ mode: event.target.value as OneWindowPlan['schedule']['mode'] })}><option value="interval">按间隔执行</option><option value="daily">每天执行</option><option value="weekly">每周执行</option></select></label>
           {plan.schedule.mode === 'interval' ? <label><span>间隔分钟</span><input type="number" min={1} max={10080} value={plan.schedule.intervalMinutes} onChange={event => setSchedule({ intervalMinutes: Number(event.target.value) })} /></label> : <label><span>执行时间</span><input type="time" value={plan.schedule.time} onChange={event => setSchedule({ time: event.target.value })} /></label>}
@@ -168,8 +205,9 @@ export function OneWindowPage({ matterId, matterName, section, batchId, onBatchC
     </>}
 
     <section className="panel one-window-batches">
-      <div className="panel-head"><div><h3>回流批次与后台推送</h3><p>本批次 Excel 同时保存在应用导出目录。</p></div></div>
-      <div className="table-wrap"><table><thead><tr><th>批次</th><th>回流时间</th><th>办件数</th><th>详情情况</th><th>后台推送</th><th>操作</th></tr></thead><tbody>{state?.batches.map(batch => <tr key={batch.taskId}><td>{batch.taskId.slice(0, 8).toUpperCase()}</td><td>{dateTime(batch.createdAt)}</td><td>{batch.total}</td><td>{batch.partialCount ? `${batch.partialCount} 条需补充详情` : '详情已采集'}</td><td><span className={`status-chip ${batch.uploadStatus === 'uploaded' ? 'ready' : batch.uploadStatus === 'failed' ? 'warning' : ''}`}>{uploadLabel(batch)}</span>{batch.uploadError && <div className="one-window-upload-error">{batch.uploadError}</div>}</td><td><div className="button-row"><button className="link-button" onClick={() => { onBatchChange(batch.taskId); setPage(1); }}>查看数据</button>{batch.filePath && <button className="link-button" onClick={() => void openFolder(batch.taskId)}>打开文件夹</button>}{allowExport && batch.uploadStatus === 'failed' && <button className="link-button" disabled={Boolean(retrying)} onClick={() => void retry(batch.taskId)}>{retrying === batch.taskId ? '重推中…' : '重新推送'}</button>}</div></td></tr>)}{!state?.batches.length && <tr><td colSpan={6} className="empty">{state ? '完成回流后，批次和推送结果会显示在这里' : '正在加载批次…'}</td></tr>}</tbody></table></div>
+      <div className="panel-head"><div><h3>{recordsDelivery ? '回流批次与数据同步' : '回流批次与后台推送'}</h3><OneWindowDeliveryDescription deliveryMode={state ? state.deliveryMode ?? 'workbook' : undefined} batches /></div></div>
+      <div className="table-wrap"><table><thead><tr><th>批次</th><th>回流时间</th><th>办件数</th><th>详情情况</th><th>{recordsDelivery ? '数据同步' : '后台推送'}</th><th>操作</th></tr></thead><tbody>{state?.batches.map(batch => <tr key={batch.taskId}><td>{batch.taskId.slice(0, 8).toUpperCase()}</td><td>{dateTime(batch.createdAt)}</td><td>{batch.total}</td><td>{batch.partialCount ? `${batch.partialCount} 条需补充详情` : '详情已采集'}</td><td><OneWindowUploadStatus batch={batch} deliveryMode={recordsDelivery ? 'records' : 'workbook'} /></td><td><OneWindowBatchActions batch={batch} deliveryMode={recordsDelivery ? 'records' : 'workbook'} allowExport={allowExport} retrying={retrying}
+        onView={id => { onBatchChange(id); setPage(1); }} onFolder={id => void openFolder(id)} onRetry={id => void retry(id)} /></td></tr>)}{!state?.batches.length && <tr><td colSpan={6} className="empty">{state ? recordsDelivery ? '完成回流后，批次和同步结果会显示在这里' : '完成回流后，批次和推送结果会显示在这里' : '正在加载批次…'}</td></tr>}</tbody></table></div>
       {Boolean(state && state.batchTotal > 20) && <div className="one-window-pagination"><span>共 {state?.batchTotal} 个批次</span><button className="secondary" disabled={batchPage <= 1} onClick={() => setBatchPage(value => value - 1)}>上一页</button><button className="secondary" disabled={batchPage * 20 >= (state?.batchTotal ?? 0)} onClick={() => setBatchPage(value => value + 1)}>下一页</button></div>}
     </section>
 

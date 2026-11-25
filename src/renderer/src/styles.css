@@ -610,6 +610,11 @@ progress::-moz-progress-bar { background: var(--accent); border-radius: 999px; }
 .number-business label { display: flex; flex-direction: column; gap: 8px; font-size: 13px; }
 .number-business input { min-height: 44px; font-size: 13px; }
 .number-preview { display: flex; flex-direction: column; gap: 8px; padding: 16px 0 20px; min-height: 88px; overflow-wrap: anywhere; }
+.return-upload-status { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 16px; padding: 16px 20px; margin-bottom: 16px; }
+.return-upload-status p { margin: 6px 0 0; font-size: 13px; color: var(--muted); overflow-wrap: anywhere; }
+.return-upload-status [role="alert"] { color: #9c4b00; }
+.return-upload-status button { min-height: 44px; }
+@media (max-width: 700px) { .return-upload-status .action-row { width: 100%; flex-wrap: wrap; } }
 .number-preview span { color: var(--muted); font-size: 12px; }
 .number-preview strong { font-size: 13px; font-weight: 500; font-variant-numeric: tabular-nums; }
 .practitioner-number-dialog button { min-height: 44px; }

@@ -309,6 +309,32 @@ button, a, input, textarea, select { -webkit-tap-highlight-color: transparent; }
   .security-tabs > .ant-tabs-nav .ant-tabs-tab { padding-inline: 12px; }
   .ant-alert-with-description { flex-wrap: wrap; }
 }
+.return-filters { margin-bottom: 20px; }
+.return-filter-grid { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 0 20px; }
+.return-filter-grid .ant-form-item { min-width: 0; margin-bottom: 18px; }
+.return-filter-grid .ant-picker-range { width: 100%; min-height: 40px; }
+.return-filter-actions .ant-btn { min-height: 44px; min-width: 80px; }
+.return-count { margin-left: 12px; font-size: 13px; font-weight: 400; color: var(--admin-secondary, #6e6e73); }
+.return-table-secondary { display: block; margin-top: 5px; color: var(--admin-secondary, #6e6e73); font-size: 12px; }
+.return-identifier { overflow-wrap: anywhere; font-variant-numeric: tabular-nums; }
+.return-batch-list .ant-table-cell .ant-btn { min-height: 44px; }
+.return-batch-list .ant-card-head { border-bottom: 0; }
+.return-detail-content { min-height: 200px; }
+.return-detail-drawer .ant-btn { min-height: 44px; }
+.return-batch-summary .ant-descriptions-item-label { width: 104px; white-space: nowrap; }
+.return-detail-drawer .ant-table-tbody > tr > td { height: 48px; }
+.return-detail-placeholder { padding-block: 64px; text-align: center; color: #6e6e73; }
+.return-records-heading { margin-top: 28px; }
+.return-record-data { padding: 12px 8px; }
+.return-record-data pre { max-height: 480px; overflow: auto; margin-top: 12px; padding: 18px; border: 1px solid #e5e5e7; border-radius: 12px; background: #f5f5f7; color: #1d1d1f; white-space: pre-wrap; overflow-wrap: anywhere; line-height: 1.6; font-size: 13px; }
+.return-record-data pre:focus-visible { outline: 3px solid #007aff; outline-offset: 3px; }
+@media (max-width: 1200px) { .return-filter-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
+@media (max-width: 600px) {
+  .return-filter-grid { grid-template-columns: minmax(0, 1fr); }
+  .return-filters .ant-card-body, .return-batch-list .ant-card-body { padding: 16px; }
+  .return-batch-list .ant-card-head { padding-inline: 16px; }
+  .return-count { display: block; margin-left: 0; margin-top: 4px; }
+}
 @media (prefers-reduced-motion: reduce) {
   *, *::before, *::after { animation-duration: .01ms !important; animation-iteration-count: 1 !important; transition-duration: .01ms !important; scroll-behavior: auto !important; }
 }

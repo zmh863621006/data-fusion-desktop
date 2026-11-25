@@ -14,6 +14,7 @@ export async function request<T>(path: string, options: RequestInit = {}): Promi
     signal: options.signal ?? AbortSignal.timeout(20_000),
     headers: { 'content-type': 'application/json', ...options.headers },
   }); } catch {
+    if (options.signal?.aborted && options.signal.reason?.name !== 'TimeoutError') throw new ApiError('请求已取消', 0, 'REQUEST_CANCELLED');
     const error = new ApiError('网络请求失败或超时，请稍后重试', 0);
     if (!localError(path)) window.dispatchEvent(new CustomEvent('admin-api-error', { detail: error }));
     throw error;

@@ -1,5 +1,13 @@
 import type { OneWindowSchedule } from './scheduler';
 
+export type OneWindowDeliveryMode = 'records' | 'workbook';
+
+export interface OneWindowRecordUploadState {
+  state: 'pending' | 'completed' | 'blocked';
+  lastError?: string;
+  completedAt?: number;
+}
+
 export interface OneWindowFilters {
   dateType: 'all' | 'received' | 'finished';
   startDate: string;
@@ -30,6 +38,7 @@ export interface OneWindowBatch {
 }
 
 export interface OneWindowState {
+  deliveryMode: OneWindowDeliveryMode;
   plan: OneWindowPlan;
   running: boolean;
   batches: OneWindowBatch[];
