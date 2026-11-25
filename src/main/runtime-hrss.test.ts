@@ -6,11 +6,17 @@ import { NodeSqliteDriver } from '../core/storage/database';
 import { SqliteLocalRepository } from '../core/storage/sqlite-repository';
 import { SqlitePlatformStore } from '../core/storage/platform-store';
 import { DefaultLocalSyncEngine, buildRecordKey } from '../core/sync/engine';
-import { TaskEngine } from '../core/tasks/engine';
+import { TaskEngine, type TaskContext, type TaskProgress } from '../core/tasks/engine';
 import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { basename, join } from 'node:path';
 import { ApplicationExportDirectory } from '../core/export/export-directory';
+
+function deferred<T>() {
+  let resolve!: (value: T | PromiseLike<T>) => void, reject!: (error: unknown) => void;
+  const promise = new Promise<T>((done, fail) => { resolve = done; reject = fail; });
+  return { promise, resolve, reject };
+}
 
 describe('HRSS complete-list transaction and aggregate boundary', () => {
   let database: NodeSqliteDriver, runtime: AppRuntime, store: SqlitePlatformStore, repository: SqliteLocalRepository;
@@ -37,6 +43,117 @@ describe('HRSS complete-list transaction and aggregate boundary', () => {
   afterEach(async () => { await database.close(); vi.restoreAllMocks(); });
   const execute = async () => runtime.tasks.run('列表回流测试', context => runtime.runOneClickReturn(systemId, matterId, context),
     { type: 'data-return', systemId, matterId });
+  const directContext = async (taskId: string, signal = new AbortController().signal, onProgress?: (progress: TaskProgress) => void): Promise<TaskContext> => {
+    await store.save({ id: taskId, type: 'data-return', name: '串行回流测试', systemId, matterId,
+      status: 'running', progress: { current: 0 }, createdAt: Date.now() });
+    return { taskId, signal, report: onProgress ?? vi.fn() };
+  };
+
+  it('queues overlapping HRSS returns until the preceding query and commit both finish', async () => {
+    const queryEntered = deferred<void>(), releaseQuery = deferred<void>(), commitEntered = deferred<void>(), releaseCommit = deferred<void>(), waiting = deferred<void>();
+    const firstContext = await directContext('hrss-first'), nextContext = await directContext('hrss-next', undefined,
+      progress => { if (progress.message?.includes('等待前一人社任务')) waiting.resolve(undefined); });
+    const order: string[] = [];
+    query.mockImplementationOnce(async () => { order.push('query-first'); queryEntered.resolve(undefined); await releaseQuery.promise;
+      return { rows, page: 1, pageSize: 200, total: rows.length }; });
+    query.mockImplementationOnce(async () => { order.push('query-next'); return { rows, page: 1, pageSize: 200, total: rows.length }; });
+    const original = store.replaceTaskOutput.bind(store);
+    vi.spyOn(store, 'replaceTaskOutput').mockImplementationOnce(async (...args) => {
+      commitEntered.resolve(undefined); await releaseCommit.promise; await original(...args); order.push('commit-first');
+    });
+    const first = runtime.runOneClickReturn(systemId, matterId, firstContext);
+    await queryEntered.promise;
+    const next = runtime.runOneClickReturn(systemId, matterId, nextContext);
+    await waiting.promise;
+    expect(query).toHaveBeenCalledTimes(1);
+    releaseQuery.resolve(undefined); await commitEntered.promise;
+    expect(query).toHaveBeenCalledTimes(1);
+    releaseCommit.resolve(undefined); await Promise.all([first, next]);
+    expect(order).toEqual(['query-first', 'commit-first', 'query-next']);
+    expect((await store.listTaskOutput(nextContext.taskId)).total).toBe(1);
+  });
+
+  it('cancels a waiting HRSS return without querying or blocking the following queued return', async () => {
+    const queryEntered = deferred<void>(), release = deferred<void>(), middleWaiting = deferred<void>(), lastWaiting = deferred<void>();
+    const cancelled = new AbortController();
+    const firstContext = await directContext('queue-first');
+    const middleContext = await directContext('queue-cancelled', cancelled.signal,
+      progress => { if (progress.message?.includes('等待前一人社任务')) middleWaiting.resolve(undefined); });
+    const lastContext = await directContext('queue-last', undefined,
+      progress => { if (progress.message?.includes('等待前一人社任务')) lastWaiting.resolve(undefined); });
+    query.mockImplementationOnce(async () => { queryEntered.resolve(undefined); await release.promise; return { rows, page: 1, pageSize: 200, total: rows.length }; });
+    const first = runtime.runOneClickReturn(systemId, matterId, firstContext);
+    await queryEntered.promise;
+    const middle = runtime.runOneClickReturn(systemId, matterId, middleContext);
+    await middleWaiting.promise;
+    const last = runtime.runOneClickReturn(systemId, matterId, lastContext);
+    await lastWaiting.promise;
+    const rejected = expect(middle).rejects.toThrow('任务已取消');
+    cancelled.abort(); await rejected;
+    expect(query).toHaveBeenCalledTimes(1);
+    release.resolve(undefined); await Promise.all([first, last]);
+    expect(query).toHaveBeenCalledTimes(2);
+    expect((await store.listTaskOutput(middleContext.taskId)).total).toBe(0);
+    expect((await store.listTaskOutput(lastContext.taskId)).total).toBe(1);
+  });
+
+  it('releases the HRSS queue when the active query fails', async () => {
+    const queryEntered = deferred<void>(), failed = deferred<void>(), waiting = deferred<void>();
+    const firstContext = await directContext('failed-first'), nextContext = await directContext('after-failed', undefined,
+      progress => { if (progress.message?.includes('等待前一人社任务')) waiting.resolve(undefined); });
+    query.mockImplementationOnce(async () => { queryEntered.resolve(undefined); await failed.promise; return { rows, page: 1, pageSize: 200, total: rows.length }; });
+    const first = runtime.runOneClickReturn(systemId, matterId, firstContext);
+    const firstError = expect(first).rejects.toThrow('源站请求失败');
+    await queryEntered.promise;
+    const next = runtime.runOneClickReturn(systemId, matterId, nextContext);
+    await waiting.promise;
+    failed.reject(new Error('源站请求失败')); await firstError; await next;
+    expect(query).toHaveBeenCalledTimes(2);
+    expect((await store.listTaskOutput(firstContext.taskId)).total).toBe(0);
+    expect((await store.listTaskOutput(nextContext.taskId)).total).toBe(1);
+  });
+
+  it('rechecks authorization after waiting and does not query a revoked queued return', async () => {
+    const queryEntered = deferred<void>(), release = deferred<void>(), waiting = deferred<void>();
+    const firstContext = await directContext('before-revoke'), nextContext = await directContext('revoked-waiter', undefined,
+      progress => { if (progress.message?.includes('等待前一人社任务')) waiting.resolve(undefined); });
+    query.mockImplementationOnce(async () => { queryEntered.resolve(undefined); await release.promise; return { rows, page: 1, pageSize: 200, total: rows.length }; });
+    const first = runtime.runOneClickReturn(systemId, matterId, firstContext);
+    const firstRejected = expect(first).rejects.toThrow('LICENSE_MATTER_DENIED');
+    await queryEntered.promise;
+    const next = runtime.runOneClickReturn(systemId, matterId, nextContext);
+    const nextRejected = expect(next).rejects.toThrow('LICENSE_MATTER_DENIED');
+    await waiting.promise;
+    const grant = (await runtime.currentGrant())!;
+    vi.mocked(runtime.currentGrant).mockResolvedValue({ ...grant, allowedMatters: { [systemId]: [] } });
+    release.resolve(undefined); await firstRejected; await nextRejected;
+    expect(query).toHaveBeenCalledTimes(1);
+    vi.mocked(runtime.currentGrant).mockResolvedValue(grant);
+    const laterContext = await directContext('re-authorized');
+    await runtime.runOneClickReturn(systemId, matterId, laterContext);
+    expect(query).toHaveBeenCalledTimes(2);
+  });
+
+  it('does not put a different business system behind the HRSS return queue', async () => {
+    const entered = deferred<void>(), release = deferred<void>();
+    const firstContext = await directContext('hrss-in-progress'), otherContext = await directContext('independent-system');
+    const otherSystem = 'independent-system', otherQuery = vi.fn(async () => ({ rows: [{ recordKey: 'other-record' }], page: 1, pageSize: 200, total: 1 }));
+    const plugin = runtime.plugins.get(systemId)!;
+    runtime.plugins.register({ ...plugin, id: otherSystem, name: '其他系统',
+      getSessionState: async () => ({ systemId: otherSystem, status: 'authenticated' }),
+      matters: [{ ...plugin.matters[0], query: otherQuery }] });
+    const grant = (await runtime.currentGrant())!;
+    vi.mocked(runtime.currentGrant).mockResolvedValue({ ...grant, allowedSystems: [systemId, otherSystem],
+      allowedMatters: { [systemId]: [matterId], [otherSystem]: [matterId] } });
+    enterprise.mockImplementation(async (_systemId, _matterId, incoming) => incoming);
+    query.mockImplementationOnce(async () => { entered.resolve(undefined); await release.promise; return { rows, page: 1, pageSize: 200, total: rows.length }; });
+    const first = runtime.runOneClickReturn(systemId, matterId, firstContext);
+    await entered.promise;
+    const other = await runtime.runOneClickReturn(otherSystem, matterId, otherContext);
+    expect(other.total).toBe(1); expect(otherQuery).toHaveBeenCalledOnce();
+    expect(query).toHaveBeenCalledTimes(1);
+    release.resolve(undefined); await first;
+  });
 
   it('uses record dates rather than a pending selection when naming a batch export', async () => {
     const directory = await mkdtemp(join(tmpdir(), 'hrss-pending-period-'));

@@ -41,7 +41,7 @@ export class HrssRequestGate {
   private lastStartedAt?: number;
   private tail: Promise<void> = Promise.resolve();
 
-  constructor(private readonly minimumIntervalMs = 2_000) {
+  constructor(private readonly minimumIntervalMs = 0) {
     if (!Number.isFinite(minimumIntervalMs) || minimumIntervalMs < 0) throw new RangeError('Invalid HRSS request interval');
   }
 
@@ -62,7 +62,7 @@ export class HrssRequestGate {
   private async run<T>(path: string, operation: (signal: AbortSignal) => Promise<T>, outerSignal?: AbortSignal): Promise<T> {
     for (let attempt = 1; attempt <= MAX_ATTEMPTS; attempt++) {
       if (outerSignal?.aborted) throw cancelled();
-      const delay = this.lastStartedAt === undefined ? 0 : Math.max(0, this.minimumIntervalMs - (Date.now() - this.lastStartedAt));
+      const delay = this.minimumIntervalMs === 0 || this.lastStartedAt === undefined ? 0 : Math.max(0, this.minimumIntervalMs - (Date.now() - this.lastStartedAt));
       if (delay) await wait(delay, outerSignal);
       if (outerSignal?.aborted) throw cancelled();
       this.lastStartedAt = Date.now();

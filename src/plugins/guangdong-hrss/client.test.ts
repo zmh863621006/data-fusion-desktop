@@ -38,16 +38,22 @@ describe('人社统一节流与超时重试',()=>{
   const response=(path:string)=>path===trainingPage?new Response(html,{headers:{'content-type':'text/html'}}):path==='/ZXZJ/gltPage.do'?json({FHZ:'1',total:0,rows:[]}):path.includes('/WGBT/')?json({total:0,rows:[]}):json({data:{total:0,records:[]}});
   const authenticate=(client:HrssClient)=>{client.acceptBrowserAccessToken('fixture-access');client.acceptBrowserCookie('WGBT_SESSION=fixture');client.acceptTrainingCookie('ZXZJ_SESSION=fixture; hz_zxzj=training-csrf');};
 
-  it('shares the default two-second interval across count, list, handling and both training network routes',async()=>{
+  it('serializes all network routes without imposing a fixed default delay',async()=>{
     vi.useFakeTimers();vi.setSystemTime(0);
     const starts:Array<{path:string;at:number}>=[];
-    const fetcher=vi.fn(async(url:string)=>{const path=new URL(url).pathname;starts.push({path,at:Date.now()});return response(path);});
+    let active=0,maxActive=0,finishTraining!:()=>void;
+    const fetcher=vi.fn(async(url:string)=>{
+      const path=new URL(url).pathname;starts.push({path,at:Date.now()});maxActive=Math.max(maxActive,++active);
+      try{if(path===trainingPage)await new Promise<void>(resolve=>{finishTraining=resolve;});return response(path);}finally{active--;}
+    });
     const client=new HrssClient({fetcher});authenticate(client);
-    const calls=[()=>client.request(unemployment,{},undefined,true),()=>client.request(source,{}),()=>client.requestHandlingRecords({bzd417:'fixture'}),()=>client.prepareTrainingSession(),()=>client.requestTrainingList(trainingConfig),()=>client.request(wgbt,{})];
-    const pending=(async()=>{for(const call of calls)await call();})();
-    await vi.runAllTimersAsync();await pending;
-    expect(starts.map(row=>row.path)).toEqual([unemployment.countPath,source.path,'/subsidize/main/rest/subsidy/common/operate-log',trainingPage,'/ZXZJ/gltPage.do',wgbt.path]);
-    expect(starts.map(row=>row.at)).toEqual([0,2000,4000,6000,8000,10000]);
+    const trainingReady=client.prepareTrainingSession();
+    const pending=[trainingReady,client.request(unemployment,{},undefined,true),client.request(source,{}),client.requestHandlingRecords({bzd417:'fixture'}),client.request(wgbt,{})];
+    const trainingList=trainingReady.then(()=>client.requestTrainingList(trainingConfig));
+    await vi.advanceTimersByTimeAsync(0);expect(starts.map(row=>row.path)).toEqual([trainingPage]);
+    finishTraining();await Promise.all([...pending,trainingList]);
+    expect(starts.map(row=>row.path)).toEqual([trainingPage,unemployment.countPath,source.path,'/subsidize/main/rest/subsidy/common/operate-log',wgbt.path,'/ZXZJ/gltPage.do']);
+    expect(starts.map(row=>row.at)).toEqual([0,0,0,0,0,0]);expect(maxActive).toBe(1);expect(vi.getTimerCount()).toBe(0);
   });
 
   it.each(['count','list','handling','training-page','training-list','wgbt'])('retries transport timeouts through the shared gate for %s',async(kind)=>{
@@ -88,6 +94,27 @@ describe('人社统一节流与超时重试',()=>{
     const client=new HrssClient({fetcher,minimumIntervalMs:0});authenticate(client);
     const error=await client.request(source,{}).catch(error=>error);
     expect(isExhaustedHrssTimeout(error)).toBe(true);expect(fetcher).toHaveBeenCalledTimes(5);expect(client.hasAccessToken()).toBe(true);
+  });
+
+  it.each([408,504])('treats HTTP %s as a timeout for ordinary requests and both training routes, with recovery and a five-attempt cap',async(status)=>{
+    vi.spyOn(console,'warn').mockImplementation(()=>undefined);
+    for(const kind of ['ordinary','training-page','training-list']){
+      const target=kind==='ordinary'?source.path:kind==='training-page'?trainingPage:'/ZXZJ/gltPage.do';
+      const invoke=(client:HrssClient)=>kind==='ordinary'?client.request(source,{}):kind==='training-page'?client.prepareTrainingSession():client.requestTrainingList(trainingConfig);
+      for(const exhausted of [false,true]){
+        let attempts=0;
+        const fetcher=vi.fn(async(url:string)=>{
+          const path=new URL(url).pathname;
+          if(path===target){attempts++;if(exhausted||attempts===1)return json({},status);}
+          return response(path);
+        });
+        const client=new HrssClient({fetcher});authenticate(client);
+        if(exhausted)expect(isExhaustedHrssTimeout(await invoke(client).catch(error=>error))).toBe(true);
+        else await invoke(client);
+        expect(attempts).toBe(exhausted?5:2);
+        expect(client.hasAccessToken()).toBe(true);expect(client.exportSession()?.trainingCookie).toContain('hz_zxzj=training-csrf');
+      }
+    }
   });
 
   it('keeps the sixty-second network abort distinct from a user cancellation',async()=>{

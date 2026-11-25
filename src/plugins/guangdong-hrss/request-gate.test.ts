@@ -21,9 +21,29 @@ describe('HRSS timeout identification', () => {
 });
 
 describe('HRSS shared request scheduling', () => {
-  it('starts immediately and serializes different paths with at least the default two-second interval', async () => {
+  it('starts the next queued request immediately after completion without a default fixed delay or concurrent operations', async () => {
     vi.useFakeTimers(); vi.setSystemTime(0);
-    const gate = new HrssRequestGate(), starts: number[] = [];
+    const gate = new HrssRequestGate(), starts: string[] = [];
+    let active = 0, maxActive = 0, finish!: () => void;
+    const first = gate.execute('/first', async () => {
+      starts.push('first'); maxActive = Math.max(maxActive, ++active);
+      await new Promise<void>(resolve => { finish = resolve; });
+      active--; return 'first';
+    });
+    const second = gate.execute('/second', async () => {
+      starts.push('second'); maxActive = Math.max(maxActive, ++active);
+      active--; return 'second';
+    });
+    await vi.advanceTimersByTimeAsync(0);
+    expect(starts).toEqual(['first']);
+    finish(); await expect(first).resolves.toBe('first'); await expect(second).resolves.toBe('second');
+    expect(starts).toEqual(['first', 'second']); expect(maxActive).toBe(1);
+    expect(Date.now()).toBe(0); expect(vi.getTimerCount()).toBe(0);
+  });
+
+  it('supports an explicitly configured interval while serializing different paths', async () => {
+    vi.useFakeTimers(); vi.setSystemTime(0);
+    const gate = new HrssRequestGate(2_000), starts: number[] = [];
     const call = (path: string) => gate.execute(path, async () => { starts.push(Date.now()); return path; });
     await expect(call('/count')).resolves.toBe('/count');
     const second = call('/list'), third = call('/handling');
@@ -39,7 +59,7 @@ describe('HRSS shared request scheduling', () => {
     vi.useFakeTimers(); vi.setSystemTime(0);
     const warn = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
     const operation = vi.fn().mockRejectedValueOnce(nativeTimeout()).mockRejectedValueOnce({ cause: { code: 'ETIMEDOUT' } }).mockResolvedValue('ready');
-    const pending = new HrssRequestGate().execute('/list', operation);
+    const pending = new HrssRequestGate(2_000).execute('/list', operation);
     await vi.advanceTimersByTimeAsync(3_999); expect(operation).toHaveBeenCalledTimes(2);
     await vi.advanceTimersByTimeAsync(1); await expect(pending).resolves.toBe('ready');
     expect(operation).toHaveBeenCalledTimes(3); expect(warn).toHaveBeenCalledTimes(2);
@@ -54,7 +74,6 @@ describe('HRSS shared request scheduling', () => {
     const warn = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
     const operation = vi.fn().mockRejectedValue(new Error('net::ERR_TIMED_OUT token=PRIVATE-ACCESS'));
     const result = new HrssRequestGate().execute('/list?token=PRIVATE-QUERY', operation).catch(error => error);
-    await vi.advanceTimersByTimeAsync(8_000);
     const error = await result;
     expect(isExhaustedHrssTimeout(error)).toBe(true);
     if (!isExhaustedHrssTimeout(error)) throw new Error('Expected an exhausted HRSS timeout');
@@ -63,6 +82,7 @@ describe('HRSS shared request scheduling', () => {
     expect(JSON.stringify(warn.mock.calls)).not.toMatch(/PRIVATE|token|\?/);
     expect(JSON.stringify(warn.mock.calls)).toContain('unknown');
     expect(error.message).not.toContain('PRIVATE');
+    expect(Date.now()).toBe(0);
   });
 
   it('times out each attempt at sixty seconds even when the operation ignores abort', async () => {
@@ -106,7 +126,7 @@ describe('HRSS shared request scheduling', () => {
 
   it('cancels during throttling and does not start the cancelled request later', async () => {
     vi.useFakeTimers();
-    const gate = new HrssRequestGate(), operation = vi.fn(async () => 'ok');
+    const gate = new HrssRequestGate(2_000), operation = vi.fn(async () => 'ok');
     await gate.execute('/first', operation);
     const controller = new AbortController(), result = gate.execute('/second', operation, controller.signal).catch(error => error);
     await vi.advanceTimersByTimeAsync(100); controller.abort();

@@ -15,6 +15,9 @@ export interface HrssListPage { rows: Record<string, unknown>[]; total: number }
 const validCredential = (value: unknown): value is string => typeof value==='string' && value.trim().length>0 && value.length<=65_536 && !/[\r\n]/.test(value);
 const object = (value: unknown): value is Record<string, unknown> => !!value && typeof value==='object' && !Array.isArray(value);
 const failure = (message: string) => new AppError('REMOTE_REQUEST_FAILED', message, {retryable:false});
+const checkHttpTimeout = (response: Response): void => {
+  if(response.status===408 || response.status===504) throw new AppError('REMOTE_TIMEOUT','人社系统请求超时');
+};
 
 /** Only documented list envelopes are accepted. Java's outer HttpParameterEntity wrapper is optional. */
 export function decodeHrssList(value: unknown, rowField: 'records'|'rows', countOnly=false,expectedTotal?:number): HrssListPage {
@@ -104,6 +107,7 @@ export class HrssClient {
     if(this.trainingSession) return this.trainingSession;
     return this.gate.execute(TRAINING_PAGE,async gateSignal=>{
       const response=await this.fetcher(new URL(TRAINING_PAGE,HRSS_ORIGIN).href,{method:'GET',headers:{Cookie:this.credential.trainingCookie!,Accept:'text/html'},redirect:'error',signal:gateSignal});
+      checkHttpTimeout(response);
       if(!response.ok) throw failure(`创业培训查询页面读取失败（HTTP ${response.status}）`);
       const $=load(await response.text());
       const organizationId=$('form[name="editform"] input[name="BAE001"]').attr('value')??'';
@@ -125,6 +129,7 @@ export class HrssClient {
     return this.gate.execute('/ZXZJ/gltPage.do',async gateSignal=>{
       const encoded=new URLSearchParams();for(const [key,value]of Object.entries(params))if(value!==undefined&&value!==null)encoded.set(key,String(value));
       const response=await this.fetcher(new URL('/ZXZJ/gltPage.do',HRSS_ORIGIN).href,{method:'POST',headers:{Accept:'application/json',Cookie:this.credential.trainingCookie!,'Content-Type':'application/x-www-form-urlencoded;charset=UTF-8',hz_zxzj:training.csrfToken},body:encoded.toString(),redirect:'error',signal:gateSignal});
+      checkHttpTimeout(response);
       if(response.status===401 || response.status===403) {this.clearTrainingCookie();throw new AppError('SESSION_EXPIRED','创业培训会话已失效，请在原站重新打开该业务');}
       if(!response.ok) throw failure(`创业培训列表请求失败（HTTP ${response.status}）`);
       // This legacy controller serves valid JSON as text/html. Validate the envelope before deciding it is a login page.
@@ -163,6 +168,7 @@ export class HrssClient {
       let response:Response;
       try { response=await this.fetcher(url.href,{...init,signal:gateSignal}); }
       catch(error) { if(gateSignal.aborted || isHrssRequestTimeout(error)) throw error; throw new AppError('REMOTE_REQUEST_FAILED','连接人社平台失败，请检查网络和原站登录状态'); }
+      checkHttpTimeout(response);
       if(response.status===401 || response.status===403) {
         if(isWgbt) this.clearCookie(); else this.clearAccessToken();
         throw new AppError('SESSION_EXPIRED','人社平台会话已失效，请在原站重新登录');

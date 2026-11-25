@@ -154,8 +154,42 @@ export class AppRuntime {
   private healthPublicityService?: HealthPublicityService;
   private activeBusinessOperations = 0;
   private updateInstallation = false;
-  private hrssReturning = false;
+  private hrssReturnTail: Promise<void> = Promise.resolve();
+  private hrssReturnPending = 0;
   private oneWindowService?: OneWindowService;
+
+  /** Each HRSS return owns its slot through query and commit; waiting cancellation never breaks the chain. */
+  private async waitForHrssReturn(context: TaskContext): Promise<() => void> {
+    if (context.signal.aborted) throw new Error('任务已取消');
+    const previous = this.hrssReturnTail;
+    let unlock!: () => void;
+    const turn = new Promise<void>(resolve => { unlock = resolve; });
+    this.hrssReturnTail = previous.then(() => turn);
+    const waiting = this.hrssReturnPending++ > 0;
+    let released = false;
+    const release = () => {
+      if (released) return;
+      released = true;
+      this.hrssReturnPending--;
+      unlock();
+    };
+    let removeAbortListener = () => {};
+    try {
+      if (waiting) context.report({ current: 0, message: '等待前一人社任务完成' });
+      await new Promise<void>((resolve, reject) => {
+        const onAbort = () => reject(new Error('任务已取消'));
+        context.signal.addEventListener('abort', onAbort, { once: true });
+        removeAbortListener = () => context.signal.removeEventListener('abort', onAbort);
+        if (context.signal.aborted) onAbort();
+        previous.then(resolve);
+      });
+      if (context.signal.aborted) throw new Error('任务已取消');
+      return release;
+    } catch (error) {
+      release();
+      throw error;
+    } finally { removeAbortListener(); }
+  }
 
   async businessOperation<T>(operation: () => Promise<T>): Promise<T> {
     if (this.updateInstallation || this.shuttingDown) throw new Error('应用正在保存并更新，请稍后再操作');
@@ -545,15 +579,20 @@ export class AppRuntime {
     if ((await plugin.getSessionState()).status !== 'authenticated') throw new Error('请先登录该业务系统');
     await plugin.auth.getSessionForRequest();
 
-    context.report({ current: 1, total: 4, message: '正在从业务系统提取数据' });
+    if (systemId !== 'guangdong-hrss') context.report({ current: 1, total: 4, message: '正在从业务系统提取数据' });
     const defaults = matter.createDefaultContext();
     const queryContext = requestedContext
       ? { ...defaults, ...requestedContext, filters: { ...defaults.filters, ...requestedContext.filters } }
       : defaults;
     if (systemId === 'guangdong-hrss') {
-      if (this.hrssReturning) throw new Error('人社列表回流正在进行，请等待当前任务完成后再开始');
-      this.hrssReturning = true;
+      const release = await this.waitForHrssReturn(context);
       try {
+        await this.requireLicense(systemId, matterId);
+        if (context.signal.aborted) throw new Error('任务已取消');
+        if ((await plugin.getSessionState()).status !== 'authenticated') throw new Error('请先登录该业务系统');
+        await plugin.auth.getSessionForRequest();
+        if (context.signal.aborted) throw new Error('任务已取消');
+        context.report({ current: 1, total: 4, message: '正在从业务系统提取数据' });
         let queryCompletionMessage: string | undefined;
         const result = await matter.query({ ...queryContext, signal: context.signal, onProgress: progress => {
           if (progress.message) queryCompletionMessage = progress.message;
@@ -581,7 +620,7 @@ export class AppRuntime {
         context.report({ current: summary.total, total: summary.total, ...outcome, message: completion });
         return { total: summary.total, inserted: summary.inserted, updated: summary.updated, unchanged: summary.unchanged,
           ...(skippedRequests ? { skippedRequests, partial: true } : {}) };
-      } finally { this.hrssReturning = false; }
+      } finally { release(); }
     }
     const result = await matter.query({ ...queryContext, signal: context.signal, onProgress: context.report });
     if (context.signal.aborted) throw new Error('任务已取消');
