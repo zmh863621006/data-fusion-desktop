@@ -34,6 +34,10 @@
 28. [27-multiplatform-releases.md](./27-multiplatform-releases.md) — Windows、麒麟x86_64与ARM64版本分发及更新校验
 29. [28-shenzhen-hazardous-chemicals.md](./28-shenzhen-hazardous-chemicals.md) — 深圳危化品5项回流、会话与双公示字段、后台权限及本地测试包
 30. [29-kirin990-gbm-compatibility.md](./29-kirin990-gbm-compatibility.md) — 海思990缺失GBM接口的私有库专项测试包、来源与ARM64回归
+31. [30-business-payload-packaging.md](./30-business-payload-packaging.md) — 固定基础包与五路业务ASAR构建
+32. [31-business-startup-updates.md](./31-business-startup-updates.md) — 启动更新、OSS清单、发布与运维规则
+33. [batch-return.md](./batch-return.md) — 多业务批量回流、独立系统串行及任务组操作
+34. [32-release-1.1.11.md](./32-release-1.1.11.md) — 1.1.11五路线上发布、摘要与验证记录
 
 ## 核心不可破坏原则
 
