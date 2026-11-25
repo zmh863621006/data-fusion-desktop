@@ -1,6 +1,8 @@
 import { describe,expect,it,vi } from 'vitest';
 import { HRSS_MATTER_BY_ID, HRSS_MATTER_DEFINITIONS, type HrssListSource } from './catalog';
 import { buildHrssListParameters,projectHrssListRecord,queryHrssLedger } from './query';
+import { MemoryLocalRepository } from '../../core/storage/memory-repository';
+import { DefaultLocalSyncEngine } from '../../core/sync/engine';
 import { HRSS_STREET_PROFILES } from './street';
 import { buildTrainingListParameters, HRSS_TRAINING_HANDLING_CONFIG } from './training';
 
@@ -18,9 +20,8 @@ describe('广东人社台账目录和列表投影',()=>{
       expect(new Set(matter.columns.map(c=>c.key)).size).toBe(matter.columns.length);
       expect(matter.columns.every(c=>/[\u3400-\u9fff]/.test(c.label))).toBe(true);
       expect(matter.columns.some(c=>c.key==='recordKey')).toBe(false);
-      expect(matter.sources.every(s=>!/(detail|queryPerson)/i.test(s.path))).toBe(true);
-      if(matter.id==='unemployment') expect(matter.sources[0]).toMatchObject({path:'/employment/main/rest/e/v1/jygl/jysyxxtj/syxxpage',countPath:'/employment/main/rest/e/v1/jygl/jysyxxtj/syxxpagecnt'});
-      else expect(matter.sources.every(s=>!s.path.includes('/jysyxxtj/'))).toBe(true);
+      expect(matter.sources.every(s=>!/(detail|queryPerson|jysyxxtj)/i.test(s.path))).toBe(true);
+      if(matter.id==='unemployment') expect(matter.sources[0]).toMatchObject({path:'/employment/main/rest/e/v1/jygl/jysyxxcx/syxx/page',countPath:'/employment/main/rest/e/v1/jygl/jysyxxcx/syxx/page/cnt',identity:[['slbh']]});
       for(const column of matter.columns.filter(c=>['name','cardNumber','phone'].includes(c.key))) expect(column.sensitive).toBe(true);
       if(matter.id!=='youth-internship-agreement') expect(matter.columns.some(c=>c.key==='xueli')).toBe(false);
     }
@@ -42,15 +43,15 @@ describe('广东人社台账目录和列表投影',()=>{
     expect(()=>projectHrssListRecord(matter,matter.sources[0],{aac147:'4403********1234'})).toThrow('稳定识别');
     expect(()=>projectHrssListRecord(matter,matter.sources[0],{})).toThrow('稳定识别');
   });
-  it('uses the source unemployment row id without exposing it or collapsing a reused acceptance number',()=>{
+  it('uses the legacy unemployment acceptance number for a stable upsert key regardless of the source row id',()=>{
     const matter=definition('unemployment'),source=matter.sources[0];
     const first=projectHrssListRecord(matter,source,{...raw('SAME-ACCEPTANCE'),bce324:'REGISTRATION-1',boe017Name:'新办'});
     const second=projectHrssListRecord(matter,source,{...raw('SAME-ACCEPTANCE'),bce324:'REGISTRATION-2',boe017Name:'注销'});
-    expect(first.slbh).toBe(second.slbh);expect(first.recordKey).not.toBe(second.recordKey);
-    expect(projectHrssListRecord(matter,source,{...raw('UPDATED-ACCEPTANCE'),bce324:'REGISTRATION-1',aac003:'更正姓名'}).recordKey).toBe(first.recordKey);
+    expect(first.slbh).toBe(second.slbh);expect(first.recordKey).toBe(second.recordKey);
+    expect(projectHrssListRecord(matter,source,{...raw('DIFFERENT-ACCEPTANCE'),bce324:'REGISTRATION-1'}).recordKey).not.toBe(first.recordKey);
+    expect(projectHrssListRecord(matter,source,{...raw('SAME-ACCEPTANCE'),bce324:undefined,aac003:'更正姓名'}).recordKey).toBe(first.recordKey);
     expect(Object.keys(first).sort()).toEqual([...matter.columns.map(c=>c.key),'recordKey'].sort());
     expect(first).not.toHaveProperty('bce324');
-    for(const bce324 of [undefined,null,'','***',{},Number.MAX_SAFE_INTEGER+1]) expect(()=>projectHrssListRecord(matter,source,{...raw('VALID-ACCEPTANCE'),bce324})).toThrow('登记记录编号');
   });
 });
 
@@ -251,69 +252,67 @@ describe('完整分页、稳定键与取消',()=>{
     expect(request).toHaveBeenCalledTimes(4);expect(result.rows).toHaveLength(1);
     expect(request.mock.calls[0][1]).toEqual({bce089Start:'2026-11-03',bce089End:'2026-11-03',aac004:'',bae085:'01',bae001:'163374',bbd068:'01'});
     expect(request.mock.calls[2][1].bce089Start).toBe('2026-11-04');
-    expect(request.mock.calls.every(c=>c[0].path.endsWith('/jysyxxtj/syxxpage'))).toBe(true);
+    expect(request.mock.calls.every(c=>c[0].path.endsWith('/jysyxxcx/syxx/page'))).toBe(true);
   });
-  it.each([false,true])('retains distinct unemployment registrations with the same acceptance number (across partitions: %s)',async(acrossPartitions)=>{
-    const first=acrossPartitions?Array.from({length:200},(_,i)=>({...raw(`ACCEPTANCE-${i}`),bce324:`REGISTRATION-${i}`})):[{...raw('ACCEPTANCE-17'),bce324:'REGISTRATION-17',boe017Name:'新办'}];
-    const next={...raw('ACCEPTANCE-17'),bce324:'REGISTRATION-200',boe017Name:'注销'};
-    const total=acrossPartitions?201:2;
-    const request=vi.fn(async(_source,params,_signal,countOnly)=>({total:acrossPartitions&&params.aac004?(params.aac004==='1'?200:params.aac004==='2'?1:0):total,rows:countOnly?[]:acrossPartitions?(params.aac004==='1'?first:[next]):[...first,next]}));
+  it.each([false,true])('upserts repeated acceptance numbers with the last returned fields (across pages: %s)',async(acrossPages)=>{
+    const first=acrossPages?Array.from({length:200},(_,i)=>raw('ACCEPTANCE-'+i)):[{...raw('ACCEPTANCE-17'),boe017Name:'新办'}];
+    const next={...raw('ACCEPTANCE-17'),bce324:'CHANGED-ROW-ID',boe017Name:'注销'};
+    const total=acrossPages?201:2;
+    const request=vi.fn(async(_source,params,_signal,countOnly)=>({total,rows:countOnly?[]:acrossPages?(params.current===1?first:[next]):[...first,next]}));
     const result=await queryHrssLedger({request},definition('unemployment'),{...context,filters:{startDate:'2026-11-01',endDate:'2026-11-01'}},now);
-    expect(result.total).toBe(total);expect(new Set(result.rows.map(r=>r.recordKey)).size).toBe(total);
-    expect(result.rows.filter(r=>r.slbh==='ACCEPTANCE-17')).toHaveLength(2);
-    expect(request).toHaveBeenCalledTimes(acrossPartitions?6:2);
-    expect(request.mock.calls.filter(c=>!c[3]).every(c=>c[1].current===1)).toBe(true);
+    expect(result.total).toBe(acrossPages?200:1);
+    expect(result.rows.filter(r=>r.slbh==='ACCEPTANCE-17')).toEqual([expect.objectContaining({applyType:'注销'})]);
+    expect(request).toHaveBeenCalledTimes(acrossPages?3:2);
+    expect(request.mock.calls.every(c=>c[1].aac004===''&&!Object.hasOwn(c[1],'bcc354'))).toBe(true);
   });
-  it('rejects a repeated unemployment row id across disjoint partitions even when the acceptance numbers differ',async()=>{
-    const records=Array.from({length:200},(_,i)=>({...raw(`ACCEPTANCE-${i}`),bce324:`REGISTRATION-${i}`}));
-    const request=vi.fn(async(_source,params,_signal,countOnly)=>({total:!params.aac004?201:params.aac004==='1'?200:params.aac004==='2'?1:0,rows:countOnly?[]:params.aac004==='1'?records:[{...raw('DIFFERENT-ACCEPTANCE'),bce324:'REGISTRATION-17'}]}));
+  it('accepts an entirely repeated page and reports the actual deduplicated row count',async()=>{
+    const records=Array.from({length:200},(_,i)=>raw('A-'+i));
+    const request=vi.fn(async(_source,_params,_signal,countOnly)=>({total:400,rows:countOnly?[]:records}));
     const progress=vi.fn();
-    await expect(queryHrssLedger({request},definition('unemployment'),{...context,filters:{startDate:'2026-11-01',endDate:'2026-11-01'},onProgress:progress},now)).rejects.toThrow('失业信息（2026-11-01）：不同查询分组包含重复登记记录编号');
-    expect(progress).toHaveBeenLastCalledWith(expect.objectContaining({current:200,message:expect.stringContaining('2026-11-01')}));
-    expect(request).toHaveBeenCalledTimes(6);
+    const result=await queryHrssLedger({request},definition('unemployment'),{...context,filters:{startDate:'2026-11-02',endDate:'2026-11-02'},onProgress:progress},now);
+    expect(result.total).toBe(200);expect(request).toHaveBeenCalledTimes(3);
+    expect(progress).toHaveBeenLastCalledWith({current:200,total:200,message:expect.stringContaining('实际获取 400 条，合并重复 200 条')});
   });
-  it('does not accept a duplicated source row within a single unemployment page',async()=>{
-    const request=vi.fn(async(_source,_params,_signal,countOnly)=>({total:2,rows:countOnly?[]:[raw('A'),raw('A')]}));
-    await expect(queryHrssLedger({request},definition('unemployment'),{...context,filters:{startDate:'2026-11-01',endDate:'2026-11-01'}},now)).rejects.toThrow('第 1 页：列表包含重复登记记录编号');
+  it('uses count only to plan pages and does not stop after an unexpectedly short or empty page',async()=>{
+    const request=vi.fn(async(_source,params,_signal,countOnly)=>({total:countOnly?401:999,rows:countOnly||params.current===2?[]:[raw('PAGE-'+params.current)]}));
+    const result=await queryHrssLedger({request},definition('unemployment'),{...context,filters:{startDate:'2026-11-02',endDate:'2026-11-02'}},now);
+    expect(result.total).toBe(2);expect(result.pageSize).toBe(2);
+    expect(request.mock.calls.filter(c=>!c[3]).map(c=>c[1].current)).toEqual([1,2,3]);
   });
-  it('retains the unspecified gender group and checks its count before reading any grouped list',async()=>{
-    const totals:Record<string,number>={'1':100,'2':100,'9':26};
-    const request=vi.fn(async(_source,params,_signal,countOnly)=>{
-      const total=params.aac004?totals[params.aac004 as string]:226;
-      return {total,rows:countOnly?[]:Array.from({length:total},(_,i)=>raw(`GENDER-${params.aac004}-${i}`))};
-    });
-    const result=await queryHrssLedger({request},definition('unemployment'),{...context,filters:{startDate:'2026-11-01',endDate:'2026-11-01'}},now);
-    expect(result.total).toBe(226);expect(new Set(result.rows.map(r=>r.recordKey)).size).toBe(226);
-    expect(request.mock.calls.slice(0,4).every(c=>c[3])).toBe(true);
-    expect(request.mock.calls.filter(c=>!c[3]).map(c=>c[1].aac004)).toEqual(['1','2','9']);
+  it('retains all valid returned rows when count underestimates the actual first page',async()=>{
+    const request=vi.fn(async(_source,_params,_signal,countOnly)=>({total:1,rows:countOnly?[]:Array.from({length:200},(_,i)=>raw('A-'+i))}));
+    const result=await queryHrssLedger({request},definition('unemployment'),{...context,filters:{startDate:'2026-11-02',endDate:'2026-11-02'}},now);
+    expect(result.total).toBe(200);expect(request).toHaveBeenCalledTimes(2);
   });
-  it('subdivides a large gender group with the four non-overlapping official age filters',async()=>{
-    const request=vi.fn(async(_source,params,_signal,countOnly)=>{
-      const total=!params.aac004?226:params.aac004==='1'?(params.bcc354?params.bcc354==='01'?101:params.bcc354==='02'?100:0:201):params.aac004==='2'?25:0;
-      return {total,rows:countOnly?[]:Array.from({length:total},(_,i)=>raw(`${params.aac004}-${params.bcc354}-${i}`))};
-    });
-    const result=await queryHrssLedger({request},definition('unemployment'),{...context,filters:{startDate:'2026-11-01',endDate:'2026-11-01'}},now);
-    expect(result.total).toBe(226);
-    const listCalls=request.mock.calls.filter(c=>!c[3]);
-    expect(listCalls.map(c=>[c[1].aac004,c[1].bcc354])).toEqual([['1','01'],['1','02'],['2',undefined]]);
-    expect(listCalls.every(c=>c[1].current===1)).toBe(true);
+  it('skips blank acceptance numbers like the legacy collector and reports them without blocking valid rows',async()=>{
+    const request=vi.fn(async(_source,_params,_signal,countOnly)=>({total:4,rows:countOnly?[]:[{...raw('BLANK'),bce076:' '},{...raw('MISSING'),bce076:undefined},raw('A'),{...raw('A'),bce324:undefined,boe017Name:'注销'}]}));
+    const progress=vi.fn();
+    const result=await queryHrssLedger({request},definition('unemployment'),{...context,filters:{startDate:'2026-11-02',endDate:'2026-11-02'},onProgress:progress},now);
+    expect(result.rows).toEqual([expect.objectContaining({slbh:'A',applyType:'注销'})]);
+    expect(progress).toHaveBeenLastCalledWith({current:1,total:1,message:expect.stringContaining('实际获取 4 条，合并重复 1 条，跳过空受理编号 2 条')});
   });
-  it.each(['gender','age'])('rejects incomplete %s partition coverage instead of silently dropping unmatched rows',async(mode)=>{
-    const request=vi.fn(async(_source,params,_signal,countOnly)=>{
-      expect(countOnly).toBe(true);
-      const total=!params.aac004?201:params.aac004==='1'?(params.bcc354?params.bcc354==='01'?200:0:mode==='gender'?200:201):0;
-      return {total,rows:[]};
-    });
-    await expect(queryHrssLedger({request},definition('unemployment'),{...context,filters:{startDate:'2026-11-01',endDate:'2026-11-01'}},now)).rejects.toThrow('查询分组总数与原站总数不一致');
-    expect(request).toHaveBeenCalledTimes(mode==='gender'?4:8);
+  it('upserts the same acceptance number across days and repeated local imports instead of inserting another row',async()=>{
+    const repository=new MemoryLocalRepository(),engine=new DefaultLocalSyncEngine(repository);
+    let revised=false;
+    const request=vi.fn(async(_source,params,_signal,countOnly)=>({total:2,rows:countOnly?[]:[{...raw('A'),bce324:'REG-'+params.bce089Start,boe017Name:params.bce089Start==='2026-11-02'||revised?'注销':'新办'},raw('B')]}));
+    const selected={...context,filters:{startDate:'2026-11-01',endDate:'2026-11-02'}};
+    const first=await queryHrssLedger({request},definition('unemployment'),selected,now);
+    expect(first.rows).toHaveLength(2);expect(first.rows.find(r=>r.slbh==='A')?.applyType).toBe('注销');
+    const initial=await engine.preview('guangdong-hrss','unemployment',['recordKey'],first.rows);
+    expect(initial).toMatchObject({inserted:2});await engine.commit('guangdong-hrss','unemployment',initial);
+    revised=true;const repeat=await queryHrssLedger({request},definition('unemployment'),selected,now);
+    expect(await engine.preview('guangdong-hrss','unemployment',['recordKey'],repeat.rows)).toMatchObject({total:2,inserted:0,unchanged:2});
+    const changed=repeat.rows.map(row=>row.slbh==='A'?{...row,applyType:'更正'}:row);
+    const update=await engine.preview('guangdong-hrss','unemployment',['recordKey'],changed);
+    expect(update).toMatchObject({inserted:0,updated:1,unchanged:1});
   });
-  it('stops without reading unstable offset pages if an indivisible official group still exceeds the server page cap',async()=>{
-    const request=vi.fn(async(_source,params,_signal,countOnly)=>{
-      expect(countOnly).toBe(true);
-      return {total:!params.aac004?201:params.aac004==='1'&&(!params.bcc354||params.bcc354==='01')?201:0,rows:[]};
-    });
-    await expect(queryHrssLedger({request},definition('unemployment'),{...context,filters:{startDate:'2026-11-01',endDate:'2026-11-01'}},now)).rejects.toThrow('原站分页顺序不稳定');
-    expect(request).toHaveBeenCalledTimes(8);
+  it('still stops on a real list request failure or cancellation rather than returning a successful partial batch',async()=>{
+    const source=definition('unemployment');
+    const request=vi.fn(async(_source,_params,_signal,countOnly)=>{if(countOnly)return {total:201,rows:[]};throw new Error('session expired')});
+    await expect(queryHrssLedger({request},source,{...context,filters:{startDate:'2026-11-02',endDate:'2026-11-02'}},now)).rejects.toThrow('session expired');
+    expect(request).toHaveBeenCalledTimes(2);
+    const controller=new AbortController();const cancelled=vi.fn(async(_source,_params,_signal,countOnly)=>{if(!countOnly)controller.abort();return {total:1,rows:countOnly?[]:[raw('A')]}});
+    await expect(queryHrssLedger({request:cancelled},source,{...context,filters:{startDate:'2026-11-02',endDate:'2026-11-02'},signal:controller.signal},now)).rejects.toMatchObject({code:'TASK_CANCELLED'});
   });
   it('does not request an unemployment list page when its date count is zero',async()=>{
     const request=vi.fn(async(_source:HrssListSource,_params:Record<string,unknown>,_signal?:AbortSignal,_countOnly?:boolean)=>({total:0,rows:[]}));

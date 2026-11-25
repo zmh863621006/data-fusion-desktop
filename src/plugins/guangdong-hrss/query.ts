@@ -33,18 +33,9 @@ export function projectHrssListRecord(definition:HrssMatterDefinition,source:Hrs
     // Original ACTION contains display HTML; keep its visible unit text, never links/scripts.
     result.unitName=stripMarkup(raw.ACTION).replace(/[\r\n\t]+/g,' ').trim();
   }
-  let identityFields: Array<[string,string]>;
-  if(source.rowIdField) {
-    const rawId=raw[source.rowIdField];
-    const id=(typeof rawId==='string'||typeof rawId==='number'&&Number.isSafeInteger(rawId))?text(rawId):'';
-    if(!id || id.length>256 || /[*＊•●\u0000-\u0020\u007f]/.test(id)) throw completeness('列表记录缺少可稳定识别的登记记录编号');
-    identityFields=[[source.rowIdField,id]];
-  } else {
-    const identity=source.identity.find(keys=>keys.every(key=>text(result[key])!=='' && !/[*＊]/.test(text(result[key]))));
-    if(!identity) throw completeness('列表记录缺少可稳定识别的业务编号');
-    identityFields=identity.map(key=>[key,text(result[key])]);
-  }
-  result.recordKey=createHash('sha256').update(JSON.stringify([source.id,...identityFields])).digest('hex');
+  const identity=source.identity.find(keys=>keys.every(key=>text(result[key])!=='' && !/[*＊]/.test(text(result[key]))));
+  if(!identity) throw completeness('列表记录缺少可稳定识别的业务编号');
+  result.recordKey=createHash('sha256').update(JSON.stringify([source.id,...identity.map(key=>[key,text(result[key])])])).digest('hex');
   result.listSource=source.id==='review'?'审核列表':source.id==='registration'?'查询列表':source.id==='training-progress'?'办理进度列表':source.id==='training-completed'?'已办业务列表':'业务列表';
   return result;
 }
@@ -75,7 +66,7 @@ export async function queryHrssLedger(client:HrssQueryClient,definition:HrssMatt
   const result=new Map<string,Record<string,unknown>>();
   const isStreet=Object.hasOwn(HRSS_STREET_PROFILES,definition.id);
   const hasHandling=isStreet||isTraining;
-  let fetched=0,requests=0;
+  let fetched=0,requests=0,duplicates=0,skipped=0;
   const notify=(message:string,total?:number)=>context.onProgress?.({current:fetched,total,message});
   const countSource=async(source:HrssListSource,overrides:Record<string,unknown>,label:string)=>{
     checkCancelled(context.signal);
@@ -86,11 +77,11 @@ export async function queryHrssLedger(client:HrssQueryClient,definition:HrssMatt
     if(count.total>MAX_ROWS) throw completeness('回流超过最大记录保护限制');
     return count.total;
   };
-  const processSource=async(source:HrssListSource,overrides:Record<string,unknown>={},knownTotal?:number,partitionKeys?:Set<string>)=>{
+  const processSource=async(source:HrssListSource,overrides:Record<string,unknown>={})=>{
     checkCancelled(context.signal);
-    const label=definition.id==='unemployment'?`${definition.name}（${String(overrides.bce089Start)}）`:definition.name;
-    let expected=knownTotal;
-    if(expected===undefined && source.countPath) expected=await countSource(source,overrides,label);
+    const label=definition.name;
+    let expected:number|undefined;
+    if(source.countPath) expected=await countSource(source,overrides,label);
     if(expected===0) {notify(`${label}：该日期无列表记录`);return;}
     let sourceFetched=0;
     const pageFingerprints=new Set<string>();
@@ -114,12 +105,10 @@ export async function queryHrssLedger(client:HrssQueryClient,definition:HrssMatt
       pageFingerprints.add(fingerprint);
       for(const row of rows) {
         const key=String(row.recordKey);
-        if(sourceKeys.has(key)) throw completeness(`${label}第 ${page} 页：列表包含重复${source.rowIdField?'登记记录编号':'业务编号'}，无法确认完整性`);
-        if(partitionKeys?.has(key)) throw completeness(`${label}：不同查询分组包含重复登记记录编号，无法确认完整性`);
+        if(sourceKeys.has(key)) throw completeness(`${label}第 ${page} 页：列表包含重复业务编号，无法确认完整性`);
         sourceKeys.add(key);
-        partitionKeys?.add(key);
         const previous=result.get(key);
-        if(previous && JSON.stringify(previous)!==JSON.stringify(row)) throw completeness(`${label}第 ${page} 页：同一${source.rowIdField?'登记记录编号':'业务编号'}出现冲突记录`);
+        if(previous && JSON.stringify(previous)!==JSON.stringify(row)) throw completeness(`${label}第 ${page} 页：同一业务编号出现冲突记录`);
       }
       // Validate every original list row, including excluded pending cases, before reading handling records.
       for(let index=0;index<rows.length;index++) {
@@ -135,7 +124,6 @@ export async function queryHrssLedger(client:HrssQueryClient,definition:HrssMatt
           if(!handling) continue;
           Object.assign(row,handling);
         }
-        // Identical natural keys across date partitions are harmless; the stable key never includes query dates.
         result.set(String(row.recordKey),row);
       }
       sourceFetched+=rows.length; fetched+=rows.length;
@@ -154,27 +142,33 @@ export async function queryHrssLedger(client:HrssQueryClient,definition:HrssMatt
       const date=new Date(day).toISOString().slice(0,10);
       const source=definition.sources[0],label=`${definition.name}（${date}）`;
       const params={bce089Start:date,bce089End:date,aac004:'',bae085:'01',bae001:'163374',bbd068:'01'};
-      const expected=await countSource(source,params,label),dayKeys=new Set<string>();
-      // The server caps pages at 200 and does not provide stable ordering: rereading the same
-      // page can move registrations across its boundary. Use official disjoint form filters
-      // to keep each read within one page; counts and keys must prove the complete coverage.
-      const readPartition=async(filters:Record<string,unknown>,total:number,depth=0):Promise<void>=>{
-        if(total<=PAGE_SIZE) {await processSource(source,filters,total,dayKeys);return;}
-        const groups=depth===0?['1','2','9'].map(aac004=>({...filters,aac004}))
-          :depth===1?['01','02','03','04'].map(bcc354=>({...filters,bcc354})):[];
-        if(!groups.length) throw completeness(`${label}：单个查询分组超过 200 条，原站分页顺序不稳定，无法确认完整性`);
-        notify(`${label}：记录超过单页，正在核对查询分组`);
-        const totals:number[]=[];
-        for(const group of groups) totals.push(await countSource(source,group,label));
-        if(totals.reduce((sum,value)=>sum+value,0)!==total) throw completeness(`${label}：查询分组总数与原站总数不一致，请重新回流`);
-        for(let index=0;index<groups.length;index++) if(totals[index]>0) await readPartition(groups[index],totals[index],depth+1);
-      };
-      await readPartition(params,expected);
-      if(dayKeys.size!==expected) throw completeness(`${label}：唯一登记记录数与原站总数不一致`);
+      const referenceTotal=await countSource(source,params,label);
+      // Legacy count only plans the day's pages. Unstable ordering, short pages and duplicate
+      // acceptance numbers do not make a successful list response fail the whole date range.
+      const pages=Math.ceil(referenceTotal/PAGE_SIZE);
+      if(pages===0) notify(`${label}：该日期无列表记录`);
+      for(let page=1;page<=pages;page++) {
+        checkCancelled(context.signal);
+        if(++requests>MAX_PAGES) throw completeness('回流超过最大分页保护限制');
+        notify(`${label}：正在获取第 ${page}/${pages} 页，已获取 ${fetched} 条`);
+        const response=await client.request(source,buildHrssListParameters(source,page,now,params),context.signal,false,referenceTotal);
+        checkCancelled(context.signal);
+        if(response.rows.length>PAGE_SIZE || fetched+response.rows.length>MAX_ROWS) throw completeness('回流超过最大记录保护限制');
+        fetched+=response.rows.length;
+        for(const raw of response.rows) {
+          // RSAsync.syDataDeal skips blank acceptance numbers; repeated numbers update the row.
+          if(!text(raw.bce076)) {skipped++;continue;}
+          const row=projectHrssListRecord(definition,source,raw),key=String(row.recordKey);
+          if(result.has(key)) duplicates++;
+          result.set(key,row);
+        }
+        notify(`${label}：已获取 ${fetched} 条，按受理编号合并后 ${result.size} 条`);
+      }
     }
   } else for(const source of definition.sources) await processSource(source,hrssListDateParameters(definition.id,source.id,String(dates.startDate),String(dates.endDate)));
   checkCancelled(context.signal);
   const rows=[...result.values()];
-  context.onProgress?.({current:rows.length,total:rows.length,message:`${definition.name}：${hasHandling?'列表及办理记录':'列表'}回流完成，共 ${rows.length} 条`});
+  const note=definition.id==='unemployment'?`（实际获取 ${fetched} 条，合并重复 ${duplicates} 条${skipped?`，跳过空受理编号 ${skipped} 条`:''}）`:'';
+  context.onProgress?.({current:rows.length,total:rows.length,message:`${definition.name}：${hasHandling?'列表及办理记录':'列表'}回流完成，共 ${rows.length} 条${note}`});
   return {rows,page:1,pageSize:Math.max(rows.length,1),total:rows.length};
 }

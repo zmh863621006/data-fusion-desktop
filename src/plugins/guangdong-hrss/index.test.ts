@@ -51,8 +51,7 @@ describe('广东人社插件',()=>{
     expect(fetcher).toHaveBeenCalledTimes(before);
     const allowed=new Set(HRSS_MATTER_DEFINITIONS.flatMap(m=>m.sources.flatMap(s=>[s.path,...(s.countPath?[s.countPath]:[])])));
     expect(fetcher.mock.calls.every(([url])=>allowed.has(new URL(url).pathname))).toBe(true);
-    expect(fetcher.mock.calls.some(([url])=>/detail|queryPerson|getsydjdetail|operate-log/i.test(url))).toBe(false);
-    expect(fetcher.mock.calls.filter(([url])=>url.includes('/jysyxxtj/')).every(([url])=>new URL(url).pathname.endsWith('/jysyxxtj/syxxpagecnt'))).toBe(true);
+    expect(fetcher.mock.calls.some(([url])=>/detail|queryPerson|jysyxxtj|getsydjdetail|operate-log/i.test(url))).toBe(false);
     const requestSession=await plugin.auth.getSessionForRequest();
     expect(requestSession).not.toHaveProperty('accessToken');expect(requestSession).not.toHaveProperty('cookies');
   });

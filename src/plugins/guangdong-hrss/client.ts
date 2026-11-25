@@ -179,7 +179,7 @@ export class HrssClient {
     if(!this.hasAccessToken()) throw new AppError('SESSION_EXPIRED','请在原站登录人社就业业务后重试');
     const source=HRSS_MATTER_DEFINITIONS.find(m=>m.id==='unemployment')!.sources[0];
     const today=new Date(this.now()+8*60*60_000).toISOString().slice(0,10);
-    // The registered regional count checks this session without reading people or dashboard statistics.
+    // Read-only legacy count checks this session without reading people or dashboard statistics.
     await this.request(source,{bce089Start:today,bce089End:today,aac004:'1',bae085:'01',bae001:'163374',bbd068:'01'},signal,true);
     return {displayName:'广东人社门户会话'};
   }
