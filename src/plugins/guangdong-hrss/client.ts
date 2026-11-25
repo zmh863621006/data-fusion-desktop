@@ -1,7 +1,7 @@
 import { session } from 'electron';
 import { load } from 'cheerio';
 import { AppError } from '../../core/errors/app-error';
-import { RequestGate } from '../../core/network/request-policy';
+import { HrssRequestGate, isHrssRequestTimeout } from './request-gate';
 import { businessRequestUserAgent } from '../../core/network/user-agent';
 import { HRSS_MATTER_DEFINITIONS, HRSS_ORIGIN, HRSS_PARTITION, type HrssListSource } from './catalog';
 import { HRSS_HANDLING_RECORD_PATH } from './street';
@@ -45,7 +45,7 @@ export class HrssClient {
   private trainingSession?: HrssTrainingSession;
   private readonly now: () => number;
   private readonly fetcher: HrssFetch;
-  private readonly gate: RequestGate;
+  private readonly gate: HrssRequestGate;
   private readonly readTrainingCookie?:()=>Promise<string|undefined>;
   private readonly allowed = new Map([...HRSS_MATTER_DEFINITIONS.flatMap(m=>m.sources.flatMap(s=>[[s.path,s.method],...(s.countPath?[[s.countPath,'GET']]:[])] as [string,string][])),[HRSS_HANDLING_RECORD_PATH,'POST'] as [string,string]]);
   constructor(options: HrssClientOptions={}) {
@@ -61,7 +61,7 @@ export class HrssClient {
       headers.set('User-Agent',businessRequestUserAgent(browser.getUserAgent()));
       return browser.fetch(url,{...init,headers});
     });
-    this.gate=new RequestGate({timeoutMs:60_000,maxAttempts:2,retryDelayMs:500,minimumIntervalMs:options.minimumIntervalMs??10_000});
+    this.gate=new HrssRequestGate(options.minimumIntervalMs);
   }
   acceptBrowserAccessToken(value: string): void {
     if(validCredential(value) && value.trim()!==this.credential.accessToken) this.credential={...this.credential,accessToken:value.trim(),observedAt:this.now()};
@@ -102,7 +102,7 @@ export class HrssClient {
     if(!this.credential.trainingCookie && this.readTrainingCookie){const value=await this.readTrainingCookie();if(value)this.acceptTrainingCookie(value);}
     if(!this.credential.trainingCookie) throw new AppError('SESSION_EXPIRED','请先在原站打开创业培训补贴查询页面，获取该业务独立会话');
     if(this.trainingSession) return this.trainingSession;
-    return this.gate.execute(async gateSignal=>{
+    return this.gate.execute(TRAINING_PAGE,async gateSignal=>{
       const response=await this.fetcher(new URL(TRAINING_PAGE,HRSS_ORIGIN).href,{method:'GET',headers:{Cookie:this.credential.trainingCookie!,Accept:'text/html'},redirect:'error',signal:gateSignal});
       if(!response.ok) throw failure(`创业培训查询页面读取失败（HTTP ${response.status}）`);
       const $=load(await response.text());
@@ -122,13 +122,14 @@ export class HrssClient {
     const training=await this.prepareTrainingSession(signal);
     const configs=new Set(['jycyzjgl_cypxbt_cxjd_bljdcxjglb','jycyzjgl_cypxbt_cxjd_bjywcxjglb','jycyzjgl_cypxbt_cxjd_jbjlgshwzjzhd']);
     if(!configs.has(String(params.confid))) throw new AppError('QUERY_INVALID','该查询不属于已登记的创业培训列表或办理记录');
-    return this.gate.execute(async gateSignal=>{
+    return this.gate.execute('/ZXZJ/gltPage.do',async gateSignal=>{
       const encoded=new URLSearchParams();for(const [key,value]of Object.entries(params))if(value!==undefined&&value!==null)encoded.set(key,String(value));
       const response=await this.fetcher(new URL('/ZXZJ/gltPage.do',HRSS_ORIGIN).href,{method:'POST',headers:{Accept:'application/json',Cookie:this.credential.trainingCookie!,'Content-Type':'application/x-www-form-urlencoded;charset=UTF-8',hz_zxzj:training.csrfToken},body:encoded.toString(),redirect:'error',signal:gateSignal});
       if(response.status===401 || response.status===403) {this.clearTrainingCookie();throw new AppError('SESSION_EXPIRED','创业培训会话已失效，请在原站重新打开该业务');}
       if(!response.ok) throw failure(`创业培训列表请求失败（HTTP ${response.status}）`);
       // This legacy controller serves valid JSON as text/html. Validate the envelope before deciding it is a login page.
-      let body:unknown;try{body=await response.json();}catch{
+      let body:unknown;try{body=await response.json();}catch(error){
+        if(gateSignal.aborted || isHrssRequestTimeout(error)) throw error;
         if(/text\/html/i.test(response.headers.get('content-type')??'')){this.clearTrainingCookie();throw new AppError('SESSION_EXPIRED','创业培训返回登录页面，请在原站重新打开该业务');}
         throw failure('创业培训未返回有效的列表数据');
       }
@@ -158,10 +159,10 @@ export class HrssClient {
     if(method==='GET') url.search=encoded.toString();
     else if(isWgbt) { headers['Content-Type']='application/x-www-form-urlencoded;charset=UTF-8'; init.body=encoded.toString(); }
     else { headers['Content-Type']='application/json'; init.body=JSON.stringify(params); }
-    return this.gate.execute(async gateSignal=>{
+    return this.gate.execute(path,async gateSignal=>{
       let response:Response;
       try { response=await this.fetcher(url.href,{...init,signal:gateSignal}); }
-      catch(error) { if(gateSignal.aborted) throw error; throw new AppError('REMOTE_REQUEST_FAILED','连接人社平台失败，请检查网络和原站登录状态'); }
+      catch(error) { if(gateSignal.aborted || isHrssRequestTimeout(error)) throw error; throw new AppError('REMOTE_REQUEST_FAILED','连接人社平台失败，请检查网络和原站登录状态'); }
       if(response.status===401 || response.status===403) {
         if(isWgbt) this.clearCookie(); else this.clearAccessToken();
         throw new AppError('SESSION_EXPIRED','人社平台会话已失效，请在原站重新登录');
@@ -169,7 +170,7 @@ export class HrssClient {
       if(!response.ok) throw new AppError('REMOTE_REQUEST_FAILED',`人社列表请求失败（HTTP ${response.status}）`);
       if(/text\/html/i.test(response.headers.get('content-type')??'')) {if(isWgbt) this.clearCookie();else this.clearAccessToken();throw new AppError('SESSION_EXPIRED','人社平台返回登录页面，请在原站重新登录');}
       let body:unknown;
-      try { body=await response.json(); } catch { throw failure('人社平台未返回有效的列表数据'); }
+      try { body=await response.json(); } catch(error) { if(gateSignal.aborted || isHrssRequestTimeout(error)) throw error; throw failure('人社平台未返回有效的列表数据'); }
       if(gateSignal.aborted) throw new AppError('TASK_CANCELLED','回流任务已取消');
       try { return decodeHrssList(body,isWgbt?'rows':'records',countOnly,source.countPath?expectedTotal:undefined); }
       catch(error) { if(error instanceof AppError && error.code==='SESSION_EXPIRED') { if(isWgbt) this.clearCookie(); else this.clearAccessToken(); } throw error; }

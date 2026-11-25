@@ -60,4 +60,12 @@ describe('local HRSS dashboard presentation', () => {
     expect(html).toContain('刷新统计');
     expect(html).not.toContain('raw-secret-or-identity');
   });
+
+  it('shows the latest skipped timeout requests without claiming that an empty partial batch is a real zero',()=>{
+    const data=buildHrssDashboard({ allowedMatterIds:[matterId],records:[],now:NOW,
+      tasks:[{matterId,type:'data-return',status:'completed',createdAt:NOW-1_000,finishedAt:NOW-1_000,progress:{skippedRequests:2}}] });
+    const html=renderToStaticMarkup(<HrssDashboard data={data}/>);
+    expect(html).toContain('最近回流跳过 2 项超时请求');
+    expect(html).not.toContain('已成功回流，当前记录数为 0');
+  });
 });

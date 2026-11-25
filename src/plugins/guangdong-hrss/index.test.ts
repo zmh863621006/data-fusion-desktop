@@ -22,6 +22,9 @@ describe('广东人社插件',()=>{
       expect(matter.dateFilter?.mode).toBe(['poverty-alleviation-personnel','one-time-job-expansion-subsidy'].includes(matter.id)?'pending':'applied');
     }
     expect(plugin.matters.filter(matter=>matter.dateFilter?.mode==='pending')).toHaveLength(2);
+    const poverty=plugin.matters.find(matter=>matter.id==='poverty-alleviation-personnel')!;
+    expect(poverty.dateFilter?.message).toBe('');
+    expect(poverty.createDefaultContext!().filters).toEqual({startDate:'2026-11-01',endDate:'2026-11-05'});
   });
   it('connects all four street-office matters and registers the independent training session observer once',async()=>{
     const plugin=createGuangdongHrssPlugin();expect(()=>validatePluginContract(plugin)).not.toThrow();
@@ -39,13 +42,15 @@ describe('广东人社插件',()=>{
   });
   it('only invokes catalogued list/count endpoints for empty lists and preserves independent training login requirements',async()=>{
     const now=()=>Date.parse('2025-05-01T04:00:00Z');
-    const fetcher=vi.fn(async(url:string)=>new Response(JSON.stringify(url.includes('/WGBT/')?{total:0,rows:[]}:{data:{total:0,records:[]}}),{headers:{'content-type':'application/json'}}));
+    const fetcher=vi.fn(async(url:string,_init:RequestInit)=>new Response(JSON.stringify(url.includes('/WGBT/')?{total:0,rows:[]}:{data:{total:0,records:[]}}),{headers:{'content-type':'application/json'}}));
     const plugin=createGuangdongHrssPlugin({fetcher,now,minimumIntervalMs:0});
     await plugin.sessionRecovery!.restore({accessToken:'fixture-access',rawCookie:'fixture-session=value',expiresAt:now()+60_000});
-    for(const matter of plugin.matters.filter(item=>!['poverty-alleviation-personnel','startup-training'].includes(item.id))){const result=await matter.query(matter.createDefaultContext!());expect(result.total).toBe(0);}
+    for(const matter of plugin.matters.filter(item=>item.id!=='startup-training')){const result=await matter.query(matter.createDefaultContext!());expect(result.total).toBe(0);}
     const before = fetcher.mock.calls.length;
-    const poverty=plugin.matters.find(m=>m.id==='poverty-alleviation-personnel')!;
-    await expect(poverty.query(poverty.createDefaultContext!())).rejects.toThrow('原站列表未提供日期条件');
+    const povertyCalls=fetcher.mock.calls.filter(([url])=>new URL(url).pathname==='/employment/main/rest/e/v1/tprk/tprkdj/list');
+    expect(povertyCalls).toHaveLength(1);
+    expect(new URL(povertyCalls[0][0]).search).toBe('');
+    expect(JSON.parse(String(povertyCalls[0][1].body))).toEqual({current:1,size:200});
     const training=plugin.matters.find(m=>m.id==='startup-training')!;
     await expect(training.query(training.createDefaultContext!())).rejects.toThrow('创业培训');
     expect(fetcher).toHaveBeenCalledTimes(before);

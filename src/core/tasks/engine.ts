@@ -6,6 +6,8 @@ export interface TaskProgress {
   current: number;
   total?: number;
   message?: string;
+  /** Requests deliberately skipped after exhausting timeout attempts; persists with task progress. */
+  skippedRequests?: number;
 }
 
 export interface RuntimeTask<T = unknown> {

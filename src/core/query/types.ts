@@ -28,6 +28,8 @@ export interface QueryPage<T = Record<string, unknown>> {
   total: number;
   /** Date range was applied, but the source did not provide a usable date for these records. */
   undatedExcludedCount?: number;
+  /** Requests skipped after exhausting timeout retries; returned rows may omit those pages/cases. */
+  skippedRequestCount?: number;
 }
 
 export interface QueryContext {

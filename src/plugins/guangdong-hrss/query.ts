@@ -8,6 +8,7 @@ import { hrssDefaultDateFilters, validateHrssDateFilters } from '../../core/hrss
 import { hrssListDateParameters } from './date-fields';
 import { enrichHrssStreetRecord, HRSS_STREET_PROFILES, type HrssStreetHandlingClient } from './street';
 import { buildTrainingListParameters, enrichTrainingRecord, projectTrainingListRecord } from './training';
+import { isExhaustedHrssTimeout } from './request-gate';
 
 const PAGE_SIZE=200;
 const MAX_ROWS=200_000;
@@ -56,18 +57,35 @@ export async function queryHrssLedger(client:HrssQueryClient,definition:HrssMatt
   validateHrssDateFilters(context.filters);
   checkCancelled(context.signal);
   const dates = { ...hrssDefaultDateFilters(definition.id,now), ...context.filters };
-  // Refuse the unverified source before a request, rather than silently fetching its entire ledger.
-  if(definition.id==='poverty-alleviation-personnel') hrssListDateParameters(definition.id,definition.sources[0].id,String(dates.startDate),String(dates.endDate));
   const isTraining=definition.id==='startup-training';
   if(isTraining && (!client.prepareTrainingSession || !client.requestTrainingList)) throw invalid('创业培训独立会话查询尚未初始化');
-  const trainingSession=isTraining?await client.prepareTrainingSession!(context.signal):undefined;
-  checkCancelled(context.signal);
   const trainingClient={requestTrainingList:(params:Record<string,unknown>,signal?:AbortSignal)=>client.requestTrainingList!(params,signal)};
   const result=new Map<string,Record<string,unknown>>();
   const isStreet=Object.hasOwn(HRSS_STREET_PROFILES,definition.id);
   const hasHandling=isStreet||isTraining;
-  let fetched=0,requests=0,duplicates=0,skipped=0;
+  let fetched=0,requests=0,duplicates=0,skipped=0,timeoutSkipped=0;
   const notify=(message:string,total?:number)=>context.onProgress?.({current:fetched,total,message});
+  const skipTimeout=(error:unknown,label:string)=>{
+    checkCancelled(context.signal);
+    if(!isExhaustedHrssTimeout(error)) throw error;
+    timeoutSkipped++;
+    notify(`${label}：请求尝试 5 次仍超时，已跳过，继续回流`);
+    console.warn('人社回流跳过超时请求',{matterId:definition.id,scope:label,attempts:5});
+  };
+  const finish=():QueryPage=>{
+    checkCancelled(context.signal);
+    const rows=[...result.values()];
+    const note=definition.id==='unemployment'?`（实际获取 ${fetched} 条，合并重复 ${duplicates} 条${skipped?`，跳过空受理编号 ${skipped} 条`:''}）`:'';
+    const ending=timeoutSkipped?'回流结束':`${hasHandling?'列表及办理记录':'列表'}回流完成`;
+    const warning=timeoutSkipped?`；超时请求已尝试 5 次后跳过 ${timeoutSkipped} 项，本批次结果含缺项`:'';
+    context.onProgress?.({current:rows.length,total:rows.length,message:`${definition.name}：${ending}，共 ${rows.length} 条${note}${warning}`});
+    return {rows,page:1,pageSize:Math.max(rows.length,1),total:rows.length,...(timeoutSkipped?{skippedRequestCount:timeoutSkipped}:{})};
+  };
+  let trainingSession:Awaited<ReturnType<HrssClient['prepareTrainingSession']>>|undefined;
+  if(isTraining) {
+    try {trainingSession=await client.prepareTrainingSession!(context.signal);checkCancelled(context.signal);}
+    catch(error) {skipTimeout(error,`${definition.name}：读取查询页面`);return finish();}
+  }
   const countSource=async(source:HrssListSource,overrides:Record<string,unknown>,label:string)=>{
     checkCancelled(context.signal);
     if(++requests>MAX_PAGES) throw completeness('回流超过最大分页保护限制');
@@ -81,7 +99,10 @@ export async function queryHrssLedger(client:HrssQueryClient,definition:HrssMatt
     checkCancelled(context.signal);
     const label=definition.name;
     let expected:number|undefined;
-    if(source.countPath) expected=await countSource(source,overrides,label);
+    if(source.countPath) {
+      try {expected=await countSource(source,overrides,label);}
+      catch(error) {skipTimeout(error,`${label}：查询总数`);return;}
+    }
     if(expected===0) {notify(`${label}：该日期无列表记录`);return;}
     let sourceFetched=0;
     const pageFingerprints=new Set<string>();
@@ -90,9 +111,20 @@ export async function queryHrssLedger(client:HrssQueryClient,definition:HrssMatt
       checkCancelled(context.signal);
       if(++requests>MAX_PAGES) throw completeness('回流超过最大分页保护限制');
       notify(`${label}：正在获取第 ${page} 页，已获取 ${fetched} 条`);
-      const response=source.pagination==='training' && trainingSession
-        ? await trainingClient.requestTrainingList(buildTrainingListParameters(source,page,String(dates.startDate),String(dates.endDate),trainingSession),context.signal)
-        : await client.request(source,buildHrssListParameters(source,page,now,overrides),context.signal,false,expected);
+      let response:{rows:Record<string,unknown>[];total:number};
+      try {
+        response=source.pagination==='training' && trainingSession
+          ? await trainingClient.requestTrainingList(buildTrainingListParameters(source,page,String(dates.startDate),String(dates.endDate),trainingSession),context.signal)
+          : await client.request(source,buildHrssListParameters(source,page,now,overrides),context.signal,false,expected);
+      } catch(error) {
+        skipTimeout(error,`${label}：第 ${page} 页`);
+        // Without the first page's total, only this source can be skipped. Known pages still
+        // advance their offset so a timed-out middle page does not corrupt later length checks.
+        if(expected===undefined) return;
+        sourceFetched+=Math.min(PAGE_SIZE,expected-sourceFetched);
+        if(sourceFetched===expected) break;
+        continue;
+      }
       checkCancelled(context.signal);
       if(expected===undefined) expected=response.total;
       if(response.total!==expected) throw completeness('回流期间列表总数发生变化，请重新回流');
@@ -114,12 +146,20 @@ export async function queryHrssLedger(client:HrssQueryClient,definition:HrssMatt
       for(let index=0;index<rows.length;index++) {
         const row=rows[index];
         if(hasHandling) {
-          const handling=isTraining && trainingSession
-            ? await enrichTrainingRecord(trainingClient,source,response.rows[index],trainingSession,context.signal)
-            : await enrichHrssStreetRecord({requestHandlingRecords:(params,signal)=>{
-            if(!client.requestHandlingRecords) throw invalid('街道办办理记录查询尚未初始化');
-            return client.requestHandlingRecords(params,signal);
-          }},response.rows[index],context.signal);
+          let handling;
+          try {
+            handling=isTraining && trainingSession
+              ? await enrichTrainingRecord(trainingClient,source,response.rows[index],trainingSession,context.signal)
+              : await enrichHrssStreetRecord({requestHandlingRecords:(params,signal)=>{
+              if(!client.requestHandlingRecords) throw invalid('街道办办理记录查询尚未初始化');
+              return client.requestHandlingRecords(params,signal);
+            }},response.rows[index],context.signal);
+          } catch(error) {
+            // A missing history skips that case; it must not overwrite a saved complete history
+            // with a fabricated empty log, or prevent later cases from being processed.
+            skipTimeout(error,`${label}：办理记录`);
+            continue;
+          }
           checkCancelled(context.signal);
           if(!handling) continue;
           Object.assign(row,handling);
@@ -142,7 +182,9 @@ export async function queryHrssLedger(client:HrssQueryClient,definition:HrssMatt
       const date=new Date(day).toISOString().slice(0,10);
       const source=definition.sources[0],label=`${definition.name}（${date}）`;
       const params={bce089Start:date,bce089End:date,aac004:'',bae085:'01',bae001:'163374',bbd068:'01'};
-      const referenceTotal=await countSource(source,params,label);
+      let referenceTotal:number;
+      try {referenceTotal=await countSource(source,params,label);}
+      catch(error) {skipTimeout(error,`${label}：查询总数`);continue;}
       // Legacy count only plans the day's pages. Unstable ordering, short pages and duplicate
       // acceptance numbers do not make a successful list response fail the whole date range.
       const pages=Math.ceil(referenceTotal/PAGE_SIZE);
@@ -151,7 +193,9 @@ export async function queryHrssLedger(client:HrssQueryClient,definition:HrssMatt
         checkCancelled(context.signal);
         if(++requests>MAX_PAGES) throw completeness('回流超过最大分页保护限制');
         notify(`${label}：正在获取第 ${page}/${pages} 页，已获取 ${fetched} 条`);
-        const response=await client.request(source,buildHrssListParameters(source,page,now,params),context.signal,false,referenceTotal);
+        let response:{rows:Record<string,unknown>[];total:number};
+        try {response=await client.request(source,buildHrssListParameters(source,page,now,params),context.signal,false,referenceTotal);}
+        catch(error) {skipTimeout(error,`${label}：第 ${page} 页`);continue;}
         checkCancelled(context.signal);
         if(response.rows.length>PAGE_SIZE || fetched+response.rows.length>MAX_ROWS) throw completeness('回流超过最大记录保护限制');
         fetched+=response.rows.length;
@@ -166,9 +210,5 @@ export async function queryHrssLedger(client:HrssQueryClient,definition:HrssMatt
       }
     }
   } else for(const source of definition.sources) await processSource(source,hrssListDateParameters(definition.id,source.id,String(dates.startDate),String(dates.endDate)));
-  checkCancelled(context.signal);
-  const rows=[...result.values()];
-  const note=definition.id==='unemployment'?`（实际获取 ${fetched} 条，合并重复 ${duplicates} 条${skipped?`，跳过空受理编号 ${skipped} 条`:''}）`:'';
-  context.onProgress?.({current:rows.length,total:rows.length,message:`${definition.name}：${hasHandling?'列表及办理记录':'列表'}回流完成，共 ${rows.length} 条${note}`});
-  return {rows,page:1,pageSize:Math.max(rows.length,1),total:rows.length};
+  return finish();
 }

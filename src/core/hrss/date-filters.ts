@@ -13,7 +13,7 @@ export function hrssDateFilter(matterId: string): NonNullable<BusinessMatter['da
     ? '审核列表按申请日期、查询列表按见习开始日期筛选；两个列表分别保留。'
     : `按所选${basis.label}查询原系统列表。${SUBDISTRICT_IDS.has(matterId) ? '仅非待受理办件继续提取全部办理记录。' : ''}` };
   return { mode: 'pending', message: matterId === 'poverty-alleviation-personnel'
-    ? '原站脱贫人员列表未提供日期条件，当前暂停该事项回流，避免按所选日期执行无约束查询。'
+    ? ''
     : '该事项日期条件尚未验证，所选日期仅记录到任务。' };
 }
 
@@ -55,11 +55,12 @@ export function hrssReturnDateDetails(matterId: string, filters: Record<string, 
   const basis = hrssDateBasis(matterId);
   if (basis) return { ...requested, dateFilterStatus: 'applied', dateBasis: basis.field, dateBasisLabel: basis.label,
     startDate: filters.startDate, endDate: filters.endDate };
-  return { ...requested, dateFilterStatus: 'pending', dateScope: matterId === 'poverty-alleviation-personnel' ? 'blocked-unverified-date' : 'original-list' };
+  return { ...requested, dateFilterStatus: 'pending', dateScope: matterId === 'poverty-alleviation-personnel' ? 'original-list-no-date' : 'original-list' };
 }
 
 export function hrssTaskDateLabel(details?: Record<string, unknown>): string {
   if (details?.dateFilterStatus === 'pending') {
+    if (details.dateScope === 'original-list-no-date') return '按原列表条件回流（未按日期筛选）';
     const start = typeof details.requestedStartDate === 'string' ? details.requestedStartDate : '—';
     const end = typeof details.requestedEndDate === 'string' ? details.requestedEndDate : '—';
     if (details.dateScope === 'blocked-unverified-date') return `所选 ${start} 至 ${end}（原站日期条件未确认，已暂停回流）`;

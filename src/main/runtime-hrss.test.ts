@@ -107,6 +107,52 @@ describe('HRSS complete-list transaction and aggregate boundary', () => {
     expect((await store.listRecords({ systemId, matterId })).total).toBe(1);
   });
 
+  it('persists timeout skip warnings and partial rows without replacing the last complete dashboard snapshot', async () => {
+    await execute();
+    query.mockImplementationOnce(async (context) => {
+      context.onProgress?.({ current: 2, total: 2, message: '已结束，部分请求超时跳过' });
+      return { rows: [{ ...rows[0], employmentStatus: '已就业' }, { recordKey: 'partial-new', employmentStatus: '失业' }],
+        page: 1, pageSize: 200, total: 2, skippedRequestCount: 2 };
+    });
+    const partial = await execute();
+    expect(partial.status).toBe('completed');
+    expect(partial.result).toMatchObject({ total: 2, skippedRequests: 2, partial: true });
+    expect(partial.progress).toMatchObject({ skippedRequests: 2, message: expect.stringContaining('结果含缺项') });
+    expect((await store.listTaskOutput(partial.id)).total).toBe(2);
+    expect((await store.listRecords({ systemId, matterId })).total).toBe(2);
+    // Warnings must survive a task-engine restart; result is intentionally not stored by TaskStore.
+    runtime.tasks = new TaskEngine(store);
+    expect((await runtime.tasks.history()).find(task => task.id === partial.id)?.progress).toMatchObject({ skippedRequests: 2 });
+    const dashboard = await runtime.hrssDashboard();
+    expect(dashboard.totalRecords).toBe(1);
+    expect(dashboard.matters[0]).toMatchObject({ latestSkippedRequests: 2, latestTaskStatus: 'completed', syncState: 'synced' });
+  });
+
+  it('does not turn a timeout-only empty batch into a confirmed zero, while a later real empty still becomes zero', async () => {
+    query.mockResolvedValueOnce({ rows: [], page: 1, pageSize: 200, total: 0, skippedRequestCount: 1 });
+    const skipped = await execute();
+    expect((await store.getTask(skipped.id))?.progress.skippedRequests).toBe(1);
+    expect(await runtime.hrssDashboard()).toMatchObject({ totalRecords: null, syncState: 'not-synced' });
+    await execute();
+    expect((await runtime.hrssDashboard()).totalRecords).toBe(1);
+    query.mockResolvedValueOnce({ rows: [], page: 1, pageSize: 200, total: 0, skippedRequestCount: 1 });
+    await execute();
+    expect((await runtime.hrssDashboard()).totalRecords).toBe(1);
+    rows = [];
+    await execute();
+    expect(await runtime.hrssDashboard()).toMatchObject({ totalRecords: 0, syncState: 'synced' });
+    expect((await runtime.hrssDashboard()).matters[0].latestSkippedRequests).toBeUndefined();
+  });
+
+  it('keeps the query completion counts in the final persisted task message', async () => {
+    query.mockImplementationOnce(async (context) => {
+      context.onProgress?.({ current: 1, total: 1, message: '失业信息：共 1 条（实际获取 2 条，合并重复 1 条）' });
+      return { rows, page: 1, pageSize: 200, total: 1 };
+    });
+    const task = await execute();
+    expect((await store.getTask(task.id))?.progress.message).toContain('实际获取 2 条，合并重复 1 条');
+  });
+
   it('uses local ledger rows until an authorized matter has a completed batch', async () => {
     await repository.upsert({ systemId, matterId, recordKey: 'older-ledger-entry', data: { employmentStatus: '失业' }, firstSeenAt: 1, updatedAt: 1 });
     const initial = await runtime.hrssDashboard();

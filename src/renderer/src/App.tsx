@@ -671,7 +671,7 @@ function Workspace({ license, onLicenseChanged }: { license: LicenseStatus; onLi
               <div className="return-date-fields">
                 {selectedMatter.querySchema.filter((field) => field.type === 'date').map((field) => <label key={field.key}>
                   <span>{field.label}{field.required ? ' *' : ''}</span>
-                  <input type="date" aria-describedby={selectedMatter.dateFilter ? 'hrss-date-condition-note' : undefined}
+                  <input type="date" aria-describedby={selectedMatter.dateFilter?.message ? 'hrss-date-condition-note' : undefined}
                     min={selectedMatter.dateFilter && field.key === 'endDate' ? String(filters.startDate ?? '') : undefined}
                     max={selectedMatter.dateFilter && field.key === 'startDate' ? String(filters.endDate ?? '') : undefined}
                     value={String(filters[field.key] ?? '')} onChange={(event) => setFilters((current) => ({ ...current, [field.key]: event.target.value }))} />
@@ -691,7 +691,7 @@ function Workspace({ license, onLicenseChanged }: { license: LicenseStatus; onLi
                 </label>
               ))}
               </div>
-              {selectedMatter.dateFilter && <HrssDateNotice condition={selectedMatter.dateFilter} />}
+              {selectedMatter.dateFilter?.message && <HrssDateNotice condition={selectedMatter.dateFilter} />}
               <div className="one-click-flow" aria-label="回流处理流程"><span><b>1</b>自动提取</span><i>→</i><span><b>2</b>按事项规则筛选</span><i>→</i><span><b>3</b>去重保存</span><i>→</i><span><b>4</b>查看本次数据</span></div>
               {selectedMatter.description && <p className="return-scope-note">{selectedMatter.description}</p>}
             </div>

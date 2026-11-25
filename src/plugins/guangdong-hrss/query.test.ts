@@ -3,6 +3,7 @@ import { HRSS_MATTER_BY_ID, HRSS_MATTER_DEFINITIONS, type HrssListSource } from 
 import { buildHrssListParameters,projectHrssListRecord,queryHrssLedger } from './query';
 import { MemoryLocalRepository } from '../../core/storage/memory-repository';
 import { DefaultLocalSyncEngine } from '../../core/sync/engine';
+import { AppError } from '../../core/errors/app-error';
 import { HRSS_STREET_PROFILES } from './street';
 import { buildTrainingListParameters, HRSS_TRAINING_HANDLING_CONFIG } from './training';
 
@@ -197,10 +198,11 @@ describe('完整分页、稳定键与取消',()=>{
     await queryHrssLedger({request},definition('unemployment-tracking-service'),{...context,filters:{startDate:'2024-02-29',endDate:'2024-02-29'}},now);
     expect((request.mock.calls as any)[0][1]).toMatchObject({bae003:['2024-02-29 00:00:00','2024-02-29 23:59:59'],pagenum:1,pagesize:200});
   });
-  it('refuses an unverified poverty date query without fetching any unbounded page',async()=>{
-    const request=vi.fn();
-    await expect(queryHrssLedger({request},definition('poverty-alleviation-personnel'),{...context,filters:{startDate:'2026-11-01',endDate:'2026-11-04'}},now)).rejects.toThrow('原站列表未提供日期条件');
-    expect(request).not.toHaveBeenCalled();
+  it('queries the poverty original list without sending unverified date conditions',async()=>{
+    const request=vi.fn(async(_source:HrssListSource,_params:Record<string,unknown>)=>({total:0,rows:[]}));
+    const result=await queryHrssLedger({request},definition('poverty-alleviation-personnel'),{...context,filters:{startDate:'2026-11-01',endDate:'2026-11-04'}},now);
+    expect(result.total).toBe(0);expect(request).toHaveBeenCalledTimes(1);
+    expect(request.mock.calls[0][1]).toEqual({current:1,size:200});
   });
   it('uses the same month default when a legacy caller omits date selection',async()=>{
     const request=vi.fn(async()=>({total:0,rows:[]}));
@@ -325,5 +327,64 @@ describe('完整分页、稳定键与取消',()=>{
     expect(request).toHaveBeenCalledTimes(2);expect(result.rows).toHaveLength(2);
     expect(new Set(result.rows.map(r=>r.recordKey)).size).toBe(2);
     expect(result.rows.map(r=>r.listSource)).toEqual(['审核列表','查询列表']);
+  });
+});
+
+
+describe('人社超时重试耗尽后继续有效请求',()=>{
+  const exhausted=()=>new AppError('REMOTE_TIMEOUT','已尝试5次',{attempts:5,exhausted:true});
+  it('skips a timed-out day count and list page, then keeps later days and pages',async()=>{
+    const warn=vi.spyOn(console,'warn').mockImplementation(()=>{});
+    try{
+      const request=vi.fn(async(_source,params,_signal,countOnly)=>{
+        if(params.bce089Start==='2026-11-01'||params.bce089Start==='2026-11-02'&&params.current===2)throw exhausted();
+        return {total:params.bce089Start==='2026-11-02'?401:1,rows:countOnly?[]:[raw(params.bce089Start+'-'+params.current)]};
+      });
+      const progress=vi.fn();const result=await queryHrssLedger({request},definition('unemployment'),{...context,filters:{startDate:'2026-11-01',endDate:'2026-11-03'},onProgress:progress},now);
+      expect(result).toMatchObject({total:3,skippedRequestCount:2});
+      expect(request.mock.calls.filter(c=>!c[3]).map(c=>[c[1].bce089Start,c[1].current])).toEqual([['2026-11-02',1],['2026-11-02',2],['2026-11-02',3],['2026-11-03',1]]);
+      expect(progress.mock.lastCall?.[0].message).toContain('本批次结果含缺项');expect(warn).toHaveBeenCalledTimes(2);
+    }finally{warn.mockRestore()}
+  });
+  it('keeps the expected page offsets after a timed-out middle page in a normal ledger',async()=>{
+    const warn=vi.spyOn(console,'warn').mockImplementation(()=>{});
+    try{
+      const request=vi.fn(async(_source,params)=>{if(params.current===2)throw exhausted();return {total:601,rows:Array.from({length:params.current===4?1:200},(_,i)=>raw(params.current+'-'+i))}});
+      const result=await queryHrssLedger({request},definition('job-seeking-startup-subsidy'),context,now);
+      expect(result).toMatchObject({total:401,skippedRequestCount:1});expect(request.mock.calls.map(c=>c[1].current)).toEqual([1,2,3,4]);
+    }finally{warn.mockRestore()}
+  });
+  it('continues a second source when the first list cannot provide a total after five timeouts',async()=>{
+    const warn=vi.spyOn(console,'warn').mockImplementation(()=>{});
+    try{
+      const request=vi.fn(async(source)=>{if(source.id==='review')throw exhausted();return {total:1,rows:[raw('B')]}});
+      const result=await queryHrssLedger({request},definition('youth-internship-unit'),context,now);
+      expect(result).toMatchObject({total:1,skippedRequestCount:1});expect(result.rows[0].listSource).toBe('查询列表');expect(request).toHaveBeenCalledTimes(2);
+    }finally{warn.mockRestore()}
+  });
+  it('skips a case with timed-out handling records without blocking later cases or inventing empty histories',async()=>{
+    const warn=vi.spyOn(console,'warn').mockImplementation(()=>{});
+    try{
+      const request=vi.fn(async()=>({total:2,rows:['A','B'].map(id=>({...raw(id),bbe955:'03',bbe955Name:'待审核',bzd417:'FLOW-'+id}))}));
+      const requestHandlingRecords=vi.fn(async(params)=>{if(params.bzd417==='FLOW-A')throw exhausted();return {total:0,rows:[]}});
+      const result=await queryHrssLedger({request,requestHandlingRecords},definition('enterprise-hiring-difficult-personnel-subsidy'),context,now);
+      expect(result).toMatchObject({total:1,skippedRequestCount:1});expect(result.rows[0]).toMatchObject({applyBh:'B',handlingRecordStatus:'collected',handlingRecordCount:0});
+      expect(requestHandlingRecords).toHaveBeenCalledTimes(2);expect(JSON.stringify(warn.mock.calls)).not.toContain('FLOW-A');
+    }finally{warn.mockRestore()}
+  });
+  it('records a training bootstrap timeout and does not issue unauthenticated training list calls',async()=>{
+    const warn=vi.spyOn(console,'warn').mockImplementation(()=>{});
+    try{
+      const request=vi.fn(),requestTrainingList=vi.fn(),prepareTrainingSession=vi.fn(async()=>{throw exhausted()});
+      const result=await queryHrssLedger({request,requestTrainingList,prepareTrainingSession},definition('startup-training'),context,now);
+      expect(result).toMatchObject({rows:[],total:0,skippedRequestCount:1});expect(request).not.toHaveBeenCalled();expect(requestTrainingList).not.toHaveBeenCalled();
+    }finally{warn.mockRestore()}
+  });
+  it('does not skip an unexhausted timeout or a real session error',async()=>{
+    for(const code of ['REMOTE_TIMEOUT','SESSION_EXPIRED'] as const){
+      const error=new AppError(code,'未到重试上限或会话失效');const request=vi.fn(async()=>{throw error});
+      await expect(queryHrssLedger({request},definition('unemployment'),{...context,filters:{startDate:'2026-11-02',endDate:'2026-11-02'}},now)).rejects.toBe(error);
+      expect(request).toHaveBeenCalledTimes(1);
+    }
   });
 });

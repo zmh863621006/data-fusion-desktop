@@ -17,6 +17,9 @@ it('serializes date controls and accurately distinguishes the two unverified dat
   expect(matters).toHaveLength(22); expect(() => structuredClone(matters)).not.toThrow();
   expect(matters.every((matter: any) => matter.querySchema.length === 2)).toBe(true);
   expect(matters.filter((matter: any) => matter.dateFilter?.mode === 'pending').map((matter:any)=>matter.id).sort()).toEqual(['one-time-job-expansion-subsidy','poverty-alleviation-personnel']);
+  const poverty=matters.find((matter:any)=>matter.id==='poverty-alleviation-personnel');
+  expect(poverty.dateFilter.message).toBe('');
+  expect(poverty.defaultFilters).toEqual({startDate:'2026-11-01',endDate:'2026-11-05'});
   const streetMatters = matters.filter((matter: any) => matter.departmentId === 'subdistrict-office');
   expect(streetMatters).toHaveLength(4);
   expect(streetMatters.every((matter: any) => matter.dateFilter.mode==='applied')).toBe(true);
@@ -32,6 +35,7 @@ it('saves effective remote dates and their business-specific basis', async () =>
     else {
       expect(metadata.details.dateFilterStatus).toBe('pending');
       expect(metadata.details).not.toHaveProperty('startDate'); expect(metadata.details).not.toHaveProperty('endDate');
+      if(matter.id==='poverty-alleviation-personnel') expect(metadata.details.dateScope).toBe('original-list-no-date');
     }
   }
   expect(f.run).toHaveBeenCalledTimes(plugin.matters.filter(item=>item.queryAvailable!==false).length);

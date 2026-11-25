@@ -1,10 +1,9 @@
-import { AppError } from '../../core/errors/app-error';
 import { hrssDateBasis } from '../../core/hrss/date-filters';
 
 /** Field pairs are taken from the corresponding source page's date controls. */
 export function hrssListDateParameters(matterId: string, sourceId: string, startDate: string, endDate: string): Record<string, unknown> {
-  if (matterId === 'poverty-alleviation-personnel') throw new AppError('QUERY_INVALID',
-    '脱贫人员原站列表未提供日期条件，暂不能按日期回流；本次未发起列表查询');
+  // The user authorized the original list scope until the source exposes a verified date filter.
+  if (matterId === 'poverty-alleviation-personnel') return {};
   const basis = hrssDateBasis(matterId);
   if (!basis || matterId === 'unemployment') return {};
   if (basis.field === 'bae003') return { bae003: [`${startDate} 00:00:00`, `${endDate} 23:59:59`] };

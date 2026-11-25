@@ -86,6 +86,15 @@ describe('authorized local HRSS dashboard', () => {
     expect(build({ tasks: [{ ...success(), details: { startDate: '2026-02-30', endDate: 'private query text' } }] }).matters[0].coverage).toBeNull();
   });
 
+  it('does not use a timeout-skipped completion as complete coverage and exposes its skipped count',()=>{
+    const partial = { ...success(), progress: { skippedRequests: 2 }, details: { startDate: '2026-11-04', endDate: '2026-11-04' } };
+    expect(build({ tasks: [partial] })).toMatchObject({ totalRecords: null, lastSuccessAt: null,
+      matters: [expect.objectContaining({ latestSkippedRequests: 2, coverage: null })] });
+    const data = build({ tasks: [ { ...success(POPULATION, NOW - 10_000), details: { startDate: '2026-10-01', endDate: '2026-11-03' } }, partial ] });
+    expect(data.matters[0]).toMatchObject({ latestSkippedRequests: 2, lastSuccessAt: NOW - 10_000,
+      coverage: { startDate: '2026-10-01', endDate: '2026-11-03' } });
+  });
+
   it('counts latest keyed local records once, preserves unkeyed rows and never mutates inputs', () => {
     const records = [
       { ...record({ age: 29 }), recordKey: 'same', updatedAt: 1 },

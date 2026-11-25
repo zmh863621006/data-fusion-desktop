@@ -19,6 +19,7 @@ export interface HrssDashboardTask {
   createdAt?: number;
   finishedAt?: number;
   details?: Record<string, unknown>;
+  progress?: { skippedRequests?: number };
 }
 export interface HrssDashboardInput {
   /** Main-process verified license scope. Do not accept this value from the renderer. */
@@ -52,6 +53,7 @@ export interface HrssMatterSummary {
   total: number | null;
   lastSuccessAt: number | null;
   latestTaskStatus: HrssTaskStatus | null;
+  latestSkippedRequests?: number;
   coverage: { startDate: string | null; endDate: string | null } | null;
   statuses: HrssCountBucket[];
 }
@@ -295,7 +297,8 @@ export function buildHrssDashboard(input: HrssDashboardInput): HrssDashboardData
   const matters: HrssMatterSummary[] = selected.map((matter) => {
     const records = recordsByMatter.get(matter.id)!;
     const matterTasks = tasks.filter((task) => task.matterId === matter.id);
-    const successful = matterTasks.filter((task) => task.status === 'completed' && finiteTime(task.finishedAt) && task.finishedAt <= now);
+    const successful = matterTasks.filter((task) => task.status === 'completed' && (task.progress?.skippedRequests ?? 0) <= 0
+      && finiteTime(task.finishedAt) && task.finishedAt <= now);
     const lastSuccessAt = successful.length ? Math.max(...successful.map((task) => task.finishedAt!)) : null;
     const lastSuccessfulTask = successful.find((task) => task.finishedAt === lastSuccessAt);
     const pendingDates = lastSuccessfulTask?.details?.dateFilterStatus === 'pending';
@@ -328,7 +331,9 @@ export function buildHrssDashboard(input: HrssDashboardInput): HrssDashboardData
       }
     }
     const latestTaskStatus = latestTask && TASK_STATUSES.includes(latestTask.status) ? latestTask.status : null;
-    return { id: matter.id, name: matter.name, syncState, total: hasEvidence ? records.length : null, lastSuccessAt, latestTaskStatus, coverage, statuses: localStatuses };
+    const latestSkippedRequests = latestTask?.progress?.skippedRequests;
+    return { id: matter.id, name: matter.name, syncState, total: hasEvidence ? records.length : null, lastSuccessAt, latestTaskStatus,
+      ...(latestSkippedRequests && latestSkippedRequests > 0 ? { latestSkippedRequests } : {}), coverage, statuses: localStatuses };
   });
   tracking.total = trackingHasEvidence ? tracking.tracked + tracking.untracked + tracking.unknown : null;
   tracking.streets = [...streets.values()].sort((a, b) => b.total - a.total || STREET_NAMES.indexOf(a.name) - STREET_NAMES.indexOf(b.name));

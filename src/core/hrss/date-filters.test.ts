@@ -12,13 +12,13 @@ describe('requested dates and effective HRSS query scope', () => {
     expect(hrssDefaultDateFilters('unemployment',now)).toEqual({startDate:'2026-11-01',endDate:'2026-11-25'});
     expect(hrssDefaultDateFilters('startup-training',now)).toEqual(hrssDefaultDateFilters('unemployment',now));
   });
-  it('keeps an unverified poverty selection separate and states that no unconstrained query runs', () => {
+  it('keeps the poverty date selection separate from its authorized original-list query scope', () => {
     const filters = { startDate: '2026-10-01', endDate: '2026-10-31' };
     const details = hrssReturnDateDetails('poverty-alleviation-personnel', filters);
-    expect(details).toEqual({ requestedStartDate: filters.startDate, requestedEndDate: filters.endDate, dateFilterStatus: 'pending', dateScope: 'blocked-unverified-date' });
+    expect(details).toEqual({ requestedStartDate: filters.startDate, requestedEndDate: filters.endDate, dateFilterStatus: 'pending', dateScope: 'original-list-no-date' });
     expect(details).not.toHaveProperty('startDate'); expect(details).not.toHaveProperty('endDate');
-    expect(hrssTaskDateLabel(details)).toContain('所选 2026-10-01 至 2026-10-31（原站日期条件未确认，已暂停回流）');
-    expect(hrssDateFilter('poverty-alleviation-personnel').message).toContain('暂停');
+    expect(hrssTaskDateLabel(details)).toBe('按原列表条件回流（未按日期筛选）');
+    expect(hrssDateFilter('poverty-alleviation-personnel')).toEqual({mode:'pending',message:''});
   });
   it.each([
     ['unemployment','bce089','登记日期'],['job-seeking-startup-subsidy','adc705','申请日期'],

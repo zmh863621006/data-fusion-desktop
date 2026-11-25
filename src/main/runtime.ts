@@ -554,10 +554,18 @@ export class AppRuntime {
       if (this.hrssReturning) throw new Error('人社列表回流正在进行，请等待当前任务完成后再开始');
       this.hrssReturning = true;
       try {
-        const result = await matter.query({ ...queryContext, signal: context.signal, onProgress: context.report });
+        let queryCompletionMessage: string | undefined;
+        const result = await matter.query({ ...queryContext, signal: context.signal, onProgress: progress => {
+          if (progress.message) queryCompletionMessage = progress.message;
+          context.report(progress);
+        } });
         if (context.signal.aborted) throw new Error('任务已取消');
+        const skippedRequests = Number.isSafeInteger(result.skippedRequestCount) && result.skippedRequestCount! > 0
+          ? result.skippedRequestCount! : 0;
+        const outcome = skippedRequests ? { skippedRequests } : {};
         const summary = await this.syncEngine.preview(systemId, matterId, matter.uniqueKey, result.rows);
-        context.report({ current: 0, total: summary.total, message: '全部列表获取完成，正在保存成功批次' });
+        context.report({ current: 0, total: summary.total, ...outcome,
+          message: skippedRequests ? '部分请求超时已跳过，正在保存已获取的数据' : '全部列表获取完成，正在保存成功批次' });
         await this.requireLicense(systemId, matterId);
         await this.platformStore.transaction(async () => {
           if (context.signal.aborted) throw new Error('任务已取消');
@@ -566,8 +574,13 @@ export class AppRuntime {
             summary.changes.map(change => ({ recordKey: change.key, data: change.current })));
           if (context.signal.aborted) throw new Error('任务已取消');
         });
-        context.report({ current: summary.total, total: summary.total, message: `列表回流完成，共 ${summary.total} 条` });
-        return { total: summary.total, inserted: summary.inserted, updated: summary.updated, unchanged: summary.unchanged };
+        let completion = queryCompletionMessage ?? `${skippedRequests ? '回流结束' : '列表回流完成'}，共 ${summary.total} 条`;
+        if (skippedRequests && !completion.includes('结果含缺项')) {
+          completion += `；超时请求已尝试5次后跳过 ${skippedRequests} 项，结果含缺项`;
+        }
+        context.report({ current: summary.total, total: summary.total, ...outcome, message: completion });
+        return { total: summary.total, inserted: summary.inserted, updated: summary.updated, unchanged: summary.unchanged,
+          ...(skippedRequests ? { skippedRequests, partial: true } : {}) };
       } finally { this.hrssReturning = false; }
     }
     const result = await matter.query({ ...queryContext, signal: context.signal, onProgress: context.report });

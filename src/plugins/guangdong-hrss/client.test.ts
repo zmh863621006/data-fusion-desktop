@@ -1,8 +1,10 @@
-import { describe,expect,it,vi } from 'vitest';
+import { afterEach,describe,expect,it,vi } from 'vitest';
 vi.mock('electron',()=>({session:{fromPartition:vi.fn()}}));
 import { session } from 'electron';
 import { HrssClient,decodeHrssList } from './client';
 import { HRSS_MATTER_BY_ID } from './catalog';
+import { isExhaustedHrssTimeout } from './request-gate';
+afterEach(()=>{vi.useRealTimers();vi.restoreAllMocks();});
 const now=()=>1_800_000_000_000;
 const json=(body:unknown,status=200)=>new Response(JSON.stringify(body),{status,headers:{'content-type':'application/json'}});
 const source=HRSS_MATTER_BY_ID.get('job-seeking-startup-subsidy')!.sources[0];
@@ -25,6 +27,84 @@ describe('人社列表响应',()=>{
     expect(decodeHrssList({data:{total:0,records:[{bce076:'A'}]}},'records').total).toBe(0);
     expect(()=>decodeHrssList({data:{total:'invalid',records:[]}},'records',false,1)).toThrow('结构不完整');
     expect(()=>decodeHrssList({data:{records:[]}},'records')).toThrow('结构不完整');
+  });
+});
+
+describe('人社统一节流与超时重试',()=>{
+  const trainingPage='/ZXZJ/jycyzjgl/web/cypxbt/cxjd/cxjd.do';
+  const trainingConfig={confid:'jycyzjgl_cypxbt_cxjd_bljdcxjglb',whereCls:'fixture-encrypted',rowstart:1,pageSize:200};
+  const html=`<form name="editform"><input name="BAE001" value="163374"></form><script>var WHEREKEY='fixture';var headtoken='hz_zxzj';</script>`;
+  const unemployment=HRSS_MATTER_BY_ID.get('unemployment')!.sources[0];
+  const response=(path:string)=>path===trainingPage?new Response(html,{headers:{'content-type':'text/html'}}):path==='/ZXZJ/gltPage.do'?json({FHZ:'1',total:0,rows:[]}):path.includes('/WGBT/')?json({total:0,rows:[]}):json({data:{total:0,records:[]}});
+  const authenticate=(client:HrssClient)=>{client.acceptBrowserAccessToken('fixture-access');client.acceptBrowserCookie('WGBT_SESSION=fixture');client.acceptTrainingCookie('ZXZJ_SESSION=fixture; hz_zxzj=training-csrf');};
+
+  it('shares the default two-second interval across count, list, handling and both training network routes',async()=>{
+    vi.useFakeTimers();vi.setSystemTime(0);
+    const starts:Array<{path:string;at:number}>=[];
+    const fetcher=vi.fn(async(url:string)=>{const path=new URL(url).pathname;starts.push({path,at:Date.now()});return response(path);});
+    const client=new HrssClient({fetcher});authenticate(client);
+    const calls=[()=>client.request(unemployment,{},undefined,true),()=>client.request(source,{}),()=>client.requestHandlingRecords({bzd417:'fixture'}),()=>client.prepareTrainingSession(),()=>client.requestTrainingList(trainingConfig),()=>client.request(wgbt,{})];
+    const pending=(async()=>{for(const call of calls)await call();})();
+    await vi.runAllTimersAsync();await pending;
+    expect(starts.map(row=>row.path)).toEqual([unemployment.countPath,source.path,'/subsidize/main/rest/subsidy/common/operate-log',trainingPage,'/ZXZJ/gltPage.do',wgbt.path]);
+    expect(starts.map(row=>row.at)).toEqual([0,2000,4000,6000,8000,10000]);
+  });
+
+  it.each(['count','list','handling','training-page','training-list','wgbt'])('retries transport timeouts through the shared gate for %s',async(kind)=>{
+    const warn=vi.spyOn(console,'warn').mockImplementation(()=>undefined);
+    const target=kind==='count'?unemployment.countPath!:kind==='list'?source.path:kind==='handling'?'/subsidize/main/rest/subsidy/common/operate-log':kind==='training-page'?trainingPage:kind==='training-list'?'/ZXZJ/gltPage.do':wgbt.path;
+    let attempts=0;
+    const fetcher=vi.fn(async(url:string)=>{const path=new URL(url).pathname;if(path===target&&++attempts<3)throw new Error('fetch failed',{cause:Object.assign(new Error('transport timeout'),{code:'ETIMEDOUT'})});return response(path);});
+    const client=new HrssClient({fetcher,minimumIntervalMs:0});authenticate(client);
+    if(kind==='count')await client.request(unemployment,{bce089Start:'2026-11-02'},undefined,true);
+    else if(kind==='list')await client.request(source,{});
+    else if(kind==='handling')await client.requestHandlingRecords({bzd417:'fixture'});
+    else if(kind==='training-page')await client.prepareTrainingSession();
+    else if(kind==='training-list')await client.requestTrainingList(trainingConfig);
+    else await client.request(wgbt,{});
+    expect(attempts).toBe(3);expect(warn).toHaveBeenCalledTimes(2);
+    expect(client.hasAccessToken()).toBe(true);
+    expect(warn.mock.calls.every(call=>(call[1] as {path:string}).path===target)).toBe(true);
+    expect(JSON.stringify(warn.mock.calls)).not.toContain('fixture');
+  });
+
+  it.each([false,true])('preserves a response-body timeout instead of treating it as malformed JSON or a training login (training=%s)',async(training)=>{
+    vi.spyOn(console,'warn').mockImplementation(()=>undefined);
+    let attempts=0;
+    const fetcher=vi.fn(async(url:string)=>{
+      const path=new URL(url).pathname;if(path===trainingPage)return response(path);
+      const result=response(path);
+      if(++attempts<3)result.json=async()=>{throw new DOMException('Body timed out','TimeoutError');};
+      return result;
+    });
+    const client=new HrssClient({fetcher,minimumIntervalMs:0});authenticate(client);
+    if(training)await client.requestTrainingList(trainingConfig);else await client.request(source,{});
+    expect(attempts).toBe(3);expect(client.exportSession()?.trainingCookie).toContain('hz_zxzj=training-csrf');
+  });
+
+  it('exposes only an exhausted timeout marker after five attempts without clearing the login',async()=>{
+    vi.spyOn(console,'warn').mockImplementation(()=>undefined);
+    const fetcher=vi.fn(async()=>{throw new Error('net::ERR_TIMED_OUT');});
+    const client=new HrssClient({fetcher,minimumIntervalMs:0});authenticate(client);
+    const error=await client.request(source,{}).catch(error=>error);
+    expect(isExhaustedHrssTimeout(error)).toBe(true);expect(fetcher).toHaveBeenCalledTimes(5);expect(client.hasAccessToken()).toBe(true);
+  });
+
+  it('keeps the sixty-second network abort distinct from a user cancellation',async()=>{
+    vi.useFakeTimers();vi.spyOn(console,'warn').mockImplementation(()=>undefined);
+    const fetcher=vi.fn(async(_url:string,init:RequestInit)=>new Promise<Response>((_resolve,reject)=>init.signal!.addEventListener('abort',()=>reject(new DOMException('Aborted','AbortError')),{once:true})));
+    const client=new HrssClient({fetcher,minimumIntervalMs:0});authenticate(client);
+    const result=client.request(source,{}).catch(error=>error);
+    await vi.advanceTimersByTimeAsync(300000);
+    expect(isExhaustedHrssTimeout(await result)).toBe(true);expect(fetcher).toHaveBeenCalledTimes(5);expect(client.hasAccessToken()).toBe(true);
+  });
+
+  it.each([401,500,'json'])('does not retry an HTTP/session/JSON failure as a timeout: %s',async(failure)=>{
+    const warn=vi.spyOn(console,'warn').mockImplementation(()=>undefined);
+    const fetcher=vi.fn(async()=>typeof failure==='number'?json({},failure):new Response('{invalid',{headers:{'content-type':'application/json'}}));
+    const client=new HrssClient({fetcher,minimumIntervalMs:0});authenticate(client);
+    await expect(client.request(source,{})).rejects.toMatchObject({code:failure===401?'SESSION_EXPIRED':'REMOTE_REQUEST_FAILED'});
+    expect(fetcher).toHaveBeenCalledTimes(1);expect(warn).not.toHaveBeenCalled();
   });
 });
 

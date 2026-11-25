@@ -120,28 +120,30 @@ export class SqlitePlatformStore implements TaskStore, AuditLog, SettingsStore {
     return { rows: rows.map(taskFromRow), total: total?.count ?? 0 };
   }
 
-  /** Prefer the latest completed batch, including an empty one. Older local-only ledgers have no batch. */
+  /** Prefer the latest batch without skipped requests, including real empties; retain the latest task warning. */
   async successfulSnapshots(systemId: string, matterIds: string[]): Promise<{ records: StoredRecord[]; tasks: RuntimeTask[] }> {
     const records: StoredRecord[] = [];
     const tasks: RuntimeTask[] = [];
     for (const matterId of [...new Set(matterIds)]) {
       const latest = await this.database.all<TaskRow>(
         `SELECT * FROM runtime_tasks WHERE system_id=? AND matter_id=? AND type='data-return'
-         AND (id=(SELECT id FROM runtime_tasks WHERE system_id=? AND matter_id=? AND type='data-return' AND status='completed' ORDER BY finished_at DESC,created_at DESC,rowid DESC LIMIT 1)
-           OR id=(SELECT id FROM runtime_tasks WHERE system_id=? AND matter_id=? AND type='data-return' ORDER BY created_at DESC,rowid DESC LIMIT 1))`,
+         AND (id=(SELECT id FROM runtime_tasks WHERE system_id=? AND matter_id=? AND type='data-return' AND status='completed'
+                   AND COALESCE(json_extract(progress_json,'$.skippedRequests'),0)=0 ORDER BY finished_at DESC,created_at DESC,rowid DESC LIMIT 1)
+           OR id=(SELECT id FROM runtime_tasks WHERE system_id=? AND matter_id=? AND type='data-return' ORDER BY created_at DESC,rowid DESC LIMIT 1))
+         ORDER BY created_at DESC,rowid DESC`,
         [systemId, matterId, systemId, matterId, systemId, matterId]);
       for (const row of latest) {
         tasks.push({ id: row.id, type: row.type, name: row.name, systemId, matterId, status: row.status,
           progress: JSON.parse(row.progress_json), createdAt: row.created_at, finishedAt: row.finished_at,
           details: row.metadata_json ? JSON.parse(row.metadata_json) : undefined });
-        if (row.status !== 'completed') continue;
+        if (row.status !== 'completed' || JSON.parse(row.progress_json).skippedRequests > 0) continue;
         const rows = await this.database.all<{ record_key: string; data_json: string }>(
           'SELECT record_key,data_json FROM task_output_rows WHERE task_id=? AND system_id=? AND matter_id=? ORDER BY row_no',
           [row.id, systemId, matterId]);
         records.push(...rows.map(record => ({ systemId, matterId, recordKey: record.record_key, data: JSON.parse(record.data_json),
           firstSeenAt: row.created_at, updatedAt: row.finished_at ?? row.created_at })));
       }
-      if (!latest.some((row) => row.status === 'completed')) {
+      if (!latest.some((row) => row.status === 'completed' && !(JSON.parse(row.progress_json).skippedRequests > 0))) {
         const rows = await this.database.all<RecordRow>(
           'SELECT * FROM local_records WHERE system_id=? AND matter_id=?', [systemId, matterId]);
         records.push(...rows.map((row) => ({ systemId, matterId, recordKey: row.record_key, data: JSON.parse(row.data_json),
