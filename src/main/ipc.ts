@@ -15,6 +15,7 @@ import { hrssReturnDateDetails } from '../core/hrss/date-filters';
 import { parseGovernmentExportTarget } from '../core/export/government-target';
 import { exportWarningOptions } from './export-warning';
 import { openExportFolder } from './export-folder';
+import { returnTaskFingerprint } from './return-batch-service';
 
 function requireSystem(systemId: string) {
   const plugin = appRuntime.plugins.get(systemId);
@@ -47,7 +48,7 @@ export function registerIpcHandlers(getTrustedWebContentsId: () => number | unde
     IPC_CHANNELS.practitionerNumbersSave, IPC_CHANNELS.taskOutput, IPC_CHANNELS.taskOutputExport, IPC_CHANNELS.recordsList,
     IPC_CHANNELS.recordUpdate, IPC_CHANNELS.recordsExport, IPC_CHANNELS.settingsUpdate, IPC_CHANNELS.credentialsSave,
     IPC_CHANNELS.systemLogin, IPC_CHANNELS.publicationOpen, IPC_CHANNELS.systemLoginClose, IPC_CHANNELS.systemLogout, IPC_CHANNELS.matterQuery,
-    IPC_CHANNELS.matterRun, IPC_CHANNELS.syncPreview, IPC_CHANNELS.syncCommit,
+    IPC_CHANNELS.matterRun, IPC_CHANNELS.matterRunBatch, IPC_CHANNELS.returnBatchCancelPending, IPC_CHANNELS.returnBatchRetryFailed, IPC_CHANNELS.syncPreview, IPC_CHANNELS.syncCommit,
   ]);
   const handle = (channel: string, listener: (event: IpcMainInvokeEvent, ...args: any[]) => any) => {
     ipcMain.handle(channel, async (event, ...args) => {
@@ -406,7 +407,9 @@ export function registerIpcHandlers(getTrustedWebContentsId: () => number | unde
     const id = parseIdentifier(systemId, '系统标识');
     if (typeof force !== 'boolean') throw new Error('登录检测参数无效');
     await appRuntime.requireLicense(id);
-    return requireSystem(id).getSessionState({ force });
+    const state=await requireSystem(id).getSessionState({ force });
+    appRuntime.resumeReturnQueue?.(state);
+    return state;
   });
 
   handle(IPC_CHANNELS.systemLogin, async (event, systemId: unknown) => {
@@ -477,6 +480,7 @@ export function registerIpcHandlers(getTrustedWebContentsId: () => number | unde
     loginTabController.close(plugin.id);
     try { await plugin.auth.logout(); }
     finally { await appRuntime.forgetSession(plugin.id); }
+    appRuntime.tasks?.pauseSystem?.(plugin.id,'等待重新登录后继续回流');
     await appRuntime.audit('system.logout', plugin.id);
     return plugin.getSessionState();
   });
@@ -528,8 +532,17 @@ export function registerIpcHandlers(getTrustedWebContentsId: () => number | unde
     };
     const task = await appRuntime.tasks.run(
       `数据回流：${plugin.name} / ${matter.name}`,
-      (context) => appRuntime.runOneClickReturn(systemId, matterId, context, queryContext),
-      { type: 'data-return', systemId, matterId, details: dateDetails },
+      async (context) => {
+        try { return await appRuntime.runOneClickReturn(systemId, matterId, context, queryContext); }
+        catch (error) {
+          if (!context.signal.aborted) {
+            const state=await plugin.getSessionState().catch(()=>undefined);
+            if (state && ['logged-out','expired'].includes(state.status)) appRuntime.tasks.pauseSystem?.(systemId,'等待重新登录后继续回流');
+          }
+          throw error;
+        }
+      },
+      { type: 'data-return', systemId, matterId, details: {...dateDetails,returnContext:structuredClone(queryContext),returnFingerprint:returnTaskFingerprint(systemId,matterId,queryContext.filters)} },
     );
     if (task.status !== 'completed') {
       await appRuntime.audit('query.failed', systemId, matterId, task.id, { error: task.error ?? '回流失败' });
@@ -537,6 +550,23 @@ export function registerIpcHandlers(getTrustedWebContentsId: () => number | unde
     }
     await appRuntime.audit('sync.committed', systemId, matterId, task.id, task.result as Record<string, unknown>);
     return { taskId: task.id, ...task.result };
+  });
+
+  handle(IPC_CHANNELS.matterRunBatch, async(event,systemId:unknown,input:unknown)=>{
+    trusted(event);
+    return appRuntime.returnBatches().submit(systemId,input);
+  });
+  handle(IPC_CHANNELS.returnBatchGet, async(event,systemId:unknown,batchId:unknown)=>{
+    trusted(event);
+    return appRuntime.returnBatches().get(systemId,batchId);
+  });
+  handle(IPC_CHANNELS.returnBatchCancelPending, async(event,systemId:unknown,batchId:unknown)=>{
+    trusted(event);
+    return appRuntime.returnBatches().cancelPending(systemId,batchId);
+  });
+  handle(IPC_CHANNELS.returnBatchRetryFailed, async(event,systemId:unknown,batchId:unknown)=>{
+    trusted(event);
+    return appRuntime.returnBatches().retryFailed(systemId,batchId);
   });
 
   handle(

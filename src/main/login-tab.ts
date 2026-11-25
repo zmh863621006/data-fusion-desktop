@@ -32,6 +32,7 @@ export class LoginTabController {
   private persistence?: BrowserStoragePersistence;
   private storageTimer?: ReturnType<typeof setInterval>;
   private sessionTimer?: ReturnType<typeof setInterval>;
+  private sessionObserver?: (state: SessionState) => void;
   private readonly resizeListener = () => this.resize();
 
   state(): SourceTabsState {
@@ -39,6 +40,7 @@ export class LoginTabController {
   }
   activityVersion(): number { return this.activity; }
   closeVersion(systemId: string): number { return this.closeVersions.get(systemId) ?? 0; }
+  configureSessionObserver(observer: (state: SessionState) => void): void { this.sessionObserver=observer; }
 
   configurePersistence(persistence: BrowserStoragePersistence): void {
     this.persistence = persistence;
@@ -93,6 +95,7 @@ export class LoginTabController {
 
   private publishSession(tab: Tab, state: SessionState): void {
     if (this.tabs.get(tab.summary.systemId) !== tab || !this.window || this.window.isDestroyed() || this.window.webContents.isDestroyed()) return;
+    this.sessionObserver?.({systemId:tab.summary.systemId,status:state.status});
     // Push only the status DTO, never a plugin, cookie or API credential.
     this.window.webContents.send(IPC_CHANNELS.systemSessionChanged, {
       systemId: tab.summary.systemId, status: state.status, displayName: state.displayName,

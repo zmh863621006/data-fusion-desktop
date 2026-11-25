@@ -64,6 +64,10 @@ export const IPC_CHANNELS = {
   mattersList: 'matters:list',
   matterQuery: 'matter:query',
   matterRun: 'matter:run',
+  matterRunBatch: 'matter:run-batch',
+  returnBatchGet: 'return-batch:get',
+  returnBatchCancelPending: 'return-batch:cancel-pending',
+  returnBatchRetryFailed: 'return-batch:retry-failed',
   syncPreview: 'sync:preview',
   syncCommit: 'sync:commit',
 } as const;

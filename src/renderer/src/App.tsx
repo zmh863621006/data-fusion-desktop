@@ -31,6 +31,8 @@ import { GOVERNMENT_EXPORT_LABELS, permitExportTargets, supportsCollectionExport
 import { EQUIPMENT_SYSTEM_ID, USE_REGISTRATION } from '../../plugins/guangdong-special-equipment/catalog';
 import type { QueryPage } from '../../core/query/types';
 import { OneWindowPage } from './OneWindowPage';
+import { BatchReturnPanel } from './BatchReturnPanel';
+import { TaskCenterPage } from './TaskCenterPage';
 
 type SessionState = {
   status: 'logged-out' | 'logging-in' | 'authenticated' | 'unverified' | 'expiring' | 'expired';
@@ -286,6 +288,8 @@ function Workspace({ license, onLicenseChanged }: { license: LicenseStatus; onLi
   }, [scope, requestedPage, activePage]);
   const [matterSection, setMatterSection] = useState<MatterSection>('return');
   const [selectedDataBatchId, setSelectedDataBatchId] = useState('');
+  const [selectedReturnBatchId, setSelectedReturnBatchId] = useState('');
+  const [showBatchReturn, setShowBatchReturn] = useState(false);
   const [showPractitionerNumbers, setShowPractitionerNumbers] = useState(false);
   const numberMatters = selectedSystemId === 'transport-practitioner'
     ? PRACTITIONER_NUMBER_MATTERS.filter(id => access.canOpenMatter(selectedSystemId, id)) : [];
@@ -396,6 +400,7 @@ function Workspace({ license, onLicenseChanged }: { license: LicenseStatus; onLi
   useEffect(() => {
     if (!selectedSystemId) return;
     let disposed = false;
+    setShowBatchReturn(false); setSelectedReturnBatchId('');
     setMatters([]);
     setSelectedMatterId('');
     setMessage('');
@@ -544,6 +549,7 @@ function Workspace({ license, onLicenseChanged }: { license: LicenseStatus; onLi
     if (!selectedMatter || !access.canOpenMatter(selectedSystemId, selectedMatterId)) return;
     const generation = ++queryGeneration.current;
     setMessage('正在发起数据回流，可在回流任务中查看进度。');
+    setSelectedReturnBatchId('');
     setMatterSection('tasks');
     void window.desktopApi.matters.run(selectedSystemId, selectedMatterId, {
       page: 1,
@@ -562,6 +568,7 @@ function Workspace({ license, onLicenseChanged }: { license: LicenseStatus; onLi
     setMessage('');
     setMatterSection('return');
     setSelectedDataBatchId('');
+    setSelectedReturnBatchId(''); setShowBatchReturn(false);
     setShowAdvancedFilters(false);
   }
 
@@ -652,6 +659,12 @@ function Workspace({ license, onLicenseChanged }: { license: LicenseStatus; onLi
 
         {showPractitionerNumbers && numberMatters.length > 0 && <PractitionerNumberPanel key={numberMatters.join('/')} allowedMatters={numberMatters} onClose={() => setShowPractitionerNumbers(false)} />}
         {showSystemCredentials && selectedSystem?.supportsCredentialConfiguration && <SystemCredentialPanel systemId={selectedSystemId} systemName={selectedSystem?.name ?? '当前业务系统'} onClose={() => setShowSystemCredentials(false)} onLogin={() => { setShowSystemCredentials(false); void login(); }} />}
+        {showBatchReturn && selectedSystem && selectedMatter && <BatchReturnPanel key={`${selectedSystemId}/${scope}`}
+          systemId={selectedSystemId} systemName={selectedSystem.name} matters={matterSystemId === selectedSystemId ? matters : []}
+          currentMatterId={selectedMatterId} startDate={String(filters.startDate ?? '')} endDate={String(filters.endDate ?? '')}
+          canSelectMatter={id => access.canOpenMatter(selectedSystemId, id)} canRun={selectedSystem.session.status === 'authenticated'}
+          onClose={() => setShowBatchReturn(false)} submit={(systemId, payload) => window.desktopApi.matters.runBatch(systemId, payload)}
+          onCreated={result => { queryGeneration.current++; setSelectedReturnBatchId(result.batchId); setShowBatchReturn(false); setMatterSection('tasks'); setMessage(`已创建 ${result.count} 条回流任务，可在本批次中查看进度。`); }} />}
 
         {['return-ledger', 'list-ledger', 'detail-ledger'].includes(selectedSystem?.workspaceMode ?? '') && <nav className={`matter-workspace-tabs ${permitExportTargets(selectedSystemId).length ? 'government-workspace-tabs' : ''}`} aria-label="事项工作区">
           <button aria-pressed={matterSection === 'return'} className={matterSection === 'return' ? 'active' : ''} onClick={() => setMatterSection('return')}>数据回流</button>
@@ -660,7 +673,7 @@ function Workspace({ license, onLicenseChanged }: { license: LicenseStatus; onLi
         </nav>}
         {selectedMatter?.executionMode === 'one-click-return' && message && <div className="message page-message">{message}</div>}
 
-        {!selectedMatter ? <div className="panel empty" role="status">{message || (matterSystemId === selectedSystemId ? '当前系统暂无可用业务事项。' : '正在加载业务事项…')}</div> : selectedSystem?.workspaceMode === 'detail-ledger' && matterSection !== 'tasks' ? <OneWindowPage key={selectedSystemId + '/' + selectedMatterId} matterId={selectedMatterId} matterName={selectedMatter.name} section={matterSection === 'data' ? 'data' : 'return'} batchId={selectedDataBatchId} onBatchChange={id => { setSelectedDataBatchId(id); setMatterSection('data'); }} sessionStatus={selectedSystem.session.status} allowExport={Boolean(license.grant?.allowExport)} allowAutoSync={Boolean(license.grant?.allowAutoSync)} defaultPageSize={defaultPageSize} /> : ['return-ledger', 'list-ledger', 'detail-ledger'].includes(selectedSystem?.workspaceMode ?? '') && matterSection === 'tasks' ? <TaskCenterPage pageSize={defaultPageSize} key={`${selectedSystemId}/${selectedMatterId}`} systemId={selectedSystemId} matterId={selectedMatterId} matterName={selectedMatter?.name} onViewBatch={(batchId) => { setSelectedDataBatchId(batchId); setMatterSection('data'); }} /> : selectedSystem?.workspaceMode === 'list-ledger' && matterSection === 'data' ? <HrssLedgerPage systemId={selectedSystemId} defaultPageSize={defaultPageSize} key={`${selectedSystemId}/${selectedMatterId}`} matterId={selectedMatterId} matterName={selectedMatter.name} columns={selectedMatter.listColumns ?? []} batchId={selectedDataBatchId} onBatchChange={setSelectedDataBatchId} allowExport={license.grant?.allowExport} /> : selectedSystem?.workspaceMode === 'return-ledger' && matterSection === 'data' ? <LocalDataPage defaultPageSize={defaultPageSize} allowExport={Boolean(license.grant?.allowExport)} key={`${selectedSystemId}/${selectedMatterId}`} systemId={selectedSystemId} matterId={selectedMatterId} matterName={selectedMatter?.name} selectedBatchId={selectedDataBatchId} onBatchChange={setSelectedDataBatchId} onOpenPublication={openPublication} openingPublication={openingPublication} /> : <>
+        {!selectedMatter ? <div className="panel empty" role="status">{message || (matterSystemId === selectedSystemId ? '当前系统暂无可用业务事项。' : '正在加载业务事项…')}</div> : selectedSystem?.workspaceMode === 'detail-ledger' && matterSection !== 'tasks' ? <OneWindowPage key={selectedSystemId + '/' + selectedMatterId} matterId={selectedMatterId} matterName={selectedMatter.name} section={matterSection === 'data' ? 'data' : 'return'} batchId={selectedDataBatchId} onBatchChange={id => { setSelectedDataBatchId(id); setMatterSection('data'); }} sessionStatus={selectedSystem.session.status} allowExport={Boolean(license.grant?.allowExport)} allowAutoSync={Boolean(license.grant?.allowAutoSync)} defaultPageSize={defaultPageSize} /> : ['return-ledger', 'list-ledger', 'detail-ledger'].includes(selectedSystem?.workspaceMode ?? '') && matterSection === 'tasks' ? <TaskCenterPage pageSize={defaultPageSize} key={`${selectedSystemId}/${selectedMatterId}`} systemId={selectedSystemId} matterId={selectedMatterId} matterName={selectedMatter?.name} returnBatchId={selectedReturnBatchId} onReturnBatchChange={setSelectedReturnBatchId} onViewTask={task => { if (task.systemId && task.matterId) openTaskData(task.systemId, task.matterId, task.id); }} onViewBatch={(batchId) => { setSelectedDataBatchId(batchId); setMatterSection('data'); }} /> : selectedSystem?.workspaceMode === 'list-ledger' && matterSection === 'data' ? <HrssLedgerPage systemId={selectedSystemId} defaultPageSize={defaultPageSize} key={`${selectedSystemId}/${selectedMatterId}`} matterId={selectedMatterId} matterName={selectedMatter.name} columns={selectedMatter.listColumns ?? []} batchId={selectedDataBatchId} onBatchChange={setSelectedDataBatchId} allowExport={license.grant?.allowExport} /> : selectedSystem?.workspaceMode === 'return-ledger' && matterSection === 'data' ? <LocalDataPage defaultPageSize={defaultPageSize} allowExport={Boolean(license.grant?.allowExport)} key={`${selectedSystemId}/${selectedMatterId}`} systemId={selectedSystemId} matterId={selectedMatterId} matterName={selectedMatter?.name} selectedBatchId={selectedDataBatchId} onBatchChange={setSelectedDataBatchId} onOpenPublication={openPublication} openingPublication={openingPublication} /> : <>
 
         {selectedMatter?.executionMode === 'one-click-return' ? (
           <>
@@ -699,6 +712,7 @@ function Workspace({ license, onLicenseChanged }: { license: LicenseStatus; onLi
             <button className="run-return-button" onClick={runOneClickReturn} disabled={loading || selectedSystem?.session.status !== 'authenticated'}>
               <strong>开始数据回流</strong>
             </button>
+            {matters.filter(matter => matter.executionMode === 'one-click-return' && access.canOpenMatter(selectedSystemId, matter.id)).length > 1 && <button className="secondary batch-return-trigger" disabled={loading} onClick={() => setShowBatchReturn(true)}><AppIcon name="components" size={18} />批量回流</button>}
             <span>{selectedSystem?.session.status === 'authenticated' ? '提取完成后自动去重保存，可在回流任务中查看进度。' : selectedSystem?.session.status === 'unverified' ? selectedSystem.session.message ?? '会话待验证，请检查网络。' : '请先在原系统标签页完成登录。'}</span>
             </div>
           </section>
@@ -921,53 +935,6 @@ function PlatformPage(props: {
 
 function PageHeader({ eyebrow, title, description, action, className = '' }: { eyebrow: string; title: string; description: string; action?: React.ReactNode; className?: string }) {
   return <header className={`page-header ${className}`}><div>{eyebrow && <span className="eyebrow">{eyebrow}</span>}<h1>{title}</h1><p>{description}</p></div>{action}</header>;
-}
-
-function TaskCenterPage({ systemId, matterId, matterName, pageSize, onViewBatch }: { pageSize: number; systemId: string; matterId: string; matterName?: string; onViewBatch: (batchId: string) => void }) {
-  const [tasks, setTasks] = useState<RuntimeTask[]>([]);
-  const [page, setPage] = useState(1);
-  const [total, setTotal] = useState(0);
-  const [revision, setRevision] = useState(0);
-  const [loading, setLoading] = useState(true);
-  const [error, setError] = useState('');
-  useEffect(() => {
-    let disposed = false;
-    let timer: number;
-    const refresh = async () => {
-      try {
-        const result = await window.desktopApi.tasks.page({ systemId, matterId, page, pageSize });
-        if (disposed) return;
-        setTasks(result.rows); setTotal(result.total); setError('');
-        setPage(Math.min(page, Math.max(1, Math.ceil(result.total / pageSize))));
-      } catch {
-        if (!disposed) { setTasks([]); setError('任务列表暂时无法加载，请稍后重试。'); }
-      } finally {
-        if (!disposed) { setLoading(false); timer = window.setTimeout(() => void refresh(), 3_000); }
-      }
-    };
-    setLoading(true); setTasks([]);
-    void refresh();
-    return () => { disposed = true; window.clearTimeout(timer); };
-  }, [systemId, matterId, page, pageSize, revision]);
-  const cancel = async (id: string) => {
-    try { await window.desktopApi.tasks.cancel(id); setRevision(value => value + 1); }
-    catch (error) { setError(error instanceof Error ? error.message : '取消失败'); }
-  };
-  const taskPeriod = (task: RuntimeTask) => {
-    if (systemId === 'guangdong-hrss') return hrssTaskDateLabel(task.details);
-    const start = typeof task.details?.startDate === 'string' ? task.details.startDate : '';
-    const end = typeof task.details?.endDate === 'string' ? task.details.endDate : '';
-    return start || end ? `${start || '—'} 至 ${end || '—'}` : '—';
-  };
-  return <>
-    <PageHeader eyebrow="事项工作区 / 任务" title={`${matterName ?? '当前事项'} · 回流任务`} description="查看当前事项的处理进度、结果与批次数据。" />
-    {error && <div className="inline-error" role="status">{error}</div>}
-    <section className="panel data-panel task-table-panel"><table><thead><tr><th>批次号</th><th>任务</th><th>回流时间段</th><th>状态</th><th>进度</th><th>生成时间</th><th>结果</th><th></th></tr></thead><tbody>
-      {tasks.map((task) => { const percent = taskProgressPercent(task.progress, task.status); return <tr key={task.id}><td className="batch-id" title={task.id}>{task.id.slice(0, 8).toUpperCase()}</td><td>{task.name}</td><td>{taskPeriod(task)}</td><td><span className={`status-chip ${task.status}`}>{taskStatusLabel(task.status)}</span></td><td><div className="task-progress">{percent !== undefined && <progress max={100} value={percent} aria-label={`${task.name}进度`} />}<span>{task.progress.message ?? (percent !== undefined ? `${percent}%` : '等待进度')}</span></div></td><td>{new Date(task.createdAt).toLocaleString()}</td><td className={task.error ? 'error-text' : ''}>{task.error ?? (task.finishedAt ? taskStatusLabel(task.status) : '执行中')}</td><td>{['queued', 'running'].includes(task.status) && <button className="link-button error-text" onClick={() => void cancel(task.id)}>取消</button>}{task.type === 'data-return' && task.status === 'completed' && <button className="link-button" onClick={() => onViewBatch(task.id)}>在回流数据中查看</button>}</td></tr>; })}
-      {!tasks.length && <tr><td colSpan={8} className="empty">{loading ? '正在读取任务…' : error ? '暂时无法读取任务' : '暂无任务记录'}</td></tr>}
-    </tbody></table></section>
-    {total > pageSize && <Pagination page={page} pageCount={Math.ceil(total / pageSize)} total={total} onPage={setPage} />}
-  </>;
 }
 
 type LocalRecord = { systemId: string; matterId: string; recordKey: string; data: Record<string, unknown>; firstSeenAt?: number; updatedAt?: number; rowNo?: number };

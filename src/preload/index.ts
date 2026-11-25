@@ -3,6 +3,7 @@ import type { RuntimeTask } from '../core/tasks/engine';
 import type { PractitionerNumberConfig } from '../core/config/practitioner-numbers';
 import { contextBridge, ipcRenderer } from 'electron';
 import type { QueryContext } from '../core/query/types';
+import type { ReturnBatchInput, ReturnBatchCreated, ReturnBatchState } from '../core/query/return-batches';
 import { IPC_CHANNELS } from '../core/ipc/channels';
 import type { SourceTabsState } from '../core/session/source-tabs';
 import type { SessionState } from '../core/session/types';
@@ -127,6 +128,12 @@ const desktopApi = {
     query: (systemId: string, matterId: string, context: QueryContext) =>
       ipcRenderer.invoke(IPC_CHANNELS.matterQuery, systemId, matterId, context),
     run: (systemId: string, matterId: string, context: QueryContext) => ipcRenderer.invoke(IPC_CHANNELS.matterRun, systemId, matterId, context),
+    runBatch: (systemId: string, input: ReturnBatchInput): Promise<ReturnBatchCreated> => ipcRenderer.invoke(IPC_CHANNELS.matterRunBatch, systemId, input),
+  },
+  returnBatches: {
+    get: (systemId: string, batchId: string): Promise<ReturnBatchState> => ipcRenderer.invoke(IPC_CHANNELS.returnBatchGet, systemId, batchId),
+    cancelPending: (systemId: string, batchId: string): Promise<{cancelled:number}> => ipcRenderer.invoke(IPC_CHANNELS.returnBatchCancelPending, systemId, batchId),
+    retryFailed: (systemId: string, batchId: string): Promise<ReturnBatchCreated> => ipcRenderer.invoke(IPC_CHANNELS.returnBatchRetryFailed, systemId, batchId),
   },
   sync: {
     preview: (systemId: string, matterId: string, rows: Record<string, unknown>[]) =>

@@ -102,6 +102,20 @@ export class SqlitePlatformStore implements TaskStore, AuditLog, SettingsStore {
     return rows.map(taskFromRow);
   }
 
+  async saveMany(tasks: RuntimeTask[]): Promise<void> {
+    await this.database.transaction(async () => { for (const task of tasks) await this.save(task); });
+  }
+
+  async returnBatchTasks(systemId: string, batchId: string): Promise<RuntimeTask[]> {
+    const rows = await this.database.all<TaskRow>(
+      `SELECT * FROM runtime_tasks WHERE system_id=? AND type='data-return'
+       AND json_extract(metadata_json,'$.returnBatchId')=?
+       ORDER BY CAST(json_extract(metadata_json,'$.returnBatchOrder') AS INTEGER),created_at,id LIMIT 101`,
+      [systemId, batchId]);
+    if (rows.length > 100) throw new Error('回流任务组超出保护限制');
+    return rows.map(taskFromRow);
+  }
+
   async getTask(id: string) {
     const row = await this.database.get<TaskRow>('SELECT * FROM runtime_tasks WHERE id=?', [id]);
     return row ? taskFromRow(row) : undefined;

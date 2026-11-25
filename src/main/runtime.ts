@@ -59,6 +59,7 @@ import { createOneWindowPlugin } from '../plugins/shenzhen-one-window';
 import oneWindowCatalog from '../plugins/shenzhen-one-window/matter-catalog.json';
 import { OneWindowService } from './one-window-service';
 import { OneWindowUploader } from '../core/one-window/uploader';
+import { ReturnBatchService } from './return-batch-service';
 import { createOneWindowWorkbook } from '../core/one-window/workbook';
 import { writeFile } from 'node:fs/promises';
 
@@ -157,6 +158,23 @@ export class AppRuntime {
   private hrssReturnTail: Promise<void> = Promise.resolve();
   private hrssReturnPending = 0;
   private oneWindowService?: OneWindowService;
+  private returnBatchService?: ReturnBatchService;
+
+  returnBatches(): ReturnBatchService {
+    if (!this.platformStore) throw new Error('回流任务模块未就绪');
+    return this.returnBatchService ??= new ReturnBatchService({
+      plugin: id => this.plugins.get(id),
+      requireLicense: (id,matter) => this.requireLicense(id,matter),
+      tasks: () => this.tasks,
+      storedTasks: (id,batch) => this.platformStore!.returnBatchTasks(id,batch),
+      execute: (id,matter,context,query) => this.runOneClickReturn(id,matter,context,query),
+      audit: (type,id,matter,task) => this.audit(type,id,matter,task),
+    });
+  }
+
+  resumeReturnQueue(state: {systemId:string;status:string}): void {
+    if (state.status==='authenticated') this.tasks.resumeSystem(state.systemId);
+  }
 
   /** Each HRSS return owns its slot through query and commit; waiting cancellation never breaks the chain. */
   private async waitForHrssReturn(context: TaskContext): Promise<() => void> {
@@ -222,6 +240,7 @@ export class AppRuntime {
     await this.healthPublicityService.initialize();
     await this.platformStore.recoverInterruptedTasks();
     this.tasks = new TaskEngine(this.platformStore, (await this.platformStore.get()).taskConcurrency);
+    loginTabController.configureSessionObserver(state => this.resumeReturnQueue(state));
 
     const backend = backendConfiguration(process.env, businessBootstrapContext()?.backend);
     this.license = new LocalLicenseService({
