@@ -1,5 +1,6 @@
 import { describe,expect,it,vi } from 'vitest';
 vi.mock('electron',()=>({session:{fromPartition:vi.fn()}}));
+import { session } from 'electron';
 import { HrssClient,decodeHrssList } from './client';
 import { HRSS_MATTER_BY_ID } from './catalog';
 const now=()=>1_800_000_000_000;
@@ -26,6 +27,22 @@ describe('人社列表响应',()=>{
 });
 
 describe('人社访问凭据与接口边界',()=>{
+  it('verifies a real-shaped portal session when the native server rejects a Chinese User-Agent',async()=>{
+    const agent='Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) 数据融合助手/1.1.11 Chrome/152.0.7977.78 Electron/44.3.0 Safari/537.36';
+    const nativeFetch=vi.fn(async(_url:string,init:RequestInit)=>{
+      const headers=new Headers(init.headers);
+      if(headers.get('user-agent')?.includes('数据融合助手'))return new Response(null,{status:500});
+      expect(headers.get('user-agent')).toBe(agent.replace('数据融合助手/','DataFusion/'));
+      expect(headers.get('access-token')).toBe('fixture-valid-browser-session');
+      return json({appcode:'200',success:true,data:{total:0}});
+    });
+    vi.mocked(session.fromPartition).mockReturnValue({getUserAgent:()=>agent,fetch:nativeFetch} as unknown as ReturnType<typeof session.fromPartition>);
+    const client=new HrssClient({now,minimumIntervalMs:0});client.acceptBrowserAccessToken('fixture-valid-browser-session');
+    await expect(client.validateSession(AbortSignal.timeout(1000))).resolves.toEqual({displayName:'广东人社门户会话'});
+    expect(nativeFetch).toHaveBeenCalledOnce();
+    expect(new URL(nativeFetch.mock.calls[0][0]).pathname).toBe('/employment/main/rest/e/v1/jygl/jysyxxcx/syxx/page/cnt');
+    expect(client.hasAccessToken()).toBe(true);
+  });
   it('sends access credentials to normal lists and WGBT cookies only to WGBT',async()=>{
     const fetcher=vi.fn(async(url:string,_init:RequestInit)=>json(url.includes('/WGBT/')?{total:0,rows:[]}:{data:{total:0,records:[]}}));
     const client=new HrssClient({fetcher,now,minimumIntervalMs:0});client.acceptBrowserAccessToken('test-access');

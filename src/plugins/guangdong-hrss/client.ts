@@ -1,6 +1,7 @@
 import { session } from 'electron';
 import { AppError } from '../../core/errors/app-error';
 import { RequestGate } from '../../core/network/request-policy';
+import { businessRequestUserAgent } from '../../core/network/user-agent';
 import { HRSS_MATTER_DEFINITIONS, HRSS_ORIGIN, HRSS_PARTITION, type HrssListSource } from './catalog';
 
 export type HrssFetch = (url: string, init: RequestInit) => Promise<Response>;
@@ -40,7 +41,13 @@ export class HrssClient {
   private readonly allowed = new Map(HRSS_MATTER_DEFINITIONS.flatMap(m=>m.sources.flatMap(s=>[[s.path,s.method],...(s.countPath?[[s.countPath,'GET']]:[])] as [string,string][])));
   constructor(options: HrssClientOptions={}) {
     this.now=options.now??Date.now;
-    this.fetcher=options.fetcher??((url,init)=>session.fromPartition(HRSS_PARTITION).fetch(url,init));
+    this.fetcher=options.fetcher??((url,init)=>{
+      const browser=session.fromPartition(HRSS_PARTITION);
+      const headers=new Headers(init.headers);
+      // The source server returns HTTP 500 for Electron's Chinese application product name.
+      headers.set('User-Agent',businessRequestUserAgent(browser.getUserAgent()));
+      return browser.fetch(url,{...init,headers});
+    });
     this.gate=new RequestGate({timeoutMs:60_000,maxAttempts:2,retryDelayMs:500,minimumIntervalMs:options.minimumIntervalMs??200});
   }
   acceptBrowserAccessToken(value: string): void {
