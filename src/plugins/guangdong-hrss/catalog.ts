@@ -15,6 +15,8 @@ export interface HrssListSource {
   id: string; path: string; method: 'GET' | 'POST';
   pagination?: 'tracking' | 'wgbt' | 'training'; params?: Record<string, unknown>;
   countPath?: string; identity: string[][];
+  /** Stable source row id, consumed only to derive the hashed local key; never displayed/exported. */
+  rowIdField?: string;
 }
 export interface HrssMatterDefinition {
   id: string; name: string; departmentId: string; departmentName: string;
@@ -39,7 +41,8 @@ const expansion = [f('btType','补贴类型','_DIC_BCB00J'),f('processArea','办
 const subsidy = (id: string, kind: string, columns: HrssColumn[], params?: Record<string, unknown>) => ({ columns, sources: [{id,path:`/subsidize/main/rest/subsidy/${kind}`,method:'GET' as const,params,identity:[['applyBh']]}] });
 const standard = (id: string,path: string,columns: HrssColumn[],identity: string[][],params?: Record<string,unknown>) => ({columns,sources:[{id,path,method:'POST' as const,params,identity}]});
 const profiles: Record<string, Pick<HrssMatterDefinition,'columns'|'sources'>> = {
-  unemployment:{columns:unemployment,sources:[{id:'unemployment',path:'/employment/main/rest/e/v1/jygl/jysyxxcx/syxx/page',countPath:'/employment/main/rest/e/v1/jygl/jysyxxcx/syxx/page/cnt',method:'GET',identity:[['slbh']]}]},
+  // The official page uses the regional list when aac147 (personal ID) is absent.
+  unemployment:{columns:unemployment,sources:[{id:'unemployment',path:'/employment/main/rest/e/v1/jygl/jysyxxtj/syxxpage',countPath:'/employment/main/rest/e/v1/jygl/jysyxxtj/syxxpagecnt',method:'GET',identity:[],rowIdField:'bce324'}]},
   'employment-difficulty-recognition':standard('recognition','/employment/main/rest/e/v1/jyyz/jyknry/common/rdsh/list',recognition,[['slbh']],{cdc135:'163374'}),
   'poverty-alleviation-personnel':standard('poverty','/employment/main/rest/e/v1/tprk/tprkdj/list',poverty,[['cardNumber']]),
   'self-employment-identity':subsidy('identity','zzcyrysfhs/progress/page',[...person,f('peopleType','人员类型','adc953Name'),f('phoneNumber','联系电话','aac067'),f('unitName','单位名称','aae009','aab004'),f('unitNumber','统一社会信用代码','bcea9y'),...subsidyProcess.filter(c=>!['examineDateFirst','examineDateSeconde','payDate','payStatus'].includes(c.key))]),

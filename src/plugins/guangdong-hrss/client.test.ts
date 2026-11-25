@@ -81,7 +81,7 @@ describe('人社访问凭据与接口边界',()=>{
     const client=new HrssClient({now,minimumIntervalMs:0});client.acceptBrowserAccessToken('fixture-valid-browser-session');
     await expect(client.validateSession(AbortSignal.timeout(1000))).resolves.toEqual({displayName:'广东人社门户会话'});
     expect(nativeFetch).toHaveBeenCalledOnce();
-    expect(new URL(nativeFetch.mock.calls[0][0]).pathname).toBe('/employment/main/rest/e/v1/jygl/jysyxxcx/syxx/page/cnt');
+    expect(new URL(nativeFetch.mock.calls[0][0]).pathname).toBe('/employment/main/rest/e/v1/jygl/jysyxxtj/syxxpagecnt');
     expect(client.hasAccessToken()).toBe(true);
   });
   it('sends access credentials to normal lists and WGBT cookies only to WGBT',async()=>{

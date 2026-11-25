@@ -26,7 +26,7 @@ export function decodeHrssList(value: unknown, rowField: 'records'|'rows', count
     if(cursor.success===false || cursor.error || (code!==undefined && !/^(?:0+|200|SUCCESS)$/i.test(String(code)))) throw failure('人社平台未返回成功的列表结果');
     const rawTotal=cursor.total;
     let total=typeof rawTotal==='number'?rawTotal:(typeof rawTotal==='string' && /^\d+$/.test(rawTotal)?Number(rawTotal):rawTotal===undefined&&Array.isArray(cursor[rowField])&&expectedTotal!==undefined?expectedTotal:NaN);
-    // The unemployment page deliberately omits counting and returns total=0; its separate /cnt is authoritative.
+    // The unemployment page omits counting (total=0); its separate count endpoint is authoritative.
     // Keep a nonzero page/count disagreement visible so real concurrent changes still fail completeness checks.
     if(!countOnly && total===0 && expectedTotal!==undefined) total=expectedTotal;
     if(Number.isSafeInteger(total) && total>=0 && (countOnly || Array.isArray(cursor[rowField]))) {
@@ -61,7 +61,7 @@ export class HrssClient {
       headers.set('User-Agent',businessRequestUserAgent(browser.getUserAgent()));
       return browser.fetch(url,{...init,headers});
     });
-    this.gate=new RequestGate({timeoutMs:60_000,maxAttempts:2,retryDelayMs:500,minimumIntervalMs:options.minimumIntervalMs??1_200});
+    this.gate=new RequestGate({timeoutMs:60_000,maxAttempts:2,retryDelayMs:500,minimumIntervalMs:options.minimumIntervalMs??10_000});
   }
   acceptBrowserAccessToken(value: string): void {
     if(validCredential(value) && value.trim()!==this.credential.accessToken) this.credential={...this.credential,accessToken:value.trim(),observedAt:this.now()};
@@ -179,7 +179,7 @@ export class HrssClient {
     if(!this.hasAccessToken()) throw new AppError('SESSION_EXPIRED','请在原站登录人社就业业务后重试');
     const source=HRSS_MATTER_DEFINITIONS.find(m=>m.id==='unemployment')!.sources[0];
     const today=new Date(this.now()+8*60*60_000).toISOString().slice(0,10);
-    // Read-only session validation from original RSRZServiceImpl, never a dashboard statistics request.
+    // The registered regional count checks this session without reading people or dashboard statistics.
     await this.request(source,{bce089Start:today,bce089End:today,aac004:'1',bae085:'01',bae001:'163374',bbd068:'01'},signal,true);
     return {displayName:'广东人社门户会话'};
   }
