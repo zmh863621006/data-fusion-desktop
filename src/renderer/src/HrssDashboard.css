@@ -83,16 +83,16 @@ html:has(.hrss-dashboard), body:has(.hrss-dashboard) { min-width: 0; width: 100%
 .hrss-empty span { font-size:11px; }
 .hrss-ledger-details { margin-top:13px; border:1px solid var(--line); border-radius:13px; background:white; }
 .hrss-ledger-details > summary { padding:12px 17px; color:#006bd5; font-size:12px; cursor:pointer; }
-.hrss-ledger { max-height:300px; overflow:auto; scrollbar-width:thin; }
-.hrss-ledger table { width:100%; border-collapse:collapse; text-align:left; font-size:12px; }
-.hrss-ledger th,.hrss-ledger td { padding:10px 13px; border-bottom:1px solid #eef0f3; }
-.hrss-ledger thead th { position:sticky; top:0; background:#f8f9fb; color:#7d8490; font-size:11px; font-weight:550; }
-.hrss-ledger tbody th { font-weight:550; }
-.hrss-ledger td small { display:block; margin-top:3px; color:#a0793f; }
+.hrss-dashboard-ledger-table { max-height:300px; overflow:auto; scrollbar-width:thin; }
+.hrss-dashboard-ledger-table table { width:100%; border-collapse:collapse; text-align:left; font-size:12px; }
+.hrss-dashboard-ledger-table th,.hrss-dashboard-ledger-table td { padding:10px 13px; border-bottom:1px solid #eef0f3; }
+.hrss-dashboard-ledger-table thead th { position:sticky; top:0; background:#f8f9fb; color:#7d8490; font-size:11px; font-weight:550; }
+.hrss-dashboard-ledger-table tbody th { font-weight:550; }
+.hrss-dashboard-ledger-table td small { display:block; margin-top:3px; color:#a0793f; }
 .hrss-service-grid { display:grid; grid-template-columns:repeat(3,minmax(0,1fr)); gap:15px; margin-top:15px; }
 .hrss-service-grid .hrss-panel { min-height:280px; max-height:340px; }
 .hrss-ledger-panel { margin-top:15px; }
-.hrss-ledger-panel .hrss-ledger { max-height:350px; }
+.hrss-ledger-panel .hrss-dashboard-ledger-table { max-height:350px; }
 .hrss-footer { display:flex; justify-content:space-between; gap:22px; padding:14px 3px 0; color:#8a8e96; font-size:11px; }
 .hrss-footer b { color:#666c75; font-weight:550; }
 .hrss-loading { display:flex; flex-direction:column; align-items:center; justify-content:center; min-height:55vh; gap:10px; color:#7b8da1; }

@@ -627,7 +627,7 @@ function Workspace({ license, onLicenseChanged }: { license: LicenseStatus; onLi
           </div>
           <div className="browser-remote-stage"><div className="browser-loading">{loginTab.error ?? '正在显示原系统页面…'}</div></div>
         </>}
-      <main className="content" hidden={Boolean(loginTab)}>
+      <main className={`content${activePage === 'workspace' && selectedSystem?.workspaceMode === 'list-ledger' && matterSection === 'data' ? ' hrss-ledger-content' : ''}`} hidden={Boolean(loginTab)}>
         <UpdateBanner state={updateState} onOpen={() => setActivePage('settings')} />
         {activePage === 'home' && message && <div className="message page-message" role="status">{message}</div>}
         {activePage === 'home' ? <HomePage systems={systems} license={license} loading={loading} onSelect={(id) => { setSelectedSystemId(id); setActivePage('workspace'); }} onLogin={(id) => { void login(id); }} onTool={() => setActivePage('tools')} onTask={openTaskData} /> : activePage === 'tools' ? <HealthPublicityPage licensed={Boolean(license.grant?.allowedTools?.includes('health-publicity'))} allowExport={Boolean(license.grant?.allowExport)} /> : activePage !== 'workspace' ? (

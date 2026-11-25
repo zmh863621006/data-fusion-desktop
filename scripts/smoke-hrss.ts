@@ -23,7 +23,7 @@ const grant = { licenseId: 'hrss-ui-fixture', customerName: '人社界面隔离�
 const data = { recordKey: 'synthetic-hash', slbh: 'UI-DEMO-001', name: '张示例', cardNumber: '440305199901011234',
   applyDate: '2026-11-01', employmentStatus: '失业', phone: '13800001234', address: '演示地址' };
 const row = { systemId, matterId: 'unemployment', recordKey: 'synthetic-key', data, firstSeenAt: now, updatedAt: now };
-const pendingRow = { systemId, matterId: 'job-seeking-startup-subsidy', recordKey: 'synthetic-pending-key', firstSeenAt: now, updatedAt: now,
+const pendingRow = { systemId, matterId: 'one-time-job-expansion-subsidy', recordKey: 'synthetic-pending-key', firstSeenAt: now, updatedAt: now,
   data: { applyBh: 'DATE-CONTROL-DEMO', unitName: '合成测试单位', applyDate: '2026-01-01', currentLink: '待审核' } };
 const tasks: any[] = [{ id: 'hrss-demo-completed', type: 'data-return', name: '失业信息列表回流', systemId,
   matterId: 'unemployment', status: 'completed', progress: { current: 1, total: 1, message: '列表回流完成' },
@@ -49,6 +49,8 @@ const publicMatter = () => plugin.matters.map(matter => ({ id: matter.id, name: 
   executionMode: matter.executionMode, defaultFilters: matter.createDefaultContext?.().filters, description: matter.description }));
 const component = { id: systemId, name: plugin.name, version: plugin.version, description: plugin.description,
   workspaceMode: plugin.workspaceMode, kind: 'system', authorized: true };
+const layoutMatterId = 'enterprise-hiring-difficult-personnel-subsidy';
+let layoutRows = 1;
 
 ipcMain.handle('ui-redesign:invoke', async (_event, method: string, ...args: any[]) => {
   invocations.push({ method, args });
@@ -60,7 +62,18 @@ ipcMain.handle('ui-redesign:invoke', async (_event, method: string, ...args: any
     case 'systems.tabs': case 'systems.activateTab': return { tabs: [], activeSystemId: null };
     case 'systems.session': return { systemId, status: 'authenticated' };
     case 'matters.list': return publicMatter();
-    case 'records.list': assert.equal(args[0].systemId, systemId); return { rows: args[0].matterId === 'unemployment' ? [row] : args[0].matterId === pendingRow.matterId ? [pendingRow] : [], total: ['unemployment', pendingRow.matterId].includes(args[0].matterId) ? 1 : 0 };
+    case 'records.list': {
+      assert.equal(args[0].systemId, systemId);
+      if (args[0].matterId === layoutMatterId) {
+        const offset = (args[0].page - 1) * args[0].pageSize;
+        return { rows: Array.from({ length: layoutRows }, (_, i) => ({ recordKey: `synthetic-layout-${i}`, data: {
+          listSource: '业务列表', unitName: `界面验证单位 ${i + 1}`, applyBh: `LAYOUT-TEST-${i + 1}`, applyDate: '2026-11-25',
+          applyAddress: '南山街道办事处', currentLink: '待审核', handlingRecordCount: 1, handlingRecordStatus: 'collected',
+          handlingRecords: [{ operator: '窗口测试员', organization: '测试街道办', handledAt: '2026-11-25 09:00', step: '受理', action: '通过', result: '', opinion: '仅用于隔离界面验证' }],
+        } })).slice(offset, offset + args[0].pageSize), total: layoutRows };
+      }
+      return { rows: args[0].matterId === 'unemployment' ? [row] : args[0].matterId === pendingRow.matterId ? [pendingRow] : [], total: ['unemployment', pendingRow.matterId].includes(args[0].matterId) ? 1 : 0 };
+    }
     case 'tasks.list': return tasks;
     case 'tasks.page': {
       const scope = args[0];
@@ -115,6 +128,36 @@ async function selectMatter(id: string) {
   await waitFor(`document.querySelector('.return-matter-field select')?.value === ${JSON.stringify(id)}`);
 }
 
+async function verifyLedgerLayout(width: number, height: number, count: number) {
+  window.setContentSize(width, height); layoutRows = count;
+  await evaluate("document.querySelector('.hrss-ledger-filters [aria-label=\"刷新台账\"]').click()");
+  await waitFor(`!document.querySelector('.hrss-list-table').getAttribute('aria-busy').includes('true') && document.querySelector('.hrss-ledger-footer').textContent.includes('共 ${count} 条')`);
+  const state = await evaluate<any>(`(()=>{
+    const root=document.querySelector('.hrss-ledger'), table=document.querySelector('.hrss-list-table'), footer=document.querySelector('.hrss-ledger-footer'), content=document.querySelector('main.content');
+    content.scrollTop=content.scrollHeight;
+    const r=table.getBoundingClientRect(), f=footer.getBoundingClientRect(), c=content.getBoundingClientRect();
+    return {maxHeight:getComputedStyle(root).maxHeight,rootOverflow:getComputedStyle(root).overflowY,table:{top:r.top,bottom:r.bottom,height:r.height,left:r.left,right:r.right,scrollWidth:table.scrollWidth,clientWidth:table.clientWidth,scrollHeight:table.scrollHeight,clientHeight:table.clientHeight},footer:{top:f.top,bottom:f.bottom,left:f.left,right:f.right},content:{bottom:c.bottom,right:c.right},viewport:{width:innerWidth,height:innerHeight}};
+  })()`);
+  assert.equal(state.maxHeight, 'none', 'Dashboard CSS must not cap the entire workbench ledger');
+  assert.equal(state.rootOverflow, 'visible', 'Only the table should own the ledger scrollbar');
+  assert(state.table.height >= 175, 'The table must not collapse into the page heading');
+  assert(state.table.bottom <= state.footer.top + 1, 'Pagination must sit outside the scrolling table');
+  assert(state.footer.bottom <= state.content.bottom + 1 && state.footer.right <= state.content.right, 'Pagination must be reachable without inner-ledger clipping');
+  assert(state.table.scrollWidth > state.table.clientWidth, 'Fixture must exercise horizontal scrolling');
+  if (count > 37) assert(state.table.scrollHeight > state.table.clientHeight, 'Many rows must scroll inside the table');
+  await evaluate("document.querySelector('.hrss-list-table').scrollLeft=0");
+  let pinned = await evaluate<any>("(()=>{const t=document.querySelector('.hrss-list-table').getBoundingClientRect(),a=document.querySelector('.hrss-history-cell').getBoundingClientRect();return {left:a.left,right:a.right,tableLeft:t.left,tableRight:t.right}})()");
+  assert(pinned.left >= pinned.tableLeft && pinned.right <= pinned.tableRight + 1, 'Handling action must remain visible at the first column');
+  await evaluate("document.querySelector('.hrss-list-table').scrollLeft=document.querySelector('.hrss-list-table').scrollWidth");
+  pinned = await evaluate<any>("(()=>{const t=document.querySelector('.hrss-list-table').getBoundingClientRect(),a=document.querySelector('.hrss-history-cell').getBoundingClientRect();return {left:a.left,right:a.right,tableLeft:t.left,tableRight:t.right}})()");
+  assert(pinned.left >= pinned.tableLeft && pinned.right <= pinned.tableRight + 1, 'Handling action must remain visible after horizontal scrolling');
+  if (!count) {
+    const empty = await evaluate<any>("(()=>{const t=document.querySelector('.hrss-list-table').getBoundingClientRect(),m=document.querySelector('.hrss-empty-message').getBoundingClientRect();return {left:m.left,right:m.right,tableLeft:t.left,tableRight:t.right}})()");
+    assert(empty.left >= empty.tableLeft && empty.right <= empty.tableRight, 'Empty state must remain visible after horizontal scrolling');
+  }
+  await capture(`ledger-layout-${width}x${height}-${count}-rows`);
+}
+
 void app.whenReady().then(async () => {
   await mkdir(output, { recursive: true });
   window = new BrowserWindow({ width: 1440, height: 900, show: false, webPreferences: { preload: assets.preload, contextIsolation: true, nodeIntegration: false, sandbox: true } });
@@ -164,6 +207,7 @@ void app.whenReady().then(async () => {
   await capture('03-fullscreen-dashboard', fullWindow);
   await clickText('就业服务与台账', fullWindow);
   await waitFor("document.querySelector('.hrss-header h1')?.textContent === '公共就业服务'", fullWindow);
+  assert.equal(await evaluate("getComputedStyle(document.querySelector('.hrss-dashboard-ledger-table')).maxHeight", fullWindow), '350px');
   await capture('03b-service-dashboard', fullWindow);
   await clickText('补贴总览', fullWindow);
   await waitFor("document.querySelector('.hrss-header h1')?.textContent === '就业创业补贴'", fullWindow);
@@ -171,6 +215,16 @@ void app.whenReady().then(async () => {
   for (let i = 0; i < 100 && dashboard.contentsId(); i++) await new Promise(resolve => setTimeout(resolve, 30));
   assert.equal(dashboard.contentsId(), undefined, 'Escape must close the separate fullscreen window');
   assert(!window.isDestroyed(), 'The workbench must remain open');
+  await clickText('数据回流'); await selectMatter(layoutMatterId); await clickText('回流数据');
+  await verifyLedgerLayout(1920, 1017, 1);
+  await verifyLedgerLayout(1440, 900, 80);
+  await verifyLedgerLayout(1280, 720, 1);
+  await verifyLedgerLayout(1024, 600, 0);
+  await verifyLedgerLayout(1280, 720, 1);
+  await clickText('查看记录'); await waitFor("Boolean(document.querySelector('[role=dialog]'))");
+  assert(await evaluate("document.querySelector('[role=dialog]').textContent.includes('仅用于隔离界面验证')"));
+  await evaluate("document.querySelector('[aria-label=\"关闭办理记录\"]').click()");
+  await clickText('数据回流'); await selectMatter('unemployment');
   await clickText('数据回流'); await clickText('开始数据回流');
   await waitFor("Boolean(document.querySelector('.task-table-panel'))");
   assert(invocations.some(call => call.method === 'matters.run'));
@@ -191,7 +245,7 @@ void app.whenReady().then(async () => {
   assert.equal(await evaluate(batchSelect + '.value'), 'hrss-archived-55', 'An older selected batch remains pinned when reading a newer page');
   window.setContentSize(1180, 780); await capture('05-small-workbench');
   assert.equal(errors.length, 0, errors.join('\n'));
-  await writeFile(join(output, 'report.json'), JSON.stringify({ passed: true, matterCount: 22, dateControls: 22, pendingDateFilters: 17, checks: ['list-only-metadata', 'date-schema', 'pending-date-status', 'pending-batch-not-effective-range', 'masked-ledger', 'managed-export-folder', 'native-fullscreen', 'escape-preserves-workbench', 'return-task', 'batch-snapshot'], invocationCount: invocations.length }, null, 2));
+  await writeFile(join(output, 'report.json'), JSON.stringify({ passed: true, matterCount: 22, dateControls: 22, pendingDateFilters: 2, checks: ['list-only-metadata', 'date-schema', 'pending-date-status', 'pending-batch-not-effective-range', 'masked-ledger', 'managed-export-folder', 'native-fullscreen', 'escape-preserves-workbench', 'return-task', 'batch-snapshot', 'dashboard-css-isolation', 'ledger-responsive-height', 'table-scroll-and-pinned-action'], invocationCount: invocations.length }, null, 2));
   console.log('PASS: HRSS local UI integration; evidence: ' + output);
   app.exit(0);
 }).catch(error => { console.error(error); app.exit(1); });
