@@ -4,7 +4,7 @@ import { RequestGate } from '../../core/network/request-policy';
 import { normalizeHousingCode } from '../../core/housing-binding/code';
 import { HOUSING_HOME_URL, HOUSING_LOGIN_URL, HOUSING_ORIGIN, HOUSING_PARTITION, HOUSING_RPC_URL } from './catalog';
 import {
-  housingArea, housingAreaPrefix, housingExpired, housingFailure, housingIdentifier, housingInput,
+  housingArea, housingAreaPrefix, housingAcceptancePrefix, housingExpired, housingFailure, housingIdentifier, housingInput,
   housingObject, housingRows, housingRpcRequest, housingSearch, housingText, parseHousingRpc,
   type HousingSearchParameter,
 } from './protocol';
@@ -136,12 +136,14 @@ export class HousingRentalClient implements HousingBindingClient {
   async resolveTarget(acceptanceNumber: string, certificateNumber: string, signal?: AbortSignal): Promise<HousingBindingTarget> {
     const acceptance = housingInput(acceptanceNumber, '受理编号'), certificate = housingInput(certificateNumber, '产权证号');
     await this.validateSession(signal); const revision = this.revision;
-    const prefix = housingAreaPrefix(this.userArea), scope: HousingSearchParameter[] = [
-      { name: 'acceptareaid', value: prefix.padEnd(18, '0'), flag: 16 }, { name: 'acceptareaid', value: prefix.padEnd(18, '9'), flag: 17 },
+    const prefix = housingAreaPrefix(this.userArea), acceptancePrefix = housingAcceptancePrefix(this.userArea), scope: HousingSearchParameter[] = [
+      { name: 'acceptareaid', value: acceptancePrefix.padEnd(18, '0'), flag: 16 }, { name: 'acceptareaid', value: acceptancePrefix.padEnd(18, '9'), flag: 17 },
     ];
-    const cases = await this.search('tysl_transactor', [{ name: 'transactno', value: acceptance, flag: 11 }, ...scope, { name: 'delmark', value: 0, flag: 11 }], signal);
-    if (cases.total !== 1 || cases.rows.length !== 1 || housingText(cases.rows[0].transactno) !== acceptance) throw new AppError('QUERY_INVALID', cases.total ? '受理编号未唯一匹配，请核对后重试' : '当前账号范围内未找到该受理编号');
-    if (!housingArea(cases.rows[0].acceptareaid).startsWith(prefix)) throw new AppError('QUERY_INVALID', '该办件不在当前账号管理范围内');
+    // For the source acceptance list this is a business-state marker, not the property tables' deletion marker.
+    const cases = await this.search('tysl_transactor', [{ name: 'transactno', value: acceptance, flag: 11 }, ...scope, { name: 'delmark', value: 2, flag: 11 }], signal);
+    if (cases.total !== 1 || cases.rows.length !== 1 || housingText(cases.rows[0].transactno) !== acceptance) throw new AppError('QUERY_INVALID', cases.total ? '受理编号未唯一匹配，请核对后重试' : '原系统合同受理列表中未找到该受理编号，请核对受理编号、列表入口及办理状态');
+    if (housingText(cases.rows[0].delmark) !== '2') throw new AppError('QUERY_INVALID', '该办件不在原系统合同受理状态，请先核对办理状态');
+    if (!housingArea(cases.rows[0].acceptareaid).startsWith(acceptancePrefix)) throw new AppError('QUERY_INVALID', '该办件不在当前账号管理范围内');
     const acceptanceId = housingIdentifier(cases.rows[0].id);
     const related = await this.search('tysl_contractproperty', [
       { name: 'TYSL_TRANSACTOR_ID', value: acceptanceId, flag: 11 }, { name: 'housecertification', value: certificate, flag: 11 },

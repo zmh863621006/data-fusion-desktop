@@ -7,7 +7,7 @@ import { HousingRentalClient } from './client';
 import { session } from 'electron';
 import { createHousingRentalPlugin } from './index';
 import { HOUSING_HOME_URL, HOUSING_LOGIN_URL, HOUSING_PARTITION, HOUSING_RPC_URL } from './catalog';
-import { housingAreaPrefix, housingRows, parseHousingRpc } from './protocol';
+import { housingAreaPrefix, housingAcceptancePrefix, housingRows, parseHousingRpc } from './protocol';
 
 const SID = 'fixture_housing_session_A_0000000000';
 const AREA = '440305009000000000';
@@ -25,6 +25,7 @@ interface FixtureOptions {
   writeTimeout?: boolean; writeResult?: unknown; emptyBindingList?: boolean; expired?: boolean; malformed?: boolean;
   sessionArea?: string;
   code?: string; houseId?: string;
+  caseMark?: number; ignoreCaseMarkFilter?: boolean; caseArea?: string;
 }
 function fixture(options: FixtureOptions = {}) {
   const calls: Array<{ method: string; args: string[]; query?: Record<string, any>; init: RequestInit }> = [];
@@ -53,8 +54,12 @@ function fixture(options: FixtureOptions = {}) {
       return response(Object.hasOwn(options, 'writeResult') ? options.writeResult : true);
     }
     expect(method).toBe('DynaSearch'); expect(query.pageNum).toBe(1); expect(query.pageSize).toBe(2);
-    if (query.name === 'tysl_transactor') return response(table([{ id: 'case_fixture', transactno: options.wrongCase ? 'DIFFERENT' : acceptance,
-      acceptareaid: options.wrongCaseArea ? '440304009000000000' : AREA }]));
+    if (query.name === 'tysl_transactor') {
+      const mark = options.caseMark ?? 2;
+      if (!options.ignoreCaseMarkFilter && query.parameters.find((p: any) => p.name === 'delmark')?.value !== mark) return response(table([]));
+      return response(table([{ id: 'case_fixture', transactno: options.wrongCase ? 'DIFFERENT' : acceptance,
+        acceptareaid: options.wrongCaseArea ? '440304009000000000' : options.caseArea ?? AREA, delmark: String(mark) }]));
+    }
     if (query.name === 'tysl_contractproperty') return response(table(options.unrelatedCertificate ? [] : [{ id: 'case_property_fixture',
       tysl_transactor_id: options.wrongRelatedCase ? 'case_other' : 'case_fixture', housecertification: CERTIFICATE, housecertificationid: '01' }]));
     if (query.name === 'property') return response(table([{ id: 'property_fixture', housecertification: CERTIFICATE, housecertificationid: '01',
@@ -84,8 +89,32 @@ describe('housing rental scoped binding client', () => {
     expect(JSON.parse(write[0].args[0])).toEqual([[{ beanname: 'propertyhouse', propertyid: 'property_fixture', houseid: 'house_fixture', housecode: CODE,
       buildingid: 'building_fixture', delmark: '0', cardid: null }]]);
     expect(calls.find(call => call.query?.name === 'tysl_contractproperty')?.query?.parameters).toContainEqual({ name: 'TYSL_TRANSACTOR_ID', value: 'case_fixture', flag: 11 });
+    expect(calls.find(call => call.query?.name === 'tysl_transactor')?.query?.parameters).toContainEqual({ name: 'delmark', value: 2, flag: 11 });
+    expect(calls.find(call => call.query?.name === 'property')?.query?.parameters).toContainEqual({ name: 'delmark', value: '0', flag: 11 });
     expect(calls.find(call => call.query?.name === 'viewcodehouse')?.query?.parameters).toContainEqual({ name: 'code', value: CODE, flag: 11 });
     expect(calls.every(call => ['DynaSearch','app_getLogicModuleOperations','insertOrupdatePropertyHouse'].includes(call.method))).toBe(true);
+  });
+  it('uses the captured acceptance-list marker 2, while property relations continue using deletion marker 0', async () => {
+    const {client,calls}=fixture();await client.resolveTarget(acceptance,CERTIFICATE);
+    const query=calls.find(call=>call.query?.name==='tysl_transactor')!.query!;
+    expect(query.parameters).toEqual([{name:'transactno',value:acceptance,flag:11},{name:'acceptareaid',value:'440305009000000000',flag:16},{name:'acceptareaid',value:'440305009999999999',flag:17},{name:'delmark',value:2,flag:11}]);
+    expect(calls.filter(call=>call.query?.name==='property').every(call=>call.query!.parameters.some((p:any)=>p.name==='delmark'&&p.value==='0'))).toBe(true);
+    expect(calls.some(call=>call.method==='insertOrupdatePropertyHouse')).toBe(false);
+  });
+  it.each([0,7])('does not silently switch to another business list when marker is %s',async caseMark=>{
+    const {client,calls}=fixture({caseMark});await expect(client.resolveTarget(acceptance,CERTIFICATE)).rejects.toThrow('合同受理列表');
+    expect(calls.filter(call=>call.query?.name==='tysl_transactor')).toHaveLength(1);
+    expect(calls.some(call=>call.query?.name==='property'||call.method==='insertOrupdatePropertyHouse')).toBe(false);
+  });
+  it('rejects a non-acceptance row even when the remote service ignores its state filter',async()=>{
+    const {client,calls}=fixture({caseMark:0,ignoreCaseMarkFilter:true});await expect(client.resolveTarget(acceptance,CERTIFICATE)).rejects.toThrow('受理状态');
+    expect(calls.some(call=>call.method==='insertOrupdatePropertyHouse')).toBe(false);
+  });
+  it('honors the acceptance page community range without changing the property/house street scope',async()=>{
+    const group='440305009123000000';const {client,calls}=fixture({sessionArea:group,caseArea:group});
+    await client.resolveTarget(acceptance,CERTIFICATE);
+    expect(calls.find(call=>call.query?.name==='tysl_transactor')?.query?.parameters).toContainEqual({name:'acceptareaid',value:'440305009123999999',flag:17});
+    expect(housingAreaPrefix(group)).toBe('440305009');expect(housingAcceptancePrefix(group)).toBe('440305009123');
   });
   it.each([{ wrongCase: true }, { wrongCaseArea: true }, { unrelatedCertificate: true }, { wrongRelatedCase: true }, { multipleProperty: true }, { wrongPropertyArea: true }])('rejects ambiguous or unrelated target %j before any write', async options => {
     const { client, calls } = fixture(options); await expect(client.resolveTarget(acceptance, CERTIFICATE)).rejects.toMatchObject({ code: 'QUERY_INVALID' });
@@ -208,5 +237,8 @@ describe('housing rental plugin and protocol boundary', () => {
     expect(housingAreaPrefix('440300000000000000')).toBe('4403');
     expect(housingAreaPrefix('440305000000000000')).toBe('440305');
     expect(housingAreaPrefix(AREA)).toBe('440305009');
+    expect(housingAcceptancePrefix('440300000000000000')).toBe('4403');
+    expect(housingAcceptancePrefix('440305000000000000')).toBe('440305');
+    expect(housingAcceptancePrefix(AREA)).toBe('440305009');
   });
 });

@@ -33,6 +33,12 @@ export function housingAreaPrefix(area: string): string {
   return area.slice(4, 6) === '00' ? area.slice(0, 4) : area.slice(6, 9) === '000' ? area.slice(0, 6) : area.slice(0, 9);
 }
 
+/** ContractAccepteList.buildQuery additionally honors a selected community/group below the street. */
+export function housingAcceptancePrefix(area: string): string {
+  const parent = housingAreaPrefix(area);
+  return parent.length === 9 && area.slice(9, 12) !== '000' ? area.slice(0, 12) : parent;
+}
+
 export function housingSearch(name: string, parameters: HousingSearchParameter[], pageSize = 2) {
   return { name, parameters, pageNum: 1, pageSize };
 }
