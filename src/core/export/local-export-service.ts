@@ -11,7 +11,7 @@ import { createNanshanPermitWorkbook, validateNanshanPermit } from '../double-pu
 import { EQUIPMENT_SYSTEM_ID } from '../../plugins/guangdong-special-equipment/catalog';
 import { FOOD_DRUG_SYSTEM_ID } from '../../plugins/guangdong-food-drug/catalog';
 import { createCollectionJudicialWorkbook } from './collection-judicial-workbook';
-import { HRSS_HANDLING_COLUMNS, hasHrssHandlingRecords, hrssHandlingStatusLabel, readHrssHandlingRecords } from '../hrss/handling-records';
+import { handlingColumns, hasHandlingRecords, handlingCountLabel, hrssHandlingStatusLabel, readHandlingRecords } from '../hrss/handling-records';
 
 const permitSystems = new Set(['government-info', 'oversize-transport', 'online-car-permit', 'transport-practitioner',
   'health-publicity', 'shenzhen-hazardous-chemicals', EQUIPMENT_SYSTEM_ID, FOOD_DRUG_SYSTEM_ID]);
@@ -66,34 +66,57 @@ export class LocalExportService {
       await writeFile(path, buffer, { flag: 'wx' });
       return { path, rowCount: records.length, createdAt: Date.now(), warningCount: validation.invalid, missingRequiredCount: validation.missingRows };
     }
-    if (records.some(record => record.systemId === 'guangdong-hrss')) {
-      if (!records.every(record => record.systemId === 'guangdong-hrss') || !listColumns?.length) throw new Error('请按人社业务事项单独导出台账');
+    if (records.some(record => ['guangdong-hrss', 'shenzhen-integrated-services'].includes(record.systemId))) {
+      const systemId = records[0].systemId, shenzhen = systemId === 'shenzhen-integrated-services';
+      const exportError = shenzhen ? '请按深圳一体化业务事项单独导出台账' : '请按人社业务事项单独导出台账';
+      if (!records.every(record => record.systemId === systemId) || !listColumns?.length) throw new Error(exportError);
       const columns = listColumns.filter(column => column.key !== 'handlingRecords');
-      if (!columns.length) throw new Error('请按人社业务事项单独导出台账');
+      if (!columns.length) throw new Error(exportError);
       const values = records.map(record => Object.fromEntries(columns.map(column => [column.key, column.key === 'handlingRecordStatus'
-        ? hrssHandlingStatusLabel(record.data[column.key]) : cellValue(record.data[column.key])])));
+        ? hrssHandlingStatusLabel(record.data[column.key]) : column.key === 'handlingRecordCount'
+          ? handlingCountLabel(record.data[column.key], record.data) : cellValue(record.data[column.key])])));
       if (format === 'xlsx') {
         const workbook = new ExcelJS.Workbook();
         workbook.creator = '数据融合助手';
-        const sheet = workbook.addWorksheet('业务列表台账');
+        const sheet = workbook.addWorksheet(shenzhen ? '办件列表' : '业务列表台账');
         sheet.columns = columns.map(column => ({ header: column.label, key: column.key, width: Math.max(16, Math.min(36, column.label.length * 2 + 4)) }));
         values.forEach(row => sheet.addRow(row));
         sheet.getRow(1).font = { bold: true, color: { argb: 'FFFFFFFF' } };
         sheet.getRow(1).fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FF007AFF' } };
         sheet.views = [{ state: 'frozen', ySplit: 1 }];
         sheet.autoFilter = { from: { row: 1, column: 1 }, to: { row: values.length + 1, column: columns.length } };
-        const handlingCases = records.filter(record => hasHrssHandlingRecords(record.systemId, record.matterId));
+        records.forEach((record, index) => {
+          if (record.data.handlingRecordStatus !== 'failed') return;
+          const row = sheet.getRow(index + 2);
+          row.getCell(1).note = '本次办理过程尚未补齐，当前办件资料已保留；存在历史记录时另表保留上次采集内容。重新回流可补齐。';
+          for (let i = 1; i <= columns.length; i++) row.getCell(i).fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFFFF3D6' } };
+        });
+        const handlingCases = records.filter(record => hasHandlingRecords(record.systemId, record.matterId));
         if (handlingCases.length) {
           const history = workbook.addWorksheet('办理记录');
+          const historyColumns = handlingColumns(systemId, true);
           history.columns = [
-            { header: '申请编号', key: 'applyBh', width: 26 }, { header: '单位名称', key: 'unitName', width: 36 },
-            { header: '申请日期', key: 'applyDate', width: 18 }, { header: '记录序号', key: 'historyNo', width: 12 },
-            ...HRSS_HANDLING_COLUMNS.map(column => ({ header: column.label, key: column.key, width: column.key === 'opinion' ? 48 : column.key === 'handledAt' ? 24 : 22 })),
+            ...(shenzhen ? [
+              { header: '办件编号', key: 'caseNumber', width: 26 }, { header: '申办流水号', key: 'applicationNumber', width: 26 },
+              { header: '业务流水号', key: 'processNumber', width: 26 }, { header: '事项名称', key: 'sourceMatterName', width: 36 },
+              { header: '申请人 / 单位', key: 'subjectName', width: 36 }, { header: '过程采集状态', key: 'historyStatus', width: 24 },
+            ] : [
+              { header: '申请编号', key: 'applyBh', width: 26 }, { header: '单位名称', key: 'unitName', width: 36 },
+              { header: '申请日期', key: 'applyDate', width: 18 },
+            ]),
+            { header: '记录序号', key: 'historyNo', width: 12 },
+            ...historyColumns.map(column => ({ header: column.label, key: column.key, width: column.key === 'opinion' || column.key === 'step' ? 48 : /At$/.test(column.key) ? 24 : 22 })),
           ];
           for (const record of handlingCases) {
-            for (const [index, item] of readHrssHandlingRecords(record.data.handlingRecords).entries()) {
-              history.addRow({ applyBh: cellValue(record.data.applyBh), unitName: cellValue(record.data.unitName),
-                applyDate: cellValue(record.data.applyDate), historyNo: index + 1, ...item });
+            for (const [index, item] of readHandlingRecords(record.data.handlingRecords, systemId).entries()) {
+              const businessFields = shenzhen ? {
+                caseNumber: cellValue(record.data.caseNumber ?? record.data.applicationNumber ?? record.data.processNumber),
+                applicationNumber: cellValue(record.data.applicationNumber), processNumber: cellValue(record.data.processNumber),
+                sourceMatterName: cellValue(record.data.sourceMatterName), subjectName: cellValue(record.data.subjectName),
+                historyStatus: record.data.handlingRecordStatus === 'failed' ? '待补齐（保留上次记录）' : hrssHandlingStatusLabel(record.data.handlingRecordStatus),
+              } : { applyBh: cellValue(record.data.applyBh), unitName: cellValue(record.data.unitName), applyDate: cellValue(record.data.applyDate) };
+              history.addRow({ ...businessFields, historyNo: index + 1,
+                ...Object.fromEntries(historyColumns.map(({ key }) => [key, key === 'withdrawn' ? item[key] ? '是' : '否' : cellValue(item[key])])) });
             }
           }
           history.getRow(1).font = { bold: true, color: { argb: 'FFFFFFFF' } };
@@ -106,7 +129,8 @@ export class LocalExportService {
       } else if (format === 'csv') {
         const lines = [columns.map(column => csvCell(column.label)).join(','), ...values.map(row => columns.map(column => csvCell(row[column.key])).join(','))];
         await writeFile(path, `\uFEFF${lines.join('\r\n')}`, { encoding: 'utf8', flag: 'wx' });
-      } else await writeFile(path, JSON.stringify(values, null, 2), { encoding: 'utf8', flag: 'wx' });
+      } else await writeFile(path, JSON.stringify(shenzhen
+        ? values.map((row, index) => ({ ...row, handlingRecords: readHandlingRecords(records[index].data.handlingRecords, systemId) })) : values, null, 2), { encoding: 'utf8', flag: 'wx' });
       return { path, rowCount: records.length, createdAt: Date.now(), warningCount: 0, missingRequiredCount: 0 };
     }
     const permitCount = records.filter(record => permitSystems.has(record.systemId) || isDoublePublicityData(record.data)).length;

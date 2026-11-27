@@ -6,19 +6,21 @@ import './HrssLedgerPage.css';
 import { HrssBatchDateNotice } from './HrssDateNotice';
 import { hrssTaskDateLabel } from '../../core/hrss/date-filters';
 import { BatchPageOptions, selectBatchOption, useCompletedBatches } from './useCompletedBatches';
-import { hasHrssHandlingRecords, hrssHandlingStatusLabel } from '../../core/hrss/handling-records';
+import { hasHandlingRecords, handlingCountLabel, hrssHandlingStatusLabel } from '../../core/hrss/handling-records';
 import { HrssHandlingRecords } from './HrssHandlingRecords';
 
 export interface HrssListColumn { key: string; label: string; sensitive?: boolean }
 interface Row { recordKey: string; data: Record<string, unknown>; updatedAt?: number; rowNo?: number }
 
-export function hrssDisplayValue(column: HrssListColumn, value: unknown): string {
+export function hrssDisplayValue(column: HrssListColumn, value: unknown, data?: Record<string, unknown>): string {
   if (column.key === 'handlingRecordStatus') return hrssHandlingStatusLabel(value);
+  if (column.key === 'handlingRecordCount' && data) return String(handlingCountLabel(value, data)) || '—';
   if (typeof value === 'object' && value !== null) return '—';
   const text = value === null || value === undefined || value === '' ? '' : String(value);
   if (!text) return '—';
-  if (!column.sensitive && !/^(name|personName|cardNumber|idNumber|phone|mobile|contactName|contactPhone)$/.test(column.key)) return text;
-  if (/name/i.test(column.key)) return text.slice(0, 1) + '*'.repeat(Math.min(4, Math.max(1, text.length - 1)));
+  const personSubject = column.key === 'subjectName' && ['per', '1'].includes(String(data?.subjectType ?? ''));
+  if (!column.sensitive && !personSubject && !/^(name|personName|cardNumber|idNumber|phone|mobile|contactName|contactPhone|acceptor|currentAssignee)$/.test(column.key)) return text;
+  if (/name|acceptor|currentAssignee/i.test(column.key)) return text.slice(0, 1) + '*'.repeat(Math.min(4, Math.max(1, text.length - 1)));
   if (text.length <= 7) return '***';
   return text.slice(0, 3) + '********' + text.slice(-4);
 }
@@ -71,7 +73,7 @@ export function HrssLedgerPage({ systemId, matterId, matterName, columns, defaul
   const pageCount = Math.max(1, Math.ceil(total / pageSize));
   const listColumns = columns.filter(column => column.key !== 'handlingRecords');
   const visibleColumns = preview ? listColumns.slice(0, 5) : listColumns;
-  const showHistory = !preview && hasHrssHandlingRecords(systemId, matterId);
+  const showHistory = !preview && hasHandlingRecords(systemId, matterId);
   return <section className={`hrss-ledger ${preview ? 'hrss-ledger-preview' : ''}`} aria-label={systemId === 'guangdong-hrss' ? '人社列表台账' : '业务列表台账'}>
     <header className="hrss-ledger-head"><div><span className="eyebrow">{preview ? '本机数据' : '业务台账'}</span><h2>{preview ? '本地列表预览' : matterName}</h2><p>{batchId ? '当前查看已完成回流的列表快照。' : '合并保存历次列表记录；重新回流会更新相同业务记录。'}个人信息默认脱敏显示。</p></div>
       {preview ? <button className="secondary" onClick={onViewAll}>查看台账 <AppIcon name="chevron" size={14} /></button>
@@ -86,12 +88,12 @@ export function HrssLedgerPage({ systemId, matterId, matterName, columns, defaul
       <button className="primary" type="submit" disabled={loading}>查询</button><button className="secondary" type="button" disabled={loading} onClick={() => setRevision(value => value + 1)} aria-label="刷新台账"><AppIcon name="refresh" size={18} /></button>
     </form>}
     <div className="panel hrss-list-table" role="region" aria-label="业务台账数据表" tabIndex={0} aria-busy={loading}><table><thead><tr><th>序号</th>{visibleColumns.map(column => <th key={column.key}>{column.label}</th>)}{showHistory && <th className="hrss-history-cell">办理记录</th>}</tr></thead><tbody>
-      {rows.map((row, index) => <tr key={row.recordKey}><td>{row.rowNo ?? ((page - 1) * pageSize + index + 1)}</td>{visibleColumns.map(column => <td key={column.key}>{hrssDisplayValue(column, row.data[column.key])}</td>)}{showHistory && <td className="hrss-history-cell"><button type="button" className="link-button hrss-history-button" onClick={() => setHistoryRow(row)} aria-label={`查看申请编号 ${String(row.data.applyBh ?? '未提供')} 的办理记录`}>查看记录</button></td>}</tr>)}
+      {rows.map((row, index) => <tr key={row.recordKey}><td>{row.rowNo ?? ((page - 1) * pageSize + index + 1)}</td>{visibleColumns.map(column => <td key={column.key}>{hrssDisplayValue(column, row.data[column.key], row.data)}</td>)}{showHistory && <td className="hrss-history-cell"><button type="button" className={`link-button hrss-history-button${row.data.handlingRecordStatus === 'failed' ? ' has-issue' : ''}`} onClick={() => setHistoryRow(row)} aria-label={`查看${systemId === 'shenzhen-integrated-services' ? '办件' : '申请'}编号 ${String(row.data.caseNumber ?? row.data.applicationNumber ?? row.data.processNumber ?? row.data.applyBh ?? '未提供')} 的办理记录`}>{row.data.handlingRecordStatus === 'failed' ? '查看待补齐记录' : '查看记录'}</button></td>}</tr>)}
       {!rows.length && <tr><td colSpan={visibleColumns.length + 1 + Number(showHistory)} className="empty"><span className="hrss-empty-message">{loading ? '正在读取本地列表…' : error ? '暂时无法读取数据' : '尚无列表记录，请先登录原系统并完成回流'}</span></td></tr>}
     </tbody></table></div>
     <footer className="hrss-ledger-footer"><span>{loading ? '正在读取…' : `共 ${total.toLocaleString()} 条列表记录`}{preview && total > 5 ? '，预览最近5条' : ''}</span>
       {!preview && <div><label>每页<select value={pageSize} onChange={event => { setPage(1); setPageSize(Number(event.target.value)); }}><PageSizeOptions defaultPageSize={defaultPageSize} /></select>条</label><button className="secondary" disabled={loading || page <= 1} onClick={() => setPage(value => value - 1)}>上一页</button><span>{page} / {pageCount}</span><button className="secondary" disabled={loading || page >= pageCount} onClick={() => setPage(value => value + 1)}>下一页</button></div>}
     </footer>
-    {showHistory && historyRow && <HrssHandlingRecords data={historyRow.data} onClose={() => setHistoryRow(null)} />}
+    {showHistory && historyRow && <HrssHandlingRecords systemId={systemId} data={historyRow.data} onClose={() => setHistoryRow(null)} />}
   </section>;
 }

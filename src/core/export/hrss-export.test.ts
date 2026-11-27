@@ -73,3 +73,44 @@ it('keeps original matters list-only and creates an empty history sheet for a pe
     expect(original.worksheets.map(sheet => sheet.name)).toEqual(['业务列表台账']);
   } finally { await rm(directory, { recursive: true, force: true }); }
 });
+
+it('exports Shenzhen cases and their full process snapshots in separate sheets without requiring a process number', async () => {
+  const directory = await mkdtemp(join(tmpdir(), 'shenzhen-process-export-'));
+  try {
+    const event = { operator: '操作甲', reviewer: '审批乙', organization: '测试机构', step: '受理环节', action: '受理',
+      handledAt: '2026-11-02 09:00:00', receivedAt: '2026-10-01 08:00:00', operatedAt: '2026-11-01 08:30:00',
+      reviewedAt: '2026-11-02 09:00:00', completedAt: '2026-11-03 10:00:00', publicityStartedAt: '2026-11-04 11:00:00',
+      result: '公示通过', rawResult: '无异议', opinion: '测试意见', stageType: 'shouli', withdrawn: false, sourceRecordId: '', accessToken: 'SECRET' };
+    const base = { systemId: 'shenzhen-integrated-services', matterId: 'small-enterprise-social-insurance-subsidy', firstSeenAt: 1, updatedAt: 1 };
+    const records = [
+      { ...base, recordKey: 'case-1', data: { caseNumber: 'TEST-001', applicationNumber: 'TEST-001', processNumber: '', sourceMatterName: '测试事项',
+        subjectName: '测试单位', handlingRecordStatus: 'collected', handlingRecordCount: 2, handlingRecords: [event, { ...event }], accessToken: 'SECRET' } },
+      { ...base, recordKey: 'case-2', data: { caseNumber: 'TEST-002', applicationNumber: 'TEST-002', processNumber: 'TEST-FLOW', sourceMatterName: '测试事项',
+        subjectName: '保留历史单位', handlingRecordStatus: 'failed', handlingRecordCount: 0, handlingRecords: [event], handlingRecordError: 'SECRET' } },
+      { ...base, recordKey: 'case-3', data: { caseNumber: 'TEST-003', applicationNumber: 'TEST-003', processNumber: '', sourceMatterName: '测试事项',
+        subjectName: '待补齐单位', handlingRecordStatus: 'failed', handlingRecordCount: 0, handlingRecords: [] } },
+    ];
+    const columns = [{ key: 'caseNumber', label: '办件编号' }, { key: 'subjectName', label: '申请人 / 单位' },
+      { key: 'handlingRecordCount', label: '办理记录数' }, { key: 'handlingRecordStatus', label: '办理过程状态' }];
+    const file = join(directory, 'shenzhen.xlsx');
+    await new LocalExportService().export(file, 'xlsx', records, undefined, columns);
+    const workbook = new ExcelJS.Workbook(); await workbook.xlsx.readFile(file);
+    expect(workbook.worksheets.map(sheet => sheet.name)).toEqual(['办件列表', '办理记录']);
+    const cases = workbook.getWorksheet('办件列表')!, history = workbook.getWorksheet('办理记录')!;
+    expect(cases.rowCount).toBe(4); expect(history.rowCount).toBe(4);
+    expect(cases.getRow(3).getCell(3).value).toBe('1（上次）'); expect(cases.getRow(3).getCell(4).value).toBe('办理过程待补齐');
+    expect(cases.getRow(4).getCell(3).value).toBe('待补齐');
+    const headers = history.getRow(1).values as unknown[];
+    const cell = (row: number, label: string) => history.getRow(row).getCell(headers.indexOf(label)).value;
+    expect(cell(2, '办件编号')).toBe('TEST-001'); expect(cell(2, '业务流水号')).toBe('');
+    expect(cell(2, '操作人')).toBe('操作甲'); expect(cell(2, '审批人')).toBe('审批乙');
+    for (const [label, value] of Object.entries({ '环节接收时间': event.receivedAt, '操作时间': event.operatedAt, '审批时间': event.reviewedAt,
+      '完成时间': event.completedAt, '公示开始时间': event.publicityStartedAt, '原始办理结果': '无异议', '环节类型代码': 'shouli' })) expect(cell(2, label)).toBe(value);
+    expect(cell(4, '过程采集状态')).toBe('待补齐（保留上次记录）');
+    expect(JSON.stringify(workbook.model)).not.toContain('SECRET');
+    const jsonFile = join(directory, 'shenzhen.json'); await new LocalExportService().export(jsonFile, 'json', records, undefined, columns);
+    const exported = JSON.parse(await readFile(jsonFile, 'utf8'));
+    expect(exported[0].handlingRecords).toHaveLength(2); expect(exported[0].handlingRecords[0].reviewer).toBe('审批乙');
+    expect(JSON.stringify(exported)).not.toContain('SECRET');
+  } finally { await rm(directory, { recursive: true, force: true }); }
+});

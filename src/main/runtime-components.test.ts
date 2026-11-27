@@ -4,6 +4,7 @@ import { AppRuntime } from './runtime';
 import type { LicenseGrant } from '../core/license/types';
 import tools from '../core/tools/catalog.json';
 import { catalogOnlySystems, createCatalogOnlySystem } from '../plugins/catalog-only-systems';
+import { createShenzhenIntegratedPlugin } from '../plugins/shenzhen-integrated-services';
 
 const grant = (systems: string[], allowedTools: string[] = []): LicenseGrant => ({
   licenseId: 'catalog-fixture', expiresAt: Date.now() + 60_000, allowedSystems: systems, allowedTools,
@@ -33,7 +34,9 @@ describe('licensed component discovery', () => {
   it('lists each new portal as a standalone component only when it is granted', async () => {
     const runtime = new AppRuntime();
     for (const system of catalogOnlySystems) runtime.plugins.register(createCatalogOnlySystem(system));
-    const [population, shenzhen] = catalogOnlySystems;
+    const [population] = catalogOnlySystems;
+    const shenzhen = createShenzhenIntegratedPlugin();
+    runtime.plugins.register(shenzhen);
     vi.spyOn(runtime, 'currentGrant').mockResolvedValueOnce(grant([population.id])).mockResolvedValueOnce(grant([shenzhen.id]));
     expect(await runtime.listComponents()).toMatchObject([{ id: population.id, name: population.name, workspaceMode: 'list-ledger' }]);
     expect(await runtime.listComponents()).toMatchObject([{ id: shenzhen.id, name: shenzhen.name, workspaceMode: 'list-ledger' }]);

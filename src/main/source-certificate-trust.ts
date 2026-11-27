@@ -1,6 +1,8 @@
 import { X509Certificate } from 'node:crypto';
 import { dialog, session, type Request as CertificateVerificationRequest } from 'electron';
 import { publicSourceCertificateVerifier } from './source-public-certificate';
+import { approvedSourceEndpointCertificate } from './source-endpoint-certificate';
+import { SHENZHEN_INTEGRATED_SOURCE_CERTIFICATE_TRUST as reviewedEndpoint } from '../core/config/source-certificate-pins';
 
 export interface SourceCertificateVault {
   get(key: string): Promise<string | null>;
@@ -37,8 +39,10 @@ const REJECT_CERTIFICATE = -2;
 const AUTHORITY_INVALID = -202;
 const authorityErrors = new Set(['CERT_AUTHORITY_INVALID', 'ERR_CERT_AUTHORITY_INVALID', 'net::ERR_CERT_AUTHORITY_INVALID']);
 
-function installAuthorityVerifier(partition: string, verify: (request: CertificateVerificationRequest) => Promise<number>): void {
+function installAuthorityVerifier(partition: string, verify: (request: CertificateVerificationRequest) => Promise<number>,
+  reviewedNameMismatch?: (request: CertificateVerificationRequest) => boolean): void {
   session.fromPartition(partition).setCertificateVerifyProc((request, callback) => {
+    if (reviewedNameMismatch?.(request)) { callback(0); return; }
     if (request.errorCode !== AUTHORITY_INVALID || !authorityErrors.has(request.verificationResult)) {
       callback(USE_CHROMIUM_RESULT);
       return;
@@ -65,8 +69,17 @@ export async function installSourceCertificateVerifiers(
   for (const [partition, origins] of partitions) {
     if (partition === pinnedSource.partition) continue;
     const verify = publicSourceCertificateVerifier(origins);
+    // Main-process fetch can validate a restored token before a source tab exists.
+    // Chromium supplies only a hostname here: enable the reviewed exception only
+    // for the dedicated partition configured with this sole source origin. All
+    // application requests remain fixed to the declared :8001 endpoint.
+    const endpoint = partition === reviewedEndpoint.partition && origins.size === 1 && origins.has(reviewedEndpoint.origin)
+      ? (request: CertificateVerificationRequest) => request.hostname === new URL(reviewedEndpoint.origin).hostname
+        && request.errorCode === -200 && approvedSourceEndpointCertificate(reviewedEndpoint.systemId,
+          { partition, allowedOrigin: reviewedEndpoint.origin }, reviewedEndpoint.origin, request.verificationResult, request.certificate.data)
+      : undefined;
     installAuthorityVerifier(partition, async (request) =>
-      await verify(request.hostname, request.certificate.data) ? 0 : USE_CHROMIUM_RESULT);
+      await verify(request.hostname, request.certificate.data) ? 0 : USE_CHROMIUM_RESULT, endpoint);
   }
   await installSourceCertificateTrust(pinnedSource, partitions.get(pinnedSource.partition));
 }

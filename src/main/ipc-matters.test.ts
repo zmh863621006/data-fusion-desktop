@@ -23,9 +23,10 @@ import { transportPractitionerPlugin } from '../plugins/transport-practitioner';
 import { oversizeTransportPlugin } from '../plugins/oversize-transport';
 import { onlineCarPermitPlugin } from '../plugins/online-car-permit';
 import { createGuangdongHrssPlugin } from '../plugins/guangdong-hrss';
+import { createShenzhenIntegratedPlugin } from '../plugins/shenzhen-integrated-services';
 import { catalogOnlySystems, createCatalogOnlySystem } from '../plugins/catalog-only-systems';
 
-const addedCatalogs = [createGuangdongHrssPlugin(), ...catalogOnlySystems.map(createCatalogOnlySystem)];
+const addedCatalogs = [createGuangdongHrssPlugin(), createShenzhenIntegratedPlugin(), ...catalogOnlySystems.map(createCatalogOnlySystem)];
 const plugins = [governmentInfoPlugin, marketAccessPlugin, transportPractitionerPlugin, oversizeTransportPlugin, onlineCarPermitPlugin, ...addedCatalogs];
 const frame = {};
 const trustedEvent = { sender: { id: 7, mainFrame: frame }, senderFrame: frame };
@@ -72,13 +73,25 @@ describe('matter menu IPC serialization boundary', () => {
     expect(() => structuredClone(payload)).not.toThrow();
   });
 
+  it('exposes all Shenzhen entries with usable date controls and handling-history list columns', async () => {
+    const rows = await list('shenzhen-integrated-services');
+    expect(rows).toHaveLength(10);
+    for (const row of rows) {
+      expect(row.defaultFilters).toMatchObject({ dateType: 'received', startDate: expect.any(String), endDate: expect.any(String) });
+      expect(row.dateFilter).toMatchObject({ mode: 'applied' });
+      expect((row.listColumns as Array<{ key: string }>).map(c => c.key)).toContain('handlingRecordCount');
+      expect((row.querySchema as Array<{ key: string }>).map(c => c.key)).toEqual(['dateType', 'startDate', 'endDate']);
+    }
+    expect(JSON.stringify(rows)).not.toContain('access-token');
+  });
+
   it('preserves license filtering', async () => {
     const allowed = 'precursor-chemicals-filing-cancellation';
     fixtures.requireLicense.mockResolvedValue({ allowedMatters: { 'government-info': [allowed] } });
     expect((await list('government-info')).map((matter) => matter.id)).toEqual([allowed]);
   });
 
-  it('lists the remaining 11 unconnected matters normally and rejects their runs before creating a task', async () => {
+  it('lists the remaining population matter normally and rejects its run before creating a task', async () => {
     let count = 0;
     const run = fixtures.handlers.get(IPC_CHANNELS.matterRun)!;
     for (const plugin of addedCatalogs) {
@@ -91,7 +104,7 @@ describe('matter menu IPC serialization boundary', () => {
         await expect(run(trustedEvent, plugin.id, matter.id, matter.createDefaultContext!())).rejects.toThrow('当前事项暂时无法回流');
       }
     }
-    expect(count).toBe(11);
+    expect(count).toBe(1);
     expect(fixtures.tasksRun).not.toHaveBeenCalled();
   });
 

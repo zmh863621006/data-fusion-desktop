@@ -11,6 +11,8 @@ vi.mock('electron', () => ({ session: { fromPartition: electron.fromPartition },
 vi.mock('node:tls', async (actual) => ({ ...await actual<typeof import('node:tls')>(), connect: vi.fn() }));
 import { installSourceCertificateTrust, installSourceCertificateVerifiers, type SourceCertificateTrustOptions } from './source-certificate-trust';
 import { HRSS_SOURCE_CERTIFICATE_TRUST } from '../core/config/source-certificate-pins';
+import { SHENZHEN_INTEGRATED_SOURCE_CERTIFICATE_TRUST } from '../core/config/source-certificate-pins';
+import { REVIEWED_CERTIFICATE } from './source-endpoint-certificate.test-fixture';
 
 // Public, local synthetic certificates only; their disposable private keys were never saved.
 const CERT_A = "-----BEGIN CERTIFICATE-----\nMIIDKDCCAhCgAwIBAgIUVCefL9RF+Jd+DTG9EqVSzLvl+dwwDQYJKoZIhvcNAQEL\nBQAwQTESMBAGA1UEAwwJaHJzcy50ZXN0MSswKQYDVQQKDCJMb2NhbCBTb3VyY2Ug\nQ2VydGlmaWNhdGUgRml4dHVyZSBBMB4XDTI2MDEwMTAwMDAwMFoXDTI4MDEwMTAw\nMDAwMFowQTESMBAGA1UEAwwJaHJzcy50ZXN0MSswKQYDVQQKDCJMb2NhbCBTb3Vy\nY2UgQ2VydGlmaWNhdGUgRml4dHVyZSBBMIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8A\nMIIBCgKCAQEAlQ/QtvzXJmeNUwCayoN4eMCDMQUoF2w2797yY7jcd69akKw++Lg/\nsWS67YkBhtghlmx+n1dHGHTOXx0EI1o8VEvWebKNSMyKns6nfCFNtC5NMAifZmX8\nS6N9ssbIcr+tRBRKyV5wBhmKcGouHu0k7dsjA97PTb8hjEjLGNu2M2J3jjcj4Q+v\n/6iLx/Za6b1iSBU2m49JTcNdzwMZB9HyicecZfCWHSmYPyydIzK0rPvFYiAvztkK\nCJqyoHrWV2Y80TZYgIPQJaNtuvpemb3OvJZa6FXpukhj2AHgOphR23BYALOc4CQ8\ntpnkAoDeoZ/4LfiJfhpMCX3wEJWUmCPqcwIDAQABoxgwFjAUBgNVHREEDTALgglo\ncnNzLnRlc3QwDQYJKoZIhvcNAQELBQADggEBAIhMJ3ZFhdpv26/rrgnxYKMYoiIZ\nVqWBucd5T5iT7pRTmiqrnURJlcVa3aGFzc46gp2QYRCaMOTa+MjlwlghDxl8gnEP\n2kVnmwCXIwEsQgohwhkSd2JuJH2vE9CQeU7X6Ic4mTf29BBQTEvmzwM/UAFFBLtF\nbGkSDrMgZrUYgqb5zvBw47ucZZfDm+C27BtdLm7OlEhBwkYOo7H1iXeOa0E+JmMv\nwRSCSf1f+xQWXg9+ROdESz7135+BxZW7nPnLVjKIrERjvQcr2wlDKUisYCnM2i1I\nxT8RtBq8/c07cZM2lWBDzvW8VuosGRIxXSqvHMkiQEtJsw4Xg7tATxV9RwI=\n-----END CERTIFICATE-----\n";
@@ -291,5 +293,34 @@ describe('public CA fallback for source partitions', () => {
     rotated.emit('secureConnect');
     expect(await result).toBe(0);
     expect(electron.showMessageBox).not.toHaveBeenCalled();
+  });
+
+  it('allows the reviewed Shenzhen leaf in its dedicated sole-origin session before any tab opens', async () => {
+    vi.useFakeTimers(); vi.setSystemTime(new Date('2026-11-27T00:00:00Z'));
+    try {
+      const reviewed = SHENZHEN_INTEGRATED_SOURCE_CERTIFICATE_TRUST;
+      await installSourceCertificateVerifiers([{ partition: reviewed.partition, origins: [reviewed.origin] }], options());
+      const peer = request({ hostname: '61.144.226.148', errorCode: -200, verificationResult: 'net::ERR_CERT_COMMON_NAME_INVALID',
+        certificate: { data: REVIEWED_CERTIFICATE } as CertificateVerificationRequest['certificate'] });
+      expect(await verify(peer, reviewed.partition)).toBe(0);
+      expect(connect).not.toHaveBeenCalled();
+      for (const errorCode of [-201, -202, -206]) expect(await verify({ ...peer, errorCode }, reviewed.partition)).toBe(-3);
+      expect(await verify({ ...peer, hostname: 'other.test' }, reviewed.partition)).toBe(-3);
+      expect(await verify({ ...peer, certificate: { data: CERT_A } as CertificateVerificationRequest['certificate'] }, reviewed.partition)).toBe(-3);
+      vi.setSystemTime(new Date('2027-01-01T00:00:00Z'));
+      expect(await verify(peer, reviewed.partition)).toBe(-3);
+    } finally { vi.useRealTimers(); }
+  });
+
+  it('does not extend the Shenzhen session exception to another partition or ambiguous source configuration', async () => {
+    const reviewed = SHENZHEN_INTEGRATED_SOURCE_CERTIFICATE_TRUST;
+    const peer = request({ hostname: '61.144.226.148', errorCode: -200, verificationResult: 'net::ERR_CERT_COMMON_NAME_INVALID',
+      certificate: { data: REVIEWED_CERTIFICATE } as CertificateVerificationRequest['certificate'] });
+    await installSourceCertificateVerifiers([
+      { partition: reviewed.partition, origins: [reviewed.origin, 'https://61.144.226.148:8002'] },
+      { partition: 'persist:unrelated', origins: [reviewed.origin] },
+    ], options());
+    expect(await verify(peer, reviewed.partition)).toBe(-3);
+    expect(await verify(peer, 'persist:unrelated')).toBe(-3);
   });
 });

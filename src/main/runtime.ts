@@ -7,6 +7,8 @@ import { configurePractitionerCredentials, transportPractitionerPlugin } from '.
 import { configureOversizeTransportCredentials, oversizeTransportPlugin } from '../plugins/oversize-transport';
 import { configureOnlineCarPermitCredentials, onlineCarPermitPlugin } from '../plugins/online-car-permit';
 import { createGuangdongHrssPlugin } from '../plugins/guangdong-hrss';
+import { createShenzhenIntegratedPlugin } from '../plugins/shenzhen-integrated-services';
+import { SHENZHEN_SYSTEM_ID, SHENZHEN_SYSTEM_NAME, SHENZHEN_VERSION, shenzhenRecordMatterId } from '../plugins/shenzhen-integrated-services/catalog';
 import { createShenzhenHazardousPlugin } from '../plugins/shenzhen-hazardous-chemicals';
 import { HAZCHEM_SYSTEM_ID, HAZCHEM_SYSTEM_NAME } from '../plugins/shenzhen-hazardous-chemicals/catalog';
 import { createSpecialEquipmentPlugin } from '../plugins/guangdong-special-equipment';
@@ -69,6 +71,7 @@ import { HousingBindingService } from './housing-binding-service';
 import { createHousingTemplate } from '../core/housing-binding/workbook';
 import { HOUSING_SYSTEM_ID, HOUSING_MATTER_ID } from '../core/housing-binding/types';
 import { ReturnUploadQueue, type ReturnUploadState } from '../core/returns/upload-queue';
+import { canonicalRecordQuery, localRecordQuerySystem, visibleRecordMatter } from './shenzhen-record-scope';
 
 const PRODUCT_PUBLIC_KEY = `-----BEGIN PUBLIC KEY-----
 MIIBojANBgkqhkiG9w0BAQEFAAOCAY8AMIIBigKCAYEAn2Th5TQoO3juKQte8Ai+
@@ -83,6 +86,8 @@ b1oByVzE+8Uj5k4ApNg1P0JX3kxWn0qhcUFtRxsMO/nPAgMBAAE=
 -----END PUBLIC KEY-----`;
 
 const builtinModules = [
+  { id: SHENZHEN_SYSTEM_ID, name: SHENZHEN_SYSTEM_NAME, version: SHENZHEN_VERSION,
+    publisher: '数据融合助手', description: '经办业务列表与完整办理过程回流，按接收、受理或办结日期查询' },
   { id: housingCatalog.id, name: housingCatalog.name, version: housingCatalog.version,
     publisher: '数据融合助手', description: '根据受理编号、产权证与Excel房屋编码创建自动挂接任务' },
   { id: oneWindowCatalog.id, name: oneWindowCatalog.name, version: oneWindowCatalog.version,
@@ -295,6 +300,7 @@ export class AppRuntime {
     this.plugins.register(oversizeTransportPlugin);
     this.plugins.register(onlineCarPermitPlugin);
     this.plugins.register(createGuangdongHrssPlugin());
+    this.plugins.register(createShenzhenIntegratedPlugin());
     this.plugins.register(createShenzhenHazardousPlugin());
     this.plugins.register(createSpecialEquipmentPlugin());
     this.plugins.register(createFoodDrugPlugin());
@@ -458,7 +464,7 @@ export class AppRuntime {
     }
     assertGovernmentExportTarget(target, format, records.map(record => record.systemId));
     if (target) identity = { ...identity, businessName: `${GOVERNMENT_EXPORT_LABELS[target]}-${identity.businessName}` };
-    const isHrss = records.some(record => record.systemId === 'guangdong-hrss');
+    const isHrss = records.some(record => record.systemId === 'guangdong-hrss' || record.systemId === SHENZHEN_SYSTEM_ID);
     const listColumns = isHrss ? [...new Map(records.flatMap(record =>
       this.plugins.get(record.systemId)?.matters.find(matter => matter.id === record.matterId)?.listColumns ?? []).map(column => [column.key, column])).values()] : undefined;
     if (isHrss) identity = { ...identity, kind: 'list-ledger' };
@@ -524,11 +530,15 @@ export class AppRuntime {
     if (!this.platformStore) throw new Error('本地数据模块未就绪');
     const grant = await this.currentGrant();
     if (!grant || grant.expiresAt <= Date.now()) throw new Error('请先激活软件');
-    if (query.systemId) await this.requireLicense(query.systemId, query.matterId);
-    const accessScopes = grant.allowedSystems.map(systemId => ({ systemId, matterIds: grant.allowedMatters?.[systemId] }));
-    const result = await this.platformStore.listRecords({ ...query, accessScopes });
+    const selectedSystem = localRecordQuerySystem(query);
+    if (selectedSystem) await this.requireLicense(selectedSystem, query.matterId);
+    const result = await this.platformStore.listRecords(canonicalRecordQuery(query, grant));
     await this.refreshEnterpriseRecords(result.rows, true);
-    return result;
+    const visibleRows = result.rows.map(row => visibleRecordMatter(row, query, grant));
+    for (const matter of new Set(visibleRows.filter(row => row.systemId === SHENZHEN_SYSTEM_ID).map(row => row.matterId))) {
+      await this.requireLicense(SHENZHEN_SYSTEM_ID, matter);
+    }
+    return { ...result, rows: visibleRows };
   }
 
   private async refreshEnterpriseRecords<T extends { systemId: string; matterId: string; recordKey: string; data: Record<string, unknown> }>(records: T[], readLatestLedger = false): Promise<void> {
@@ -542,7 +552,7 @@ export class AppRuntime {
     }
     for (const rows of groups.values()) {
       const { systemId, matterId } = rows[0];
-      if (systemId === 'guangdong-hrss' || systemId === oneWindowCatalog.id) continue;
+      if (systemId === 'guangdong-hrss' || systemId === SHENZHEN_SYSTEM_ID || systemId === oneWindowCatalog.id) continue;
       const enriched = await this.enterpriseService.enrich(systemId, matterId, rows.map(row => row.data));
       const matter = this.plugins.get(systemId)?.matters.find(item => item.id === matterId);
       for (let i = 0; i < rows.length; i++) {
@@ -557,10 +567,14 @@ export class AppRuntime {
   }
 
   async exportLocalRecords(query: LocalRecordQuery, path: string | undefined, format: ExportFormat, confirm?: ConfirmExport, target?: GovernmentExportTarget) {
-    assertFeatureLicensed(await this.currentGrant(), 'export');
+    const grant = await this.currentGrant();
+    assertFeatureLicensed(grant, 'export');
     if (target) assertGovernmentExportTarget(target, format, [query.systemId ?? '']);
     if (!this.platformStore) throw new Error('本地数据模块未就绪');
-    const records = await this.platformStore.recordsForExport(query);
+    const selectedSystem = localRecordQuerySystem(query);
+    if (selectedSystem) await this.requireLicense(selectedSystem, query.matterId);
+    const records = (await this.platformStore.recordsForExport(canonicalRecordQuery(query, grant!)))
+      .map(row => visibleRecordMatter(row, query, grant!));
     if (records.length === 0) throw new Error('当前筛选条件没有可导出的数据');
     const matters = new Map(records.map(record => [`${record.systemId}:${record.matterId}`, record]));
     for (const record of matters.values()) await this.requireLicense(record.systemId, record.matterId);
@@ -572,13 +586,15 @@ export class AppRuntime {
   async listRecordVersions(systemId: string, matterId: string, recordKey: string) {
     await this.requireLicense(systemId, matterId);
     if (!this.repository) throw new Error('本地数据模块未就绪');
-    return this.repository.listVersions(systemId, matterId, recordKey);
+    const versions = await this.repository.listVersions(systemId, shenzhenRecordMatterId(systemId, matterId), recordKey);
+    return versions.map(version => version.matterId === matterId ? version : { ...version, matterId });
   }
 
   async updateLocalRecord(systemId: string, matterId: string, recordKey: string, data: Record<string, unknown>) {
     await this.requireLicense(systemId, matterId);
     if (systemId === oneWindowCatalog.id) throw new Error('一窗业务台账只读，请重新回流更新源系统数据');
     if (systemId === 'guangdong-hrss') throw new Error('人社列表台账只读，请重新回流更新源系统数据');
+    if (systemId === SHENZHEN_SYSTEM_ID) throw new Error('深圳一体化办件台账只读，请重新回流更新源系统数据');
     const matter = this.plugins.get(systemId)?.matters.find((item) => item.id === matterId);
     if (!matter || !this.platformStore) throw new Error('业务事项数据模块未就绪');
     const newRecordKey = buildRecordKey(data, matter.uniqueKey);
@@ -697,11 +713,12 @@ export class AppRuntime {
     }
     const result = await matter.query({ ...queryContext, signal: context.signal, onProgress: context.report });
     if (context.signal.aborted) throw new Error('任务已取消');
+    const storageMatterId = shenzhenRecordMatterId(systemId, matterId);
 
     const localRows: Record<string, unknown>[] = [];
     for (const row of result.rows) {
       if (context.signal.aborted) throw new Error('任务已取消');
-      if (!enterpriseInput(systemId, row) || !this.repository) { localRows.push(row); continue; }
+      if (systemId === SHENZHEN_SYSTEM_ID || !enterpriseInput(systemId, row) || !this.repository) { localRows.push(row); continue; }
       const previous = await this.repository.find(systemId, matterId, buildRecordKey(row, matter.uniqueKey));
       let reused = previous ? mergeEnterpriseRecord(systemId, row, previous.data) : row;
       // A matching local traffic record may also contain manually verified fields.
@@ -717,18 +734,18 @@ export class AppRuntime {
       }
       localRows.push(reused);
     }
-    const enterpriseCandidates = localRows.filter(row => enterpriseInput(systemId, row)).length;
+    const enterpriseCandidates = systemId === SHENZHEN_SYSTEM_ID ? 0 : localRows.filter(row => enterpriseInput(systemId, row)).length;
     context.report({ current: 2, total: 4, message: enterpriseCandidates
       ? `已提取 ${result.rows.length} 条，正在补充 ${enterpriseCandidates} 条缺失的企业法人或信用代码`
       : `已提取 ${result.rows.length} 条，正在去重比对` });
-    const enriched = this.enterpriseService ? await this.enterpriseService.enrich(systemId, matterId, localRows, context.signal) : localRows;
+    const enriched = this.enterpriseService && systemId !== SHENZHEN_SYSTEM_ID ? await this.enterpriseService.enrich(systemId, matterId, localRows, context.signal) : localRows;
     if (context.signal.aborted) throw new Error('任务已取消');
     context.report({ current: 3, total: 4, message: '正在保存本次回流数据' });
     const commitRows = async (numbered: Record<string, unknown>[]) => {
-      const summary = await this.syncEngine!.preview(systemId, matterId, matter.uniqueKey, numbered,
+      const summary = await this.syncEngine!.preview(systemId, storageMatterId, matter.uniqueKey, numbered,
         (incoming, previous) => mergeEnterpriseRecord(systemId, matter.mergeRecord ? matter.mergeRecord(incoming, previous) : incoming, previous));
       if (context.signal.aborted) throw new Error('任务已取消');
-      await this.syncEngine!.commit(systemId, matterId, summary);
+      await this.syncEngine!.commit(systemId, storageMatterId, summary);
       await this.platformStore!.replaceTaskOutput(context.taskId, systemId, matterId,
         summary.changes.map(change => ({ recordKey: change.key, data: change.current })));
       await this.captureReturn(context.taskId, systemId, matterId, summary.changes.map(change => ({ recordKey: change.key, data: change.current })));
@@ -744,14 +761,18 @@ export class AppRuntime {
     });
     void this.returnUploads?.flush();
     const undated = result.undatedExcludedCount;
-    const warning = undated ? `。另有 ${undated} 条许可决定日期无法确认，未纳入本批次。可清空日期回流后核对。` : '';
-    context.report({ current: 4, total: 4, message: `回流完成，共 ${summary.total} 条${warning}` });
+    const warning = undated ? systemId === SHENZHEN_SYSTEM_ID
+      ? `。另有 ${undated} 笔所选日期类型的时间无法确认，未纳入本批次，请在原系统核对。`
+      : `。另有 ${undated} 条许可决定日期无法确认，未纳入本批次。可清空日期回流后核对。` : '';
+    const incompleteHandlingCount = systemId === SHENZHEN_SYSTEM_ID ? result.rows.filter(row => row.handlingRecordStatus === 'failed').length : 0;
+    context.report({ current: 4, total: 4, message: `回流完成，共 ${summary.total} 条${incompleteHandlingCount ? `，办理过程待补齐${incompleteHandlingCount}笔` : ''}${warning}` });
     return {
       total: summary.total,
       inserted: summary.inserted,
       updated: summary.updated,
       unchanged: summary.unchanged,
       ...(undated ? { undatedExcludedCount: undated } : {}),
+      ...(incompleteHandlingCount ? { partial: true, incompleteHandlingCount } : {}),
     };
   }
 
@@ -857,6 +878,7 @@ export class AppRuntime {
   ): Promise<SyncPreviewReceipt> {
     if (systemId === oneWindowCatalog.id) throw new Error('一窗业务详情请通过回流任务保存');
     if (systemId === 'guangdong-hrss') throw new Error('人社数据请通过列表回流任务保存');
+    if (systemId === SHENZHEN_SYSTEM_ID) throw new Error('深圳一体化数据请通过列表回流任务保存');
     const plugin = this.plugins.get(systemId);
     const matter = plugin?.matters.find((item) => item.id === matterId);
     await this.requireLicense(systemId, matterId);

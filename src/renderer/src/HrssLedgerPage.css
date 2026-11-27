@@ -42,6 +42,7 @@
 .hrss-ledger > .hrss-date-condition { margin: 0; }
 .hrss-history-button { min-height: 44px; padding: 8px 10px; border-radius: 8px; }
 .hrss-history-button:focus-visible { outline: 3px solid #85b9ff; outline-offset: 2px; }
+.hrss-history-button.has-issue { color: #996200; }
 .hrss-handling-backdrop { position: fixed; inset: 0; z-index: 1000; display: flex; align-items: center; justify-content: center; padding: 28px; background: rgba(25, 32, 44, .3); }
 .hrss-handling-panel { display: grid; gap: 20px; width: min(1120px, 100%); min-width: 0; max-height: calc(100vh - 56px); padding: 28px; overflow: auto; border: 1px solid #e5e5ea; border-radius: 20px; background: #fff; box-shadow: 0 24px 80px rgba(0, 0, 0, .18); outline: none; }
 .hrss-handling-header { display: flex; justify-content: space-between; align-items: center; gap: 16px; }
@@ -52,6 +53,7 @@
 .hrss-handling-identity dd { margin: 0; color: #1d1d1f; font-size: 14px; overflow-wrap: anywhere; }
 .hrss-handling-summary { margin: 0; color: #6e6e73; font-size: 13px; line-height: 1.7; }
 .hrss-handling-table { overflow: auto; min-width: 0; min-height: 0; border: 1px solid #e5e5ea; border-radius: 12px; }
+.hrss-handling-table:focus-visible { outline: 3px solid #85b9ff; outline-offset: 2px; }
 .hrss-handling-table table { border-collapse: collapse; width: 100%; font-size: 13px; }
 .hrss-handling-table th { position: sticky; top: 0; background: #f5f5f7; color: #6e6e73; font-weight: 500; text-align: left; white-space: nowrap; }
 .hrss-handling-table td,.hrss-handling-table th { min-width: 100px; padding: 14px 16px; border-bottom: 1px solid #eeeef0; }
@@ -60,6 +62,14 @@
 .hrss-handling-table td:nth-child(4) { min-width: 150px; }
 .hrss-handling-table td:last-child { min-width: 220px; white-space: pre-wrap; }
 .hrss-handling-empty { padding: 32px 20px; border: 1px solid #e5e5ea; border-radius: 12px; text-align: center; color: #6e6e73; font-size: 14px; }
+.hrss-handling-warning { margin: 0; padding: 13px 16px; border: 1px solid #efdfbf; border-radius: 10px; color: #775615; background: #fffaf0; font-size: 13px; line-height: 1.7; }
+.shenzhen-handling-panel { width: min(1280px, 100%); }
+.shenzhen-handling-panel .hrss-handling-identity { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+.shenzhen-handling-panel .hrss-handling-table table { min-width: 2200px; }
+.shenzhen-handling-panel .hrss-handling-table th:first-child,.shenzhen-handling-panel .hrss-handling-table td:first-child { position: sticky; left: 0; background: #fff; z-index: 1; }
+.shenzhen-handling-panel .hrss-handling-table th:first-child { background: #f5f5f7; z-index: 2; }
+.shenzhen-handling-panel .hrss-handling-table td:nth-child(2) { min-width: 240px; }
+.shenzhen-handling-panel .hrss-handling-table td:nth-child(9) { min-width: 260px; white-space: pre-wrap; }
 .hrss-handling-panel footer { color: #86868b; font-size: 12px; line-height: 1.6; }
-@media(max-width: 700px) { .hrss-handling-backdrop { padding: 12px; }.hrss-handling-panel { padding: 20px; max-height: calc(100vh - 24px); }.hrss-handling-identity { grid-template-columns: 1fr; } }
+@media(max-width: 700px) { .hrss-handling-backdrop { padding: 12px; }.hrss-handling-panel { padding: 20px; max-height: calc(100vh - 24px); }.hrss-handling-identity,.shenzhen-handling-panel .hrss-handling-identity { grid-template-columns: 1fr; } }
 @media(max-width: 900px) { .hrss-ledger-head { align-items: flex-start; flex-wrap: wrap; }.hrss-ledger-filters input { min-width: 180px; }.hrss-ledger-footer div { flex-wrap: wrap; } }
