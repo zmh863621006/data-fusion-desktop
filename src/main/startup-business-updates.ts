@@ -19,15 +19,42 @@ export interface BusinessUpdateCheckResult {
 export class StartupBusinessUpdates {
   private state: AutomaticUpdateState;
   private checking?: Promise<BusinessUpdateCheckResult>;
+  private startupRetryTimer?: ReturnType<typeof setTimeout>;
+  private automaticWork?: Promise<void>;
+  private started = false;
   private stopped = false;
   constructor(private readonly deps: Dependencies) {
     this.state = { status: 'up-to-date', kind: 'business', shellVersion: deps.context.shellVersion,
       currentVersion: deps.context.version, automatic: true, installMode: 'startup', offline: deps.context.offline,
-      message: deps.context.offline ? '本次使用已校验的本地版本；下次启动将再次检查更新' : '启动更新检查已完成，当前业务版本可用' };
+      message: deps.context.offline ? '本次使用已校验的本地版本，进入应用后将自动补查更新' : '启动更新检查已完成，当前业务版本可用' };
   }
   snapshot(): AutomaticUpdateState { return structuredClone(this.state); }
-  start(): void { /* Cold-start enforcement belongs to the immutable bootstrap. */ }
+  start(): void {
+    if (this.started || this.stopped) return;
+    this.started = true;
+    // The immutable bootstrap owns the startup gate. Retry only its offline fallback,
+    // after the application has opened and cold network setup has had time to finish.
+    if (!this.deps.context.offline || !this.state.offline) return;
+    this.startupRetryTimer = setTimeout(() => {
+      this.startupRetryTimer = undefined;
+      this.automaticWork = this.retryOfflineStartup();
+    }, 10_000);
+    this.startupRetryTimer.unref?.();
+  }
   requestCheckSoon(): void { /* Account/settings changes cannot weaken or duplicate the startup gate. */ }
+  private clearStartupRetry(): void {
+    clearTimeout(this.startupRetryTimer);
+    this.startupRetryTimer = undefined;
+  }
+  private async retryOfflineStartup(): Promise<void> {
+    try {
+      // A manual check already in progress gets the first chance to recover. If it
+      // fails or also falls back offline, retain the single automatic follow-up.
+      await this.checking?.catch(() => {});
+      if (this.stopped || !this.state.offline || this.state.status === 'installing') return;
+      await this.check();
+    } catch { /* check() exposes a safe status; a background retry must not reject unhandled. */ }
+  }
   private set(value: Partial<AutomaticUpdateState>): void {
     if (this.stopped) return;
     this.state = { ...this.state, ...value }; this.deps.changed(this.snapshot());
@@ -45,6 +72,7 @@ export class StartupBusinessUpdates {
             progress: { downloaded: progress.downloaded ?? progress.received ?? 0, total: progress.total,
               percent: progress.total ? Math.min(99, Math.floor((progress.downloaded ?? progress.received ?? 0) / progress.total * 100)) : undefined } });
         });
+        if (!result.offline) this.clearStartupRetry();
         const available = newer(result.version, this.deps.context.version);
         const message = available ? '新业务版本已校验，保存工作后可重启应用；下次启动将自动进入新版本'
           : result.offline ? '暂时无法检查更新，当前继续使用已校验的本地版本' : '当前业务版本已是最新版本';
@@ -69,7 +97,9 @@ export class StartupBusinessUpdates {
     catch { this.set({ status: 'ready', message: '本次尚未重启，请保存工作后重试' }); throw new Error('应用尚未重启，请稍后重试'); }
   }
   async stop(): Promise<void> {
-    this.stopped = true; this.deps.context.cancelCheck?.();
-    await this.checking?.catch(() => {});
+    if (!this.stopped) {
+      this.stopped = true; this.clearStartupRetry(); this.deps.context.cancelCheck?.();
+    }
+    await Promise.allSettled([this.checking, this.automaticWork].filter(Boolean));
   }
 }

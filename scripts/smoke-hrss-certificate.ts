@@ -6,6 +6,7 @@ import { HRSS_SOURCE_CERTIFICATE_TRUST } from '../src/core/config/source-certifi
 import { HRSS_LOGIN_URL } from '../src/plugins/guangdong-hrss/catalog';
 import { installSourceCertificateTrust } from '../src/main/source-certificate-trust';
 import { LoginTabController } from '../src/main/login-tab';
+import { prepareHrssBrowserSession } from '../src/main/hrss-browser-session';
 
 // Optional, real-network check of the public login page. Never loads a user's profile or submits a login.
 assert(process.env.DATA_FUSION_UI_TEST_PROFILE, 'Use the isolated UI runner');
@@ -17,6 +18,7 @@ const controller = new LoginTabController();
 void app.whenReady().then(async () => {
   await mkdir(evidence, { recursive: true });
   let prompts = 0, reads = 0, writes = 0, acceptedAuthorityChecks = 0;
+  await prepareHrssBrowserSession();
   const certificateChecks: Array<{ errorCode: number; result: number }> = [];
   const browser = session.fromPartition(HRSS_SOURCE_CERTIFICATE_TRUST.partition);
   const originalInstall = browser.setCertificateVerifyProc.bind(browser);

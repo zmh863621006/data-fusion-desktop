@@ -119,9 +119,16 @@ Section
   ${EndIf}
   ; Arguments remain data passed to a fixed local executable. No command shell
   ; is involved. /S and /D are preserved for the existing verified updater.
+  ; The preparation page has finished its job. Keep the process alive so the
+  ; selected component stays in $PLUGINSDIR and its exit code reaches the updater,
+  ; but leave the actual installation UI entirely to that component.
+  HideWindow
   ClearErrors
   ExecWait '"$SelectedInstaller" $ForwardArguments' $0
   ${If} ${Errors}
+    ${IfNot} ${Silent}
+      MessageBox MB_OK|MB_ICONSTOP "安装程序未能启动，请重新运行安装包后重试。"
+    ${EndIf}
     SetErrorLevel 23
   ${Else}
     SetErrorLevel $0

@@ -12,27 +12,60 @@ const quote = value => value.replaceAll('$', () => '$$').replaceAll('"', '$\\"')
 const source = await readFile('resources/nsis-universal.nsi', 'utf8');
 const exists = async file => access(file).then(() => true, () => false);
 assert(!/AtLeastServicePack|PreparePrerequisites|RunOnce|nsis-prerequisites|powershell|cmd\.exe/i.test(source));
+assert(source.indexOf('HideWindow') > source.indexOf('安装组件提取失败'));
+assert(source.indexOf('HideWindow') < source.indexOf('ExecWait'));
+assert(source.includes('安装程序未能启动'));
 const versionBase = 10000 + Math.floor(Math.random() * 40000);
 const reports = [];
 try {
   for (const [index, scenario] of [
-    { name: 'actual-win10', track: 'modern' },
+    { name: 'actual-win10', track: 'modern', interactive: true },
     { name: 'win7-7600-rtm', track: 'legacy', conditions: [true, false, true] },
-    { name: 'win7-7601-sp1', track: 'legacy', conditions: [true, false, true] },
+    { name: 'win7-7601-sp1', track: 'legacy', conditions: [true, false, true], interactive: true },
     { name: 'child-cancelled', track: 'modern', childExit: 1602 },
+    { name: 'child-launch-failed', track: 'modern', launchError: true },
     { name: 'unsupported-32bit', conditions: [false, true, false] },
     { name: 'unsupported-windows8', conditions: [true, false, false] },
   ].entries()) {
     const directory = join(work, scenario.name);
     await mkdir(directory);
     const version = `0.0.${versionBase + index}`;
+    const lifecycle = join(directory, 'lifecycle.ini');
     for (const track of ['modern', 'legacy']) {
       const child = join(directory, `${track}.exe`);
+      if (scenario.launchError && track === scenario.track) {
+        await writeFile(child, 'Synthetic invalid executable; never an application installer.');
+        continue;
+      }
       const fixture = `Unicode true
+!include "LogicLib.nsh"
 RequestExecutionLevel user
-SilentInstall silent
+Name "Synthetic installation component"
+Caption "Synthetic installation component ${version}"
+SilentInstall ${scenario.interactive ? 'normal' : 'silent'}
+Page instfiles
+AutoCloseWindow true
 OutFile "${quote(child)}"
 Section
+ ReadINIStr $2 "${quote(lifecycle)}" "wrapper" "parentHwnd"
+ ReadINIStr $4 "${quote(lifecycle)}" "wrapper" "parentPid"
+ System::Call 'kernel32::OpenProcess(i 0x100000, i 0, i r4) p .r5'
+ System::Call 'kernel32::WaitForSingleObject(p r5, i 0) i .r6'
+ WriteINIStr "${quote(lifecycle)}" "child" "parentProcessBefore" "$6"
+ System::Call 'user32::IsWindow(p r2) i .r3'
+ WriteINIStr "${quote(lifecycle)}" "child" "parentWindowAlive" "$3"
+ System::Call 'user32::IsWindowVisible(p r2) i .r3'
+ WriteINIStr "${quote(lifecycle)}" "child" "parentVisibleAtChild" "$3"
+ System::Call 'user32::IsWindowVisible(p $HWNDPARENT) i .r3'
+ WriteINIStr "${quote(lifecycle)}" "child" "childVisible" "$3"
+ Sleep 250
+ System::Call 'kernel32::WaitForSingleObject(p r5, i 0) i .r6'
+ WriteINIStr "${quote(lifecycle)}" "child" "parentProcessAfter" "$6"
+ System::Call 'kernel32::CloseHandle(p r5)'
+ System::Call 'user32::IsWindow(p r2) i .r3'
+ WriteINIStr "${quote(lifecycle)}" "child" "parentStillAlive" "$3"
+ IfFileExists "$EXEPATH" 0 +2
+  WriteINIStr "${quote(lifecycle)}" "child" "componentPresent" "1"
  FileOpen $0 "${quote(join(directory, track + '.marker'))}" w
  FileWrite $0 "$CMDLINE"
  FileClose $0
@@ -44,6 +77,14 @@ SectionEnd`;
     // Only test-generated source substitutes the Windows conditions. The
     // production installer has no runtime/environment OS override.
     let wrapper = source;
+    // Instrument only this generated wrapper so the tiny child can inspect its
+    // own parent window. No real application installer or user window is opened.
+    wrapper = wrapper.replace('  HideWindow', `  System::Call 'user32::IsWindowVisible(p $HWNDPARENT) i .r1'
+  WriteINIStr "${quote(lifecycle)}" "wrapper" "beforeVisible" "$1"
+  WriteINIStr "${quote(lifecycle)}" "wrapper" "parentHwnd" "$HWNDPARENT"
+  System::Call 'kernel32::GetCurrentProcessId() i .r1'
+  WriteINIStr "${quote(lifecycle)}" "wrapper" "parentPid" "$1"
+  HideWindow`);
     if (scenario.conditions) {
       for (const [i, token] of ['${RunningX64}', '${AtLeastWin10}', '${IsWin7}'].entries()) {
         assert.equal(wrapper.split(token).length, 2);
@@ -72,26 +113,44 @@ SectionEnd`;
     assert(!(await exists(join(directory, 'modern.marker'))));
     assert(!(await exists(join(directory, 'legacy.marker'))));
     const destination = join(directory, "应用目录 [测试] O'Brien & $files");
-    const run = spawnSync(bootstrap, ['/S', `/D=${destination}`], { windowsHide: true, timeout: 30000 });
-    const expectedExit = scenario.track ? scenario.childExit ?? 42 : 87;
+    const run = spawnSync(bootstrap, [...(scenario.interactive ? [] : ['/S']), `/D=${destination}`], { windowsHide: true, timeout: 30000 });
+    const expectedExit = scenario.launchError ? 23 : scenario.track ? scenario.childExit ?? 42 : 87;
     assert.equal(run.status, expectedExit, `${scenario.name}: ${run.error ?? ''}`);
     for (const track of ['modern', 'legacy']) {
       const marker = join(directory, `${track}.marker`);
-      if (scenario.track === track) {
+      if (scenario.track === track && !scenario.launchError) {
         const argumentsSeen = await readFile(marker, 'utf8');
-        assert(argumentsSeen.includes('/S'));
+        assert.equal(argumentsSeen.includes('/S'), !scenario.interactive);
         assert(argumentsSeen.includes(`/D=${destination}`));
         assert(!argumentsSeen.includes('/CHECKOS'));
       } else { assert(!(await exists(marker))); }
     }
+    let windowLifecycle;
+    if (scenario.track && !scenario.launchError) {
+      const bytes = await readFile(lifecycle);
+      const text = bytes.toString(bytes[0] === 0xff && bytes[1] === 0xfe ? 'utf16le' : 'utf8').replace(/^\ufeff/, '');
+      const value = key => Number(text.match(new RegExp(`^${key}=(\\d+)`, 'm'))?.[1] ?? NaN);
+      windowLifecycle = { wrapperInitiallyVisible: value('beforeVisible') === 1,
+        wrapperHiddenWhenChildRuns: value('parentVisibleAtChild') === 0,
+        componentWindowVisible: value('childVisible') === 1,
+        wrapperWaitsForChild: value('parentProcessBefore') === 258 && value('parentProcessAfter') === 258,
+        wrapperWindowRetained: scenario.interactive ? value('parentWindowAlive') === 1 && value('parentStillAlive') === 1 : null,
+        extractedComponentPreserved: value('componentPresent') === 1 };
+      assert.equal(windowLifecycle.wrapperInitiallyVisible, Boolean(scenario.interactive), `${scenario.name}: ${text}`);
+      assert(windowLifecycle.wrapperHiddenWhenChildRuns, `${scenario.name}: ${text}`);
+      assert.equal(windowLifecycle.componentWindowVisible, Boolean(scenario.interactive), `${scenario.name}: ${text}`);
+      if (scenario.interactive) assert(windowLifecycle.wrapperWindowRetained, `${scenario.name}: ${text}`);
+      assert(windowLifecycle.wrapperWaitsForChild && windowLifecycle.extractedComponentPreserved, `${scenario.name}: ${text}`);
+    }
     reports.push({ scenario: scenario.name, selectedRuntime: scenario.track ?? null, exit: run.status,
-      actualHostDetection: !scenario.conditions, installationSimulated: true });
+      actualHostDetection: !scenario.conditions, installationSimulated: true, ...(windowLifecycle ? { windowLifecycle } : {}) });
   }
   const applicationVersion = JSON.parse(await readFile('package.json', 'utf8')).version;
   const output = resolve('private/deploy', `universal-${applicationVersion}`);
   await mkdir(output, { recursive: true });
   const result = { passed: true, productionWrapperSource: true, directoryAndSilentArgumentsPreserved: true,
-    realNsisExecutables: true, actualApplicationInstalled: false, systemPrerequisitesInstalled: false, reports };
+    realNsisExecutables: true, preparationWindowHandsOffToComponent: true,
+    actualApplicationInstalled: false, systemPrerequisitesInstalled: false, reports };
   await writeFile(join(output, 'wrapper-dispatch.json'), JSON.stringify(result, null, 2));
   console.log(JSON.stringify(result));
 } finally {
