@@ -22,6 +22,7 @@ vi.mock('electron', async () => {
 });
 import { LoginTabController, type SourcePage } from './login-tab';
 import { IPC_CHANNELS } from '../core/ipc/channels';
+import { REVIEWED_CERTIFICATE } from './source-endpoint-certificate.test-fixture';
 
 afterEach(() => { vi.useRealTimers(); });
 
@@ -291,6 +292,23 @@ describe('persistent source system tabs', () => {
     expect(controller.state().tabs[0].error).toContain('加载失败');
     expect(JSON.stringify(controller.state())).not.toContain('sensitive');
     contents.emit('did-start-loading'); expect(controller.state().tabs[0].error).toBeUndefined();
+  });
+  it('accepts the reviewed Shenzhen IP certificate only in its own source tab and exact origin', () => {
+    vi.useFakeTimers(); vi.setSystemTime(new Date('2026-11-27T00:00:00Z'));
+    const controller = new LoginTabController(); const source = plugin('shenzhen-integrated-services');
+    source.loginPage = { url: 'https://61.144.226.148:8001/cas/login', allowedOrigin: 'https://61.144.226.148:8001', partition: 'persist:shenzhen-integrated-services' };
+    controller.open(windowMock(), source);
+    const contents = mocks.views[0].webContents, event = { preventDefault: vi.fn() }, callback = vi.fn();
+    const certificate = { data: REVIEWED_CERTIFICATE, fingerprint: 'untrusted-display-fingerprint' };
+    contents.emit('certificate-error', event, 'https://61.144.226.148:8002/cas/login', 'net::ERR_CERT_COMMON_NAME_INVALID', certificate, callback);
+    contents.emit('certificate-error', event, source.loginPage.url, 'net::ERR_CERT_REVOKED', certificate, callback);
+    expect(event.preventDefault).not.toHaveBeenCalled(); expect(callback).not.toHaveBeenCalled();
+    contents.emit('certificate-error', event, source.loginPage.url, 'net::ERR_CERT_COMMON_NAME_INVALID', certificate, callback);
+    expect(event.preventDefault).toHaveBeenCalledOnce(); expect(callback).toHaveBeenCalledExactlyOnceWith(true);
+    controller.open(windowMock(), plugin('a'));
+    mocks.views[1].webContents.emit('certificate-error', event, source.loginPage.url, 'net::ERR_CERT_COMMON_NAME_INVALID', certificate, callback);
+    expect(callback).toHaveBeenCalledOnce();
+    controller.close();
   });
   it('targets history and reload actions without affecting another tab', () => {
     const controller = new LoginTabController(); const window = windowMock();

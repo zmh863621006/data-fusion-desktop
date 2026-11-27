@@ -4,6 +4,7 @@ import type { SystemCredentials } from './credential-store';
 import type { SourceTab, SourceTabsState } from '../core/session/source-tabs';
 import type { SessionState } from '../core/session/types';
 import { IPC_CHANNELS } from '../core/ipc/channels';
+import { approvedSourceEndpointCertificate } from './source-endpoint-certificate';
 
 const BROWSER_CHROME_HEIGHT = 104;
 function hashRoute(url: URL): string { return url.hash.split('?')[0].replace(/\/$/, ''); }
@@ -135,6 +136,14 @@ export class LoginTabController {
     const SourceView = modernSourceViews() ? WebContentsView : BrowserView;
     const view = new SourceView({
       webPreferences: { partition: loginPage.partition, contextIsolation: true, nodeIntegration: false, sandbox: true },
+    });
+    // WebContents supplies the complete URL, unlike session verification's hostname.
+    // This keeps the reviewed IP/name exception confined to its exact port and tab.
+    view.webContents.on('certificate-error', (event, url, error, certificate, callback) => {
+      if (!approvedSourceEndpointCertificate(plugin.id, loginPage, url, error, certificate.data)) return;
+      event.preventDefault();
+      callback(true);
+      console.info('原系统证书定向校验通过', { systemId: plugin.id, origin: loginPage.allowedOrigin });
     });
     const tab: Tab = { view, credentials, plugin, persistStorage: options.persistStorage !== false, allowedOrigin: loginPage.allowedOrigin, credentialFields: loginPage.credentialFields, sessionRevision: 0, summary: {
       systemId: plugin.id, systemName: plugin.name, displayUrl: this.displayUrl(loginPage.url), loading: true,
