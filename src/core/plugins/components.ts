@@ -7,6 +7,6 @@ export interface ComponentSummary {
   description?: string;
   publisher?: string;
   authorized: boolean;
-  workspaceMode?: 'standard' | 'return-ledger' | 'list-ledger' | 'detail-ledger';
+  workspaceMode?: 'standard' | 'return-ledger' | 'list-ledger' | 'detail-ledger' | 'automation';
   supportsCredentialConfiguration?: boolean;
 }

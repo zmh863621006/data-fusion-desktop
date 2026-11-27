@@ -7,7 +7,7 @@ export interface BusinessSystemPlugin {
   version: string;
   description?: string;
   /** Selects the system-specific renderer shell; systems opt in instead of inheriting another system's menus. */
-  workspaceMode?: 'standard' | 'return-ledger' | 'list-ledger' | 'detail-ledger';
+  workspaceMode?: 'standard' | 'return-ledger' | 'list-ledger' | 'detail-ledger' | 'automation';
   supportsCredentialConfiguration?: boolean;
   auth: AuthAdapter;
   sessionRecovery?: SessionRecovery;

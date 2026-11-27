@@ -18,6 +18,16 @@ import type { AppSettings } from '../core/settings/types';
 import type { OneWindowState, OneWindowPlan, OneWindowBatch } from '../core/one-window/types';
 
 const desktopApi = {
+  housingBinding: {
+    importWorkbook: (): Promise<import('../core/housing-binding/types').HousingImportPreview | null> => ipcRenderer.invoke(IPC_CHANNELS.housingBindingImport),
+    create: (input: import('../core/housing-binding/types').HousingBindingCreate): Promise<import('../core/housing-binding/types').HousingBindingJob> => ipcRenderer.invoke(IPC_CHANNELS.housingBindingCreate, input),
+    state: (page = 1): Promise<import('../core/housing-binding/types').HousingBindingState> => ipcRenderer.invoke(IPC_CHANNELS.housingBindingState, page),
+    detail: (id: string, page = 1): Promise<import('../core/housing-binding/types').HousingBindingDetail> => ipcRenderer.invoke(IPC_CHANNELS.housingBindingDetail, id, page),
+    cancel: (id: string): Promise<import('../core/housing-binding/types').HousingBindingJob> => ipcRenderer.invoke(IPC_CHANNELS.housingBindingCancel, id),
+    retry: (id: string): Promise<import('../core/housing-binding/types').HousingBindingJob> => ipcRenderer.invoke(IPC_CHANNELS.housingBindingRetry, id),
+    template: (): Promise<{ fileName: string; directory: string }> => ipcRenderer.invoke(IPC_CHANNELS.housingBindingTemplate),
+    openTemplateFolder: (): Promise<boolean> => ipcRenderer.invoke(IPC_CHANNELS.housingBindingTemplateFolder),
+  },
   returnUploads: {
     state: (): Promise<import('../core/returns/upload-queue').ReturnUploadState> => ipcRenderer.invoke(IPC_CHANNELS.returnUploadState),
     retry: (includeHistory = false): Promise<import('../core/returns/upload-queue').ReturnUploadState> => ipcRenderer.invoke(IPC_CHANNELS.returnUploadRetry, includeHistory),

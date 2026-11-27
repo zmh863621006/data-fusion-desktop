@@ -3,7 +3,8 @@ import { appRuntime } from './runtime';
 import { IPC_CHANNELS } from '../core/ipc/channels';
 import { parseIdentifier, parseLocalRecordQuery, parseQueryContext, parseRows, parseSettingsPatch, parseTaskHistoryQuery } from '../core/ipc/validation';
 import { assertMatterQueryAvailable, validateFilters } from '../core/query/validation';
-import { readFile } from 'node:fs/promises';
+import { readFile, stat } from 'node:fs/promises';
+import { basename } from 'node:path';
 import { loginTabController } from './login-tab';
 import { operationalLog } from './operational-log';
 import type { OperationalLogLevel, OperationalLogQuery } from '../core/diagnostics/types';
@@ -42,6 +43,8 @@ export function registerIpcHandlers(getTrustedWebContentsId: () => number | unde
     return choice.response === 1;
   };
   const businessChannels = new Set<string>([
+    IPC_CHANNELS.housingBindingImport, IPC_CHANNELS.housingBindingCreate, IPC_CHANNELS.housingBindingRetry,
+    IPC_CHANNELS.housingBindingCancel, IPC_CHANNELS.housingBindingTemplate,
     IPC_CHANNELS.returnUploadRetry,
     IPC_CHANNELS.oneWindowRun, IPC_CHANNELS.oneWindowRetry, IPC_CHANNELS.oneWindowSavePlan,
     IPC_CHANNELS.licenseActivate, IPC_CHANNELS.licenseImport, IPC_CHANNELS.licenseDeactivate, IPC_CHANNELS.licenseRefresh,
@@ -65,6 +68,24 @@ export function registerIpcHandlers(getTrustedWebContentsId: () => number | unde
     }
   };
 
+  handle(IPC_CHANNELS.housingBindingImport, async event => {
+    trusted(event);
+    const service = await appRuntime.housingBinding();
+    const selected = await dialog.showOpenDialog({ title: '上传房屋编码', properties: ['openFile'], filters: [{ name: 'Excel工作簿', extensions: ['xlsx'] }] });
+    if (selected.canceled || !selected.filePaths.length) return null;
+    const file = selected.filePaths[0], info = await stat(file);
+    if (!info.isFile() || info.size > 10 * 1024 * 1024) throw new Error('请选择不超过10MB的.xlsx工作簿');
+    return service.importWorkbook(await readFile(file), basename(file));
+  });
+  handle(IPC_CHANNELS.housingBindingCreate, async (event, input) => { trusted(event); return (await appRuntime.housingBinding()).create(input); });
+  handle(IPC_CHANNELS.housingBindingState, async (event, page) => { trusted(event); return (await appRuntime.housingBinding()).state(page); });
+  handle(IPC_CHANNELS.housingBindingDetail, async (event, id, page) => { trusted(event); return (await appRuntime.housingBinding()).detail(parseIdentifier(id, '任务标识'), page); });
+  handle(IPC_CHANNELS.housingBindingCancel, async (event, id) => { trusted(event); return (await appRuntime.housingBinding()).cancel(parseIdentifier(id, '任务标识')); });
+  handle(IPC_CHANNELS.housingBindingRetry, async (event, id) => { trusted(event); return (await appRuntime.housingBinding()).retry(parseIdentifier(id, '任务标识')); });
+  handle(IPC_CHANNELS.housingBindingTemplate, async event => { trusted(event); return appRuntime.housingBindingTemplate(); });
+  handle(IPC_CHANNELS.housingBindingTemplateFolder, async event => {
+    trusted(event); const location = await appRuntime.housingTemplateFolder(); return openExportFolder(location.file, location.directory);
+  });
   handle(IPC_CHANNELS.oneWindowState, async (event, matterId, page) => {
     trusted(event);
     return (await appRuntime.oneWindow()).state(parseIdentifier(matterId, '事项标识'), page);

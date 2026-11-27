@@ -1,4 +1,12 @@
 export const IPC_CHANNELS = {
+  housingBindingImport: 'housing-binding:import',
+  housingBindingCreate: 'housing-binding:create',
+  housingBindingState: 'housing-binding:state',
+  housingBindingDetail: 'housing-binding:detail',
+  housingBindingCancel: 'housing-binding:cancel',
+  housingBindingRetry: 'housing-binding:retry',
+  housingBindingTemplate: 'housing-binding:template',
+  housingBindingTemplateFolder: 'housing-binding:template-folder',
   returnUploadState: 'return-upload:state',
   returnUploadRetry: 'return-upload:retry',
   oneWindowState: 'one-window:state',

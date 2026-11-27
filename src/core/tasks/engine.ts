@@ -70,8 +70,8 @@ interface ScheduledTask {
   writes: Promise<void>;
 }
 
-const SERIAL_SYSTEMS = new Set(['guangdong-hrss', 'shenzhen-integrated-services']);
-const REMOTE_TYPES = new Set(['data-return', 'remote-query']);
+const SERIAL_SYSTEMS = new Set(['guangdong-hrss', 'shenzhen-integrated-services', 'shenzhen-housing-rental']);
+const REMOTE_TYPES = new Set(['data-return', 'remote-query', 'housing-binding']);
 const remoteSystem = (task: RuntimeTask) => REMOTE_TYPES.has(task.type) ? task.systemId : undefined;
 const serialSystem = (task: RuntimeTask) => {
   const systemId = remoteSystem(task);

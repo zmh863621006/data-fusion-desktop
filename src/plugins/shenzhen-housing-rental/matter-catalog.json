@@ -1,0 +1,15 @@
+{
+  "id": "shenzhen-housing-rental",
+  "name": "房屋租赁管理信息系统",
+  "version": "0.1.0",
+  "matters": [
+    {
+      "id": "house-code-binding",
+      "name": "房屋编码自动绑定",
+      "departmentId": "housing-rental",
+      "departmentName": "房屋租赁",
+      "departmentOrder": 0,
+      "matterOrder": 0
+    }
+  ]
+}

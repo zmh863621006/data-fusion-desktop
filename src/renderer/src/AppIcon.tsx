@@ -36,6 +36,7 @@ const systemIcons: Record<string, IconName> = {
   'oversize-transport': 'truck', 'online-car-permit': 'car',
   'guangdong-hrss': 'person',
   'shenzhen-one-window': 'government',
+  'shenzhen-housing-rental': 'home',
 };
 export const systemIcon = (id: string): IconName => systemIcons[id] ?? 'components';
 

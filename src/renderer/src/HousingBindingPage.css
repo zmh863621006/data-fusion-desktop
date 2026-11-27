@@ -1,0 +1,70 @@
+.housing-binding-page { display: grid; gap: 20px; min-width: 0; color: #1d1d1f; }
+.housing-binding-page > .panel { min-width: 0; padding: 26px; }
+.housing-panel-head { display: flex; align-items: flex-start; justify-content: space-between; gap: 20px; margin-bottom: 22px; }
+.housing-panel-head h2 { margin: 5px 0 8px; font-size: 23px; font-weight: 650; letter-spacing: -.5px; }
+.housing-panel-head h3 { margin: 0 0 7px; font-size: 17px; font-weight: 600; }
+.housing-panel-head p, .housing-upload-row p, .housing-import-summary p, .housing-login-pause p { margin: 0; color: #6e6e73; font-size: 13px; line-height: 1.65; }
+.housing-eyebrow { font-size: 11px; font-weight: 600; color: #6e6e73; letter-spacing: 1px; }
+.housing-binding-fields { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 22px; }
+.housing-binding-fields label { display: grid; gap: 9px; color: #515154; font-size: 13px; }
+.housing-binding-fields input { box-sizing: border-box; width: 100%; min-width: 0; min-height: 46px; padding: 11px 13px; border: 1px solid #d2d2d7; border-radius: 10px; background: #fff; color: #1d1d1f; font: inherit; }
+.housing-binding-fields input::placeholder { color: #909095; }
+.housing-binding-fields input:focus-visible, .housing-binding-page button:focus-visible { outline: 3px solid #007aff40; outline-offset: 3px; }
+.housing-binding-fields input:disabled { background: #f5f5f7; color: #86868b; }
+.housing-upload-row { display: flex; align-items: center; justify-content: space-between; gap: 20px; padding: 22px 0; margin-top: 4px; }
+.housing-upload-row h3 { margin: 0 0 7px; font-size: 14px; font-weight: 600; }
+.housing-button-row { display: flex; align-items: center; flex-wrap: wrap; gap: 10px; }
+.housing-binding-page button { min-height: 44px; }
+.housing-binding-page .text-button { display: inline-flex; align-items: center; justify-content: center; gap: 6px; }
+.housing-create-row { display: flex; align-items: center; flex-wrap: wrap; gap: 14px; padding-top: 20px; border-top: 1px solid #eeeef0; }
+.housing-create-row .primary { padding-left: 22px; padding-right: 22px; }
+.housing-session-note { display: inline-flex; align-items: center; gap: 6px; color: #6e6e73; font-size: 12px; }
+.housing-session-note .app-icon { color: #24834a; }
+.housing-import-summary { padding: 16px 18px; margin: 0 0 20px; border: 1px solid #e2e8ee; border-radius: 12px; background: #f7f9fc; }
+.housing-file-heading { display: flex; align-items: center; gap: 9px; min-width: 0; margin-bottom: 8px; color: #424247; font-size: 13px; }
+.housing-file-heading strong { overflow-wrap: anywhere; }
+.housing-import-summary .housing-code-sample { font-family: ui-monospace, SFMono-Regular, Consolas, monospace; overflow-wrap: anywhere; margin-top: 7px; font-size: 11px; color: #6e6e73; }
+.housing-import-summary.has-errors { background: #fff8f2; border-color: #edccaf; }
+.housing-import-summary .housing-validation-error { color: #9c4e17; margin-top: 8px; }
+.housing-import-summary ul { padding-left: 21px; margin: 8px 0 0; color: #9c4e17; font-size: 12px; line-height: 1.8; }
+.housing-message { margin: 16px 0 0; padding: 12px 14px; border-radius: 10px; background: #f5f5f7; color: #515154; font-size: 13px; line-height: 1.65; white-space: pre-wrap; overflow-wrap: anywhere; }
+.housing-jobs-panel > .housing-message, .housing-detail-panel > .housing-message { margin: 0 0 16px; }
+.housing-table-scroll { min-width: 0; overflow: auto; overscroll-behavior: contain; }
+.housing-binding-page table { width: 100%; border-collapse: collapse; font-size: 13px; }
+.housing-binding-page th { text-align: left; color: #6e6e73; font-size: 12px; font-weight: 500; background: #f5f5f7; }
+.housing-binding-page th, .housing-binding-page td { padding: 13px 14px; border-bottom: 1px solid #eeeef0; vertical-align: top; white-space: nowrap; }
+.housing-binding-page tbody tr:hover { background: #fafbfe; }
+.housing-binding-page tbody tr.is-selected { background: #f2f7fe; }
+.housing-job-select { padding: 0; border: 0; background: transparent; text-align: left; color: #007aff; font: inherit; font-weight: 550; cursor: pointer; }
+.housing-certificate-number { display: block; color: #6e6e73; margin-top: 5px; white-space: normal; max-width: 260px; overflow-wrap: anywhere; font-size: 12px; }
+.housing-status { display: inline-flex; align-items: center; min-height: 26px; padding: 2px 9px; border-radius: 7px; background: #f0f0f3; color: #626269; font-size: 12px; line-height: 1.5; }
+.housing-phase-running, .housing-row-binding { background: #eaf3ff; color: #1467bf; }
+.housing-phase-completed, .housing-row-succeeded, .housing-row-already-bound { background: #edf7f0; color: #267843; }
+.housing-phase-waiting-login, .housing-phase-interrupted, .housing-row-unknown { background: #fff3e5; color: #9c4e17; }
+.housing-phase-failed, .housing-row-failed { background: #fff0ee; color: #b13b32; }
+.housing-binding-page .housing-empty { padding: 32px 16px; text-align: center; color: #86868b; white-space: normal; }
+.housing-code-value { font-family: ui-monospace, SFMono-Regular, Consolas, monospace; font-size: 12px; font-variant-numeric: tabular-nums; }
+.housing-binding-page td.housing-result-message { white-space: normal; min-width: 200px; max-width: 440px; overflow-wrap: anywhere; line-height: 1.65; }
+.housing-counts { display: grid; grid-template-columns: repeat(5, minmax(0, 1fr)); margin: 0 0 18px; gap: 14px; padding: 20px 0; border-top: 1px solid #eeeef0; border-bottom: 1px solid #eeeef0; }
+.housing-counts > div { min-width: 0; }
+.housing-counts dt { font-size: 12px; color: #6e6e73; }
+.housing-counts dd { margin: 9px 0 0; font-size: 26px; font-weight: 550; font-variant-numeric: tabular-nums; letter-spacing: -.4px; }
+.housing-counts .housing-count-success dd { color: #267843; }
+.housing-counts .housing-count-failed dd { color: #b13b32; }
+.housing-task-progress { display: flex; align-items: center; gap: 18px; margin-bottom: 18px; color: #6e6e73; font-size: 12px; }
+.housing-task-progress progress { flex: 1; min-width: 60px; height: 5px; border: 0; border-radius: 5px; background: #e5e5ea; overflow: hidden; accent-color: #007aff; }
+.housing-task-progress progress::-webkit-progress-bar { background: #e5e5ea; }
+.housing-task-progress progress::-webkit-progress-value { background: #007aff; border-radius: 5px; }
+.housing-task-progress span { flex-shrink: 0; }
+.housing-pagination { display: flex; align-items: center; justify-content: flex-end; gap: 10px; margin-top: 18px; font-size: 12px; color: #6e6e73; }
+.housing-pagination > span { margin-right: auto; }
+.housing-detail-more { margin-top: 16px; }
+.housing-login-pause { display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 14px; padding: 16px; margin-bottom: 18px; border-radius: 11px; background: #fff8ed; }
+.housing-login-pause strong { color: #8e501d; font-size: 13px; }
+.housing-login-pause p { margin-top: 5px; }
+.housing-binding-compact { margin-bottom: 26px; }
+.housing-binding-compact .housing-panel-head h2 { font-size: 21px; }
+.housing-binding-compact .housing-result-table { font-size: 12px; }
+@media (max-width: 850px) { .housing-binding-page > .panel { padding: 20px; }.housing-upload-row { align-items: flex-start; flex-direction: column; gap: 14px; }.housing-counts { gap: 10px; }.housing-counts dd { font-size: 23px; } }
+@media (max-width: 620px) { .housing-binding-fields { grid-template-columns: 1fr; gap: 16px; }.housing-panel-head { gap: 12px; }.housing-panel-head h2 { font-size: 20px; }.housing-counts { grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 20px; }.housing-create-row { align-items: flex-start; }.housing-create-row > .primary { width: 100%; }.housing-pagination { flex-wrap: wrap; }.housing-pagination > span { flex-basis: 100%; }.housing-binding-page > .panel { padding: 18px; }.housing-panel-head .housing-button-row { justify-content: flex-end; } }
+@media (prefers-reduced-motion: reduce) { .housing-binding-page * { scroll-behavior: auto; transition: none; } }

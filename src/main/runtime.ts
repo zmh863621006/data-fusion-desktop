@@ -24,7 +24,7 @@ import { OnlineLicenseMonitor } from '../core/license/online-monitor';
 import { EnterpriseEnrichmentService, enterpriseInput, mergeEnterpriseRecord } from '../core/enterprise/service';
 import type { LicenseGrant } from '../core/license/types';
 import { assertSystemLicensed } from '../core/license/gate';
-import { join } from 'node:path';
+import { join, dirname } from 'node:path';
 import { SqlitePlatformStore, type LocalRecordQuery, type TaskHistoryQuery } from '../core/storage/platform-store';
 import type { AppSettings } from '../core/settings/types';
 import type { AuditEventType } from '../core/audit/types';
@@ -61,7 +61,13 @@ import { OneWindowService } from './one-window-service';
 import { OneWindowUploader } from '../core/one-window/uploader';
 import { ReturnBatchService } from './return-batch-service';
 import { createOneWindowWorkbook } from '../core/one-window/workbook';
-import { writeFile } from 'node:fs/promises';
+import { mkdir, writeFile, lstat, realpath } from 'node:fs/promises';
+import { randomUUID } from 'node:crypto';
+import { createHousingRentalPlugin, HousingRentalClient } from '../plugins/shenzhen-housing-rental';
+import housingCatalog from '../plugins/shenzhen-housing-rental/matter-catalog.json';
+import { HousingBindingService } from './housing-binding-service';
+import { createHousingTemplate } from '../core/housing-binding/workbook';
+import { HOUSING_SYSTEM_ID, HOUSING_MATTER_ID } from '../core/housing-binding/types';
 import { ReturnUploadQueue, type ReturnUploadState } from '../core/returns/upload-queue';
 
 const PRODUCT_PUBLIC_KEY = `-----BEGIN PUBLIC KEY-----
@@ -77,6 +83,8 @@ b1oByVzE+8Uj5k4ApNg1P0JX3kxWn0qhcUFtRxsMO/nPAgMBAAE=
 -----END PUBLIC KEY-----`;
 
 const builtinModules = [
+  { id: housingCatalog.id, name: housingCatalog.name, version: housingCatalog.version,
+    publisher: '数据融合助手', description: '根据受理编号、产权证与Excel房屋编码创建自动挂接任务' },
   { id: oneWindowCatalog.id, name: oneWindowCatalog.name, version: oneWindowCatalog.version,
     publisher: '数据融合助手', description: '城管事项完整业务详情回流、定时采集与推送后台' },
   {
@@ -159,6 +167,8 @@ export class AppRuntime {
   private hrssReturnTail: Promise<void> = Promise.resolve();
   private hrssReturnPending = 0;
   private oneWindowService?: OneWindowService;
+  private housingBindingService?: HousingBindingService;
+  private housingTemplate?: { file: string; directory: string };
   private returnBatchService?: ReturnBatchService;
   private returnUploads?: ReturnUploadQueue;
 
@@ -176,6 +186,7 @@ export class AppRuntime {
 
   resumeReturnQueue(state: {systemId:string;status:string}): void {
     if (state.status==='authenticated') this.tasks.resumeSystem(state.systemId);
+    if (state.systemId === HOUSING_SYSTEM_ID) this.housingBindingService?.setAuthenticated(state.status === 'authenticated');
   }
 
   /** Each HRSS return owns its slot through query and commit; waiting cancellation never breaks the chain. */
@@ -287,6 +298,10 @@ export class AppRuntime {
     this.plugins.register(createShenzhenHazardousPlugin());
     this.plugins.register(createSpecialEquipmentPlugin());
     this.plugins.register(createFoodDrugPlugin());
+    const housingClient = new HousingRentalClient();
+    const housingPlugin = createHousingRentalPlugin({ client: housingClient });
+    housingPlugin.workspaceMode = 'automation';
+    this.plugins.register(housingPlugin);
     const oneWindowPlugin = createOneWindowPlugin();
     this.plugins.register(oneWindowPlugin);
     for (const definition of catalogOnlySystems) this.plugins.register(createCatalogOnlySystem(definition));
@@ -329,6 +344,10 @@ export class AppRuntime {
     });
     await this.oneWindowService.initialize();
     this.oneWindowService.start();
+    this.housingBindingService = new HousingBindingService({ database, tasks: this.tasks, client: housingClient,
+      authorize: () => this.requireLicense(HOUSING_SYSTEM_ID, HOUSING_MATTER_ID),
+      session: () => housingPlugin.getSessionState({ force: true }) });
+    await this.housingBindingService.initialize();
   }
 
   async restoreSourceTabs(window: BrowserWindow): Promise<void> {
@@ -359,6 +378,28 @@ export class AppRuntime {
 
   async forgetSession(systemId: string): Promise<void> { await this.sessionRecovery?.forget(systemId); }
 
+  async housingBinding(): Promise<HousingBindingService> {
+    await this.requireLicense(HOUSING_SYSTEM_ID, HOUSING_MATTER_ID);
+    if (!this.housingBindingService) throw new Error('房屋自动绑定模块尚未就绪');
+    return this.housingBindingService;
+  }
+  async housingBindingTemplate(): Promise<{ fileName: string; directory: string }> {
+    await this.housingBinding();
+    const directory = this.exportDirectory?.directory ?? join(this.userDataPath, '导出文件');
+    await mkdir(directory, { recursive: true });
+    const fileName = `房屋编码导入模板-${randomUUID().slice(0, 8)}.xlsx`;
+    await writeFile(join(directory, fileName), await createHousingTemplate(), { flag: 'wx' });
+    this.housingTemplate = { file: join(directory, fileName), directory };
+    return { fileName, directory };
+  }
+  async housingTemplateFolder(): Promise<{ file: string; directory: string }> {
+    await this.housingBinding();
+    const template = this.housingTemplate;
+    if (!template) throw new Error('请先下载房屋编码模板');
+    const info = await lstat(template.file);
+    if (!info.isFile() || info.isSymbolicLink() || dirname(await realpath(template.file)) !== await realpath(template.directory)) throw new Error('模板已移动或位置无效，请重新下载');
+    return template;
+  }
   async oneWindow(): Promise<OneWindowService> {
     await this.requireLicense(oneWindowCatalog.id);
     if (!this.oneWindowService) throw new Error('一窗业务详情模块尚未就绪');
@@ -908,6 +949,7 @@ export class AppRuntime {
     this.shuttingDown = true;
     // Abort the queue before waiting for collectors that may be awaiting its HTTP work.
     const uploadsStopped = this.returnUploads?.stop();
+    await this.housingBindingService?.stop();
     await this.oneWindowService?.stop();
     await uploadsStopped;
     await this.licenseMonitor?.stop();

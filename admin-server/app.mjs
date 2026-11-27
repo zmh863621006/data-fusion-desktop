@@ -25,6 +25,7 @@ import foodDrugCatalog from '../src/plugins/guangdong-food-drug/matter-catalog.j
 import populationCatalog from '../src/plugins/guangdong-population/matter-catalog.json' with { type: 'json' };
 import shenzhenServicesCatalog from '../src/plugins/shenzhen-integrated-services/matter-catalog.json' with { type: 'json' };
 import oneWindowCatalog from '../src/plugins/shenzhen-one-window/matter-catalog.json' with { type: 'json' };
+import housingCatalog from '../src/plugins/shenzhen-housing-rental/matter-catalog.json' with { type: 'json' };
 import toolCatalog from '../src/core/tools/catalog.json' with { type: 'json' };
 
 export function createAdminServer(options = {}) {
@@ -144,7 +145,7 @@ seedMatter.run('oversize-transport-return', 'oversize-transport', '大件运输�
 seedMatter.run('online-car-permit-return', 'online-car-permit', '网约车车证', now);
 transaction(() => {
   const seedOrderedMatter = database.prepare('INSERT OR IGNORE INTO system_matters(id,system_id,name,matter_order,created_at) VALUES(?,?,?,?,?)');
-  for (const catalog of [equipmentCatalog, foodDrugCatalog, populationCatalog, shenzhenServicesCatalog, oneWindowCatalog]) {
+  for (const catalog of [equipmentCatalog, foodDrugCatalog, populationCatalog, shenzhenServicesCatalog, oneWindowCatalog, housingCatalog]) {
     seedSystem.run(catalog.id, catalog.name, catalog.version, now);
     for (const [order, matter] of catalog.matters.entries()) seedOrderedMatter.run(matter.id, catalog.id, matter.name, order, now);
   }
