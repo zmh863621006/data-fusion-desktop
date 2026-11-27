@@ -13,12 +13,38 @@ import type { StoredRecord } from '../core/storage/types';
 import { SHENZHEN_INSURANCE_MATTER as social, SHENZHEN_POST_MATTER as post, SHENZHEN_SYSTEM_ID as systemId } from '../plugins/shenzhen-integrated-services/catalog';
 import { mergeShenzhenRecord } from '../plugins/shenzhen-integrated-services/query';
 import { canonicalRecordQuery, visibleRecordMatter } from './shenzhen-record-scope';
+import { ReturnUploadQueue } from '../core/returns/upload-queue';
 
 const databases: NodeSqliteDriver[] = [];
 afterEach(async () => { for (const db of databases.splice(0)) await db.close(); });
 const history = [{ operator: '合成操作人', reviewer: '合成审批人', step: '受理', operatedAt: '2026-11-01 09:00:00', reviewedAt: '2026-11-01 10:00:00' }];
 const initial = () => ({ recordKey: 'shared-source-case', caseNumber: 'SYNTHETIC-CASE', sourceMatterName: '吸纳脱贫人口社保补贴和岗位补贴',
   businessState: '受理通过', handlingRecordStatus: 'collected', handlingRecordCount: history.length, handlingRecords: structuredClone(history) });
+
+it('persists Huizhou JSON return batches under each authorized entry while sharing the local source ledger', async () => {
+  const f = await fixture();
+  const grant = { licenseId: 'synthetic-huizhou-license', customerId: 'synthetic-huizhou-customer', deviceId: 'synthetic-huizhou-device', expiresAt: Date.now() + 3_600_000 };
+  const fetcher = vi.fn<typeof fetch>(async () => { throw new Error('Synthetic offline connection'); });
+  const queue = new ReturnUploadQueue(f.db, 'https://huizhou.example.invalid', async () => ({
+    deviceId: grant.deviceId, proof: { algorithm: 'RSA-SHA256', payload: Buffer.from(JSON.stringify(grant)).toString('base64url'), signature: 'synthetic-test-only' },
+  }), fetcher);
+  await queue.initialize();
+  Object.assign(f.runtime, { returnUploads: queue });
+  try {
+    const postTask = await f.run(post), socialTask = await f.run(social);
+    expect(postTask.status).toBe('completed'); expect(socialTask.status).toBe('completed');
+    await queue.stop();
+    const batches = await f.db.all<{ id: string; origin: string; matter_id: string; row_count: number; license_id: string }>('SELECT id,origin,matter_id,row_count,license_id FROM return_upload_outbox ORDER BY matter_id');
+    expect(batches).toHaveLength(2);
+    expect(batches.map(x => x.matter_id).sort()).toEqual([post, social].sort());
+    expect(new Set(batches.map(x => x.id))).toEqual(new Set([postTask.id, socialTask.id]));
+    for (const batch of batches) expect(batch).toMatchObject({ origin: 'https://huizhou.example.invalid', row_count: 1, license_id: grant.licenseId });
+    const encoded = await f.db.all<{ row_json: string }>('SELECT row_json FROM return_upload_outbox_rows ORDER BY batch_id,row_no');
+    expect(encoded).toHaveLength(2);
+    for (const row of encoded) expect(JSON.parse(row.row_json).data.handlingRecords).toEqual(history);
+    expect((await f.store.listRecords({ systemId })).total).toBe(1);
+  } finally { await queue.stop(); }
+});
 
 async function fixture(allowed = [post, social]) {
   const db = new NodeSqliteDriver(':memory:'); databases.push(db);
