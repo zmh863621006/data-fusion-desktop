@@ -9,7 +9,7 @@ import shenzhen from './shenzhen-integrated-services/matter-catalog.json';
 
 export const catalogOnlySystems = [
   { ...population, loginUrl: 'http://19.16.44.169/login', description: '生育登记业务与本地台账' },
-  { ...shenzhen, loginUrl: 'https://61.144.226.148:8001/TRANS/zhsl/home', description: '就业、家政和青年服务业务台账' },
+  { ...shenzhen, loginUrl: 'https://61.144.226.148:8001/cas/login', description: '就业、家政和青年服务业务台账' },
 ];
 
 export function createCatalogOnlySystem({ id, name, version, description, loginUrl, matters }: (typeof catalogOnlySystems)[number]): BusinessSystemPlugin {

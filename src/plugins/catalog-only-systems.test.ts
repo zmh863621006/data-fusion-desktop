@@ -13,7 +13,7 @@ it('opens each configured portal on its own origin and exposes 1 and 10 list mat
   const systems = catalogOnlySystems.map(createCatalogOnlySystem);
   expect(systems.map(plugin => [plugin.name, plugin.loginPage?.url, plugin.matters.length])).toEqual([
     ['广东全员人口统筹管理统一登录平台', 'http://19.16.44.169/login', 1],
-    ['深圳市一体化经办平台', 'https://61.144.226.148:8001/TRANS/zhsl/home', 10],
+    ['深圳市一体化经办平台', 'https://61.144.226.148:8001/cas/login', 10],
   ]);
   expect(new Set(systems.map(plugin => plugin.loginPage?.partition)).size).toBe(2);
   for (const plugin of systems) {
