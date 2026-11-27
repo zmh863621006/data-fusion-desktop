@@ -5,6 +5,7 @@ import type { SourceTab, SourceTabsState } from '../core/session/source-tabs';
 import type { SessionState } from '../core/session/types';
 import { IPC_CHANNELS } from '../core/ipc/channels';
 import { approvedSourceEndpointCertificate } from './source-endpoint-certificate';
+import { installF12DevTools, openDetachedDevTools } from './devtools';
 
 const BROWSER_CHROME_HEIGHT = 104;
 function hashRoute(url: URL): string { return url.hash.split('?')[0].replace(/\/$/, ''); }
@@ -41,6 +42,12 @@ export class LoginTabController {
   }
   activityVersion(): number { return this.activity; }
   closeVersion(systemId: string): number { return this.closeVersions.get(systemId) ?? 0; }
+  openDevToolsForActiveTab(): boolean {
+    const tab = this.activeSystemId ? this.tabs.get(this.activeSystemId) : undefined;
+    if (!tab || tab.view.webContents.isDestroyed()) return false;
+    openDetachedDevTools(tab.view.webContents);
+    return true;
+  }
   configureSessionObserver(observer: (state: SessionState) => void): void { this.sessionObserver=observer; }
 
   configurePersistence(persistence: BrowserStoragePersistence): void {
@@ -136,6 +143,9 @@ export class LoginTabController {
     const SourceView = modernSourceViews() ? WebContentsView : BrowserView;
     const view = new SourceView({
       webPreferences: { partition: loginPage.partition, contextIsolation: true, nodeIntegration: false, sandbox: true },
+    });
+    installF12DevTools(view.webContents, () => {
+      if (this.activeSystemId === plugin.id && this.tabs.get(plugin.id)?.view === view) openDetachedDevTools(view.webContents);
     });
     // WebContents supplies the complete URL, unlike session verification's hostname.
     // This keeps the reviewed IP/name exception confined to its exact port and tab.

@@ -15,6 +15,7 @@ import { runtimeUpdateTarget } from '../core/updater/service';
 import { prepareLinuxUpdate } from './linux-update-installer';
 import { businessBootstrapContext } from './business-bootstrap-context';
 import { StartupBusinessUpdates } from './startup-business-updates';
+import { installMainWindowF12 } from './devtools';
 
 configureLinuxSecretStorage(app.commandLine);
 
@@ -70,6 +71,7 @@ function createMainWindow(): void {
   });
 
   mainWindow.webContents.setWindowOpenHandler(() => ({ action: 'deny' }));
+  installMainWindowF12(mainWindow.webContents, () => loginTabController.openDevToolsForActiveTab());
   mainWindow.webContents.on('will-attach-webview', (event) => event.preventDefault());
   mainWindow.webContents.on('will-navigate', (event, url) => {
     const currentUrl = mainWindow?.webContents.getURL();

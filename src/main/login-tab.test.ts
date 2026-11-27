@@ -13,6 +13,8 @@ vi.mock('electron', async () => {
       loadURL: vi.fn(async (url: string) => { this.webContents.url = url; const error = mocks.nextLoadError; mocks.nextLoadError = null; if (error) throw error; }),
       close: vi.fn(() => { this.webContents.destroyed = true; }),
       reload: vi.fn(), focus: vi.fn(), executeJavaScript: vi.fn(async () => undefined),
+      openDevTools: vi.fn(), isDevToolsOpened: vi.fn(() => false),
+      devToolsWebContents: { isDestroyed: vi.fn(() => false), focus: vi.fn() },
       navigationHistory: { canGoBack: vi.fn(() => true), goBack: vi.fn() },
       setWindowOpenHandler: vi.fn(),
     });
@@ -196,6 +198,36 @@ describe('persistent source system tabs', () => {
     controller.close();
   });
   beforeEach(() => { mocks.views.length = 0; mocks.nextLoadError = null; });
+  it('opens detached inspectors for the focused source and the currently displayed source from app chrome', () => {
+    const controller = new LoginTabController(), window = windowMock(), event = { preventDefault: vi.fn() };
+    controller.open(window, plugin('a')); controller.open(window, plugin('b'));
+    const first = mocks.views[0].webContents, second = mocks.views[1].webContents;
+    first.emit('before-input-event', event, { type: 'keyDown', key: 'F12' });
+    expect(first.openDevTools).not.toHaveBeenCalled();
+    second.emit('before-input-event', event, { type: 'keyUp', key: 'F12' });
+    expect(second.openDevTools).not.toHaveBeenCalled();
+    second.emit('before-input-event', event, { type: 'keyDown', key: 'F12' });
+    expect(second.openDevTools).toHaveBeenCalledExactlyOnceWith({ mode: 'detach', activate: true });
+    second.isDevToolsOpened.mockReturnValue(true); second.emit('devtools-opened');
+    expect(controller.openDevToolsForActiveTab()).toBe(true);
+    expect(second.openDevTools).toHaveBeenCalledOnce(); expect(second.devToolsWebContents.focus).toHaveBeenCalledOnce();
+    controller.activate('a'); expect(controller.openDevToolsForActiveTab()).toBe(true);
+    expect(first.openDevTools).toHaveBeenCalledOnce();
+    controller.close('a');
+    expect(controller.openDevToolsForActiveTab()).toBe(false);
+    first.emit('before-input-event', event, { type: 'keyDown', key: 'F12' });
+    expect(first.openDevTools).toHaveBeenCalledOnce(); expect(second.openDevTools).toHaveBeenCalledOnce();
+    controller.close();
+  });
+  it('enables F12 for publication source pages without changing sandbox preferences', () => {
+    const controller = new LoginTabController(), event = { preventDefault: vi.fn() };
+    const source: SourcePage = { id: 'publication', name: '公示平台', loginPage: { url: 'https://publication.example/login', partition: 'persist:publication', allowedOrigin: 'https://publication.example' } };
+    controller.open(windowMock(), source, null, { persistStorage: false });
+    mocks.views[0].webContents.emit('before-input-event', event, { type: 'keyDown', key: 'F12' });
+    expect(mocks.views[0].webContents.openDevTools).toHaveBeenCalledOnce();
+    expect(mocks.views[0].options.webPreferences).toEqual({ partition: 'persist:publication', contextIsolation: true, nodeIntegration: false, sandbox: true });
+    controller.close();
+  });
   it('does not report an interrupted initial load as an error when SSO starts another navigation', async () => {
     const controller = new LoginTabController();
     mocks.nextLoadError = Object.assign(new Error('ERR_ABORTED'), { code: 'ERR_ABORTED', errno: -3 });
