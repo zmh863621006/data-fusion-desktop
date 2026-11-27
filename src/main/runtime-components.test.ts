@@ -5,12 +5,26 @@ import type { LicenseGrant } from '../core/license/types';
 import tools from '../core/tools/catalog.json';
 import { catalogOnlySystems, createCatalogOnlySystem } from '../plugins/catalog-only-systems';
 import { createShenzhenIntegratedPlugin } from '../plugins/shenzhen-integrated-services';
+import { createHousingRentalPlugin } from '../plugins/shenzhen-housing-rental';
+import { createOneWindowPlugin } from '../plugins/shenzhen-one-window';
+import { shortSystemName } from '../renderer/src/ui-format';
 
 const grant = (systems: string[], allowedTools: string[] = []): LicenseGrant => ({
   licenseId: 'catalog-fixture', expiresAt: Date.now() + 60_000, allowedSystems: systems, allowedTools,
 });
 afterEach(() => vi.restoreAllMocks());
 describe('licensed component discovery', () => {
+  it('uses the client names consistently for source plugins, component cards, module lists and navigation', async () => {
+    const runtime = new AppRuntime();
+    const plugins = [createHousingRentalPlugin(), createOneWindowPlugin()];
+    for (const plugin of plugins) runtime.plugins.register(plugin);
+    vi.spyOn(runtime, 'currentGrant').mockResolvedValue(grant(plugins.map(plugin => plugin.id)));
+    const names = ['深圳市房屋租赁', '深圳市一窗综合'];
+    expect(plugins.map(plugin => plugin.name)).toEqual(names);
+    expect((await runtime.listComponents()).map(item => item.name)).toEqual(names);
+    expect((await runtime.listSystemModules()).map(item => item.name)).toEqual(names);
+    expect(plugins.map(plugin => shortSystemName(plugin.id, plugin.name))).toEqual(names);
+  });
   it('returns systems and tools in one snapshot with their maintained versions and descriptions', async () => {
     const runtime = new AppRuntime();
     vi.spyOn(runtime, 'currentGrant').mockResolvedValue(grant(['government-info'], ['health-publicity']));

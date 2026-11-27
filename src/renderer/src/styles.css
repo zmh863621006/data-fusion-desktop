@@ -46,6 +46,8 @@ h2 { font-size: 21px; line-height: 1.4; letter-spacing: -.025em; }
 h3 { font-size: 16px; line-height: 1.5; font-weight: 600; }
 p { line-height: 1.75; }
 .app-icon { display: inline-block; flex-shrink: 0; vertical-align: middle; }
+.source-system-icon { display: inline-flex; align-items: center; justify-content: center; flex-shrink: 0; vertical-align: middle; }
+.source-system-icon > img, .source-system-icon > svg { display: block; width: 100%; height: 100%; object-fit: contain; overflow: hidden; }
 .sr-only { position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px; overflow: hidden; clip-path: inset(50%); white-space: nowrap; border: 0; }
 .primary, .secondary, .danger-outline, .detect-login-button, .session-box button { min-height: 36px; display: inline-flex; align-items: center; justify-content: center; gap: 7px; padding: 8px 14px; border: 1px solid transparent; border-radius: 8px; font-size: 13px; line-height: 1.5; font-weight: 500; white-space: nowrap; }
 .primary, .detect-login-button, .session-box button { color: #fff; background: var(--accent); }
@@ -210,6 +212,12 @@ p { line-height: 1.75; }
 .system-badge-oversize-transport { --badge-color: #773cf0; --badge-soft: #efe7ff; }
 .system-badge-online-car-permit { --badge-color: #ff375f; --badge-soft: #ffe8ed; }
 .system-badge-health-publicity { --badge-color: #8458ed; --badge-soft: #f0eaff; }
+.system-badge-guangdong-hrss { --badge-color: #007a90; --badge-soft: #e1f3f5; }
+.system-badge-guangdong-population { --badge-color: #007f74; --badge-soft: #e5f5f1; }
+.system-badge-guangdong-special-equipment { --badge-color: #6561b5; --badge-soft: #efedf9; }
+.system-badge-guangdong-food-drug { --badge-color: #538326; --badge-soft: #edf4e3; }
+.system-badge-shenzhen-housing-rental { --badge-color: #b36e27; --badge-soft: #fbf1e6; }
+.system-badge-shenzhen-one-window > span, .system-badge-shenzhen-integrated-services > span, .system-badge-shenzhen-hazardous-chemicals > span { width: 39px; height: 39px; background: #fff; box-shadow: 0 1px 5px #0000000b; }
 .system-card-body { flex: 1; min-width: 0; }
 .system-card-heading { display: flex; align-items: center; flex-wrap: wrap; gap: 3px 10px; }
 .system-card-title { min-width: 0; padding: 0; border: 0; background: transparent; text-align: left; color: var(--text); font-size: 15px; font-weight: 600; line-height: 1.6; white-space: nowrap; }

@@ -49,6 +49,9 @@ describe('Shenzhen integrated plugin', () => {
     expect(() => validatePluginContract(plugin)).not.toThrow(); expect(plugin.id).toBe(SHENZHEN_SYSTEM_ID); expect(plugin.matters).toHaveLength(10);
     expect(plugin.workspaceMode).toBe('list-ledger'); expect(plugin.loginPage).toMatchObject({ url: SHENZHEN_LOGIN_URL, allowedOrigin: SHENZHEN_ORIGIN, partition: SHENZHEN_PARTITION });
     expect(plugin.sessionRecovery?.homeUrl()).toBe(SHENZHEN_HOME_URL);
+    expect(plugin.supportsCredentialConfiguration).toBe(true);
+    expect(plugin.loginPage?.credentialPaths).toEqual(['/cas/login']);
+    expect(plugin.loginPage?.credentialFields).toEqual({ account: '#username', password: '#passwordVal' });
     expect(plugin.loginPage?.browserAuth?.sessionStorageKeys).toContain('access-token'); expect(plugin.loginPage?.browserAuth?.localStorageKeys).toEqual([]);
     for (const matter of plugin.matters) {
       expect(matter.queryAvailable).not.toBe(false); expect(matter.uniqueKey).toEqual(['recordKey']);

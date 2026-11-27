@@ -1,11 +1,12 @@
 import type { CSSProperties } from 'react';
 import applicationMark from '../../../resources/app-icon.svg';
+import { SourceSystemIcon } from './SystemIcon';
 
 export function BrandMark() {
   return <div className="brand-mark" aria-hidden="true"><img src={applicationMark} alt="" draggable={false} /></div>;
 }
 
-export type IconName = 'home' | 'building' | 'government' | 'person' | 'truck' | 'car' | 'document' | 'components' | 'settings' | 'shield' | 'database' | 'arrow' | 'chevron' | 'upload' | 'download' | 'check' | 'warning' | 'search' | 'close' | 'refresh' | 'dashboard';
+export type IconName = 'home' | 'building' | 'government' | 'person' | 'people' | 'briefcase' | 'equipment' | 'medicine' | 'truck' | 'car' | 'document' | 'components' | 'settings' | 'shield' | 'database' | 'arrow' | 'chevron' | 'upload' | 'download' | 'check' | 'warning' | 'search' | 'close' | 'refresh' | 'dashboard';
 
 const paths: Record<IconName, React.ReactNode> = {
   dashboard: <><rect x="3" y="3" width="18" height="18" rx="4" /><path d="M7 16v-4m5 4V7m5 9v-7" /></>,
@@ -13,6 +14,10 @@ const paths: Record<IconName, React.ReactNode> = {
   building: <><rect x="5" y="3" width="14" height="18" rx="2" /><path d="M9 7h1m4 0h1M9 11h1m4 0h1M9 15h1m4 0h1M10 21v-3h4v3" /></>,
   government: <><path d="m3 8 9-5 9 5H3Zm1 13h16M6 10v8m6-8v8m6-8v8" /></>,
   person: <><circle cx="12" cy="7" r="4" /><path d="M4 21v-2a8 8 0 0 1 16 0v2" /></>,
+  people: <><circle cx="9" cy="7" r="3" /><path d="M3 21v-2a6 6 0 0 1 12 0v2M17 4a3 3 0 0 1 0 6m1 4a5 5 0 0 1 3 5v2" /></>,
+  briefcase: <><rect x="3" y="7" width="18" height="14" rx="2" /><path d="M8 7V3h8v4M3 12h18m-11 0v3h4v-3" /></>,
+  equipment: <><rect x="3" y="3" width="18" height="18" rx="3" /><path d="M7 15a5 5 0 0 1 10 0m-5 0 3-5M7 18h10" /></>,
+  medicine: <><rect x="7" y="2" width="10" height="20" rx="5" transform="rotate(40 12 12)" /><path d="m8.2 8.8 7.6 6.4" /></>,
   truck: <><path d="M3 5h11v12H3zM14 9h4l3 4v4h-7" /><circle cx="7" cy="18" r="2" /><circle cx="17" cy="18" r="2" /></>,
   car: <><path d="m5 9 2-5h10l2 5M3 15V9h18v6H3Zm2 0v5m14-5v5M6 12h2m8 0h2" /></>,
   document: <><path d="M14 3H6a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V9l-6-6Z" /><path d="M14 3v6h6M8 13h8m-8 4h6" /></>,
@@ -34,7 +39,12 @@ const paths: Record<IconName, React.ReactNode> = {
 const systemIcons: Record<string, IconName> = {
   'market-access': 'building', 'government-info': 'government', 'transport-practitioner': 'person',
   'oversize-transport': 'truck', 'online-car-permit': 'car',
-  'guangdong-hrss': 'person',
+  'guangdong-hrss': 'briefcase',
+  'guangdong-population': 'people',
+  'guangdong-special-equipment': 'equipment',
+  'guangdong-food-drug': 'medicine',
+  'shenzhen-integrated-services': 'government',
+  'shenzhen-hazardous-chemicals': 'shield',
   'shenzhen-one-window': 'government',
   'shenzhen-housing-rental': 'home',
 };
@@ -44,6 +54,11 @@ export function AppIcon({ name, size = 20, style }: { name: IconName; size?: num
   return <svg className="app-icon" width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.65" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true" focusable="false" style={style}>{paths[name]}</svg>;
 }
 
+export function SystemIcon({ id, size = 20, style }: { id: string; size?: number; style?: CSSProperties }) {
+  return <SourceSystemIcon id={id} size={size} style={style}
+    fallback={<AppIcon name={id === 'health-publicity' ? 'document' : systemIcon(id)} size={size} style={style} />} />;
+}
+
 export function SystemBadge({ id }: { id: string }) {
-  return <span className={`system-badge system-badge-${id}`} aria-hidden="true"><span><AppIcon name={id === 'health-publicity' ? 'document' : systemIcon(id)} size={29} /></span></span>;
+  return <span className={`system-badge system-badge-${id}`} aria-hidden="true"><span><SystemIcon id={id} size={29} /></span></span>;
 }

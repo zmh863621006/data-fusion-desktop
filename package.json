@@ -40,6 +40,7 @@
     "test:hrss": "npm run build && esbuild scripts/fixtures/ui-redesign-preload.ts --bundle --platform=node --format=cjs --external:electron --outfile=.tmp/ui-redesign-preload.cjs && esbuild scripts/smoke-hrss.ts --bundle --platform=node --format=cjs --external:electron --outfile=.tmp/smoke-hrss.cjs && node scripts/run-ui-smoke.mjs hrss",
     "test:hrss:login": "esbuild scripts/smoke-hrss-certificate.ts --bundle --platform=node --format=cjs --external:electron --outfile=.tmp/smoke-hrss-certificate.cjs && node scripts/run-ui-smoke.mjs hrss-certificate",
     "test:hrss:bootstrap": "esbuild scripts/smoke-hrss-background-session.ts --bundle --platform=node --format=cjs --external:electron --outfile=.tmp/smoke-hrss-background-session.cjs && node scripts/run-ui-smoke.mjs hrss-background-session",
+    "test:system-credentials": "npm run build && esbuild scripts/smoke-system-credentials.ts --bundle --platform=node --format=cjs --external:electron --alias:cheerio=cheerio/slim --outfile=.tmp/smoke-system-credentials.cjs && esbuild scripts/fixtures/credentials-preload.ts --bundle --platform=node --format=cjs --external:electron --outfile=.tmp/credentials-preload.cjs && node scripts/run-ui-smoke.mjs system-credentials",
     "test:ui": "npm run test:ui:desktop && npm run test:ui:admin",
     "keys:generate": "node scripts/generate-signing-keys.mjs",
     "license:issue": "node scripts/issue-license.mjs",

@@ -1,7 +1,7 @@
 import catalog from './matter-catalog.json';
 
 export const HOUSING_SYSTEM_ID = catalog.id;
-export const HOUSING_SYSTEM_NAME = catalog.name;
+export const HOUSING_SYSTEM_NAME = catalog.clientName;
 export const HOUSING_VERSION = catalog.version;
 export const HOUSING_BINDING_MATTER_ID = catalog.matters[0].id;
 export const HOUSING_BINDING_MATTER_NAME = catalog.matters[0].name;

@@ -6,6 +6,13 @@ import { marketAccessPlugin } from '../plugins/market-access';
 import { governmentInfoPlugin } from '../plugins/government-info';
 import * as onlineCar from '../plugins/online-car-permit';
 import type { SystemCredentials } from './credential-store';
+import { createHousingRentalPlugin } from '../plugins/shenzhen-housing-rental';
+import { createOneWindowPlugin } from '../plugins/shenzhen-one-window';
+import { createShenzhenIntegratedPlugin } from '../plugins/shenzhen-integrated-services';
+import { catalogOnlySystems, createCatalogOnlySystem } from '../plugins/catalog-only-systems';
+
+const configuredPlugins = [marketAccessPlugin, governmentInfoPlugin, createHousingRentalPlugin(), createOneWindowPlugin(),
+  createShenzhenIntegratedPlugin(), ...catalogOnlySystems.map(createCatalogOnlySystem)];
 
 describe('credential configuration for browser-login systems', () => {
   const stored = new Map<string, SystemCredentials>();
@@ -15,13 +22,12 @@ describe('credential configuration for browser-login systems', () => {
   beforeEach(() => {
     vi.restoreAllMocks(); vi.clearAllMocks(); stored.clear();
     runtime = new AppRuntime();
-    runtime.plugins.register(marketAccessPlugin);
-    runtime.plugins.register(governmentInfoPlugin);
+    configuredPlugins.forEach(plugin => runtime.plugins.register(plugin));
     // In-memory store: never read or change the user's saved credentials.
     Object.assign(runtime, { credentialStore: { get, set } });
   });
 
-  it.each([marketAccessPlugin, governmentInfoPlugin])('saves and loads $id without returning the password in renderer status', async plugin => {
+  it.each(configuredPlugins)('saves and loads $id without returning the password in renderer status', async plugin => {
     expect(plugin.supportsCredentialConfiguration).toBe(true);
     expect(await runtime.credentialStatus(plugin.id)).toEqual({ configured: false, account: '' });
     const result = await runtime.saveCredentials(plugin.id, 'fixture-account', 'fixture-password');
@@ -38,6 +44,16 @@ describe('credential configuration for browser-login systems', () => {
     expect((await runtime.credentialsForLogin('market-access'))?.account).toBe('market-fixture');
     expect((await runtime.credentialsForLogin('government-info'))?.account).toBe('government-fixture');
     expect(otherSystem).not.toHaveBeenCalled();
+  });
+
+  it('keeps the four newly configurable systems separate without running any source authentication', async () => {
+    for (const [index, plugin] of configuredPlugins.slice(2).entries()) {
+      await runtime.saveCredentials(plugin.id, `fixture-${index}`, `password-${index}`);
+    }
+    for (const [index, plugin] of configuredPlugins.slice(2).entries()) {
+      expect(await runtime.credentialsForLogin(plugin.id)).toEqual({ account: `fixture-${index}`, password: `password-${index}` });
+      expect(await runtime.credentialStatus(plugin.id)).toEqual({ configured: true, account: `fixture-${index}` });
+    }
   });
 
   it('rejects unsupported system IDs before accessing the credential store', async () => {

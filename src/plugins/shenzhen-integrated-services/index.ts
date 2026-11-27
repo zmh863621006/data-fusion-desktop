@@ -30,9 +30,13 @@ export function createShenzhenIntegratedPlugin(options: ShenzhenClientOptions = 
   return {
     id: SHENZHEN_SYSTEM_ID, name: SHENZHEN_SYSTEM_NAME, version: SHENZHEN_VERSION,
     description: '按接收、受理或办结日期采集全部经办列表，保留完整办理过程。',
-    workspaceMode: 'list-ledger', loginMode: 'embedded',
+    workspaceMode: 'list-ledger', loginMode: 'embedded', supportsCredentialConfiguration: true,
     loginPage: {
       url: SHENZHEN_LOGIN_URL, allowedOrigin: SHENZHEN_ORIGIN, partition: SHENZHEN_PARTITION,
+      credentialPaths: ['/cas/login'],
+      // The source masks passwordVal on focus; casPd is the hidden encrypted output.
+      // These selectors do not match the separate pinCode certificate step.
+      credentialFields: { account: '#username', password: '#passwordVal' },
       onLoginPageChange: visible => client.setLoginVisible(visible),
       onNavigate: url => client.noteNavigation(url),
       browserAuth: { localStorageKeys: [], sessionStorageKeys: [...SHENZHEN_STORAGE_KEYS], accept: values => client.acceptStorage(values) },

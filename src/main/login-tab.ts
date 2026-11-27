@@ -162,7 +162,14 @@ export class LoginTabController {
     this.tabs.set(plugin.id, tab);
     if (!this.sessionTimer) {
       // Main-process polling includes background source tabs and is not throttled with a hidden renderer.
-      this.sessionTimer = setInterval(() => { for (const source of this.tabs.values()) void this.checkSession(source); }, 5_000);
+      this.sessionTimer = setInterval(() => {
+        for (const source of this.tabs.values()) {
+          // Certificate/PIN steps can precede an account form in the same page.
+          // Re-arm only explicitly scoped login paths; never submit or touch the PIN.
+          if (source.plugin.loginPage?.credentialPaths?.length && !source.summary.loading) this.fillCredentials(source);
+          void this.checkSession(source);
+        }
+      }, 5_000);
       this.sessionTimer.unref();
     }
     const allowed = (url: string) => {
@@ -317,7 +324,8 @@ export class LoginTabController {
         if (!fill()) {
           const cleanup = () => { observer.disconnect(); clearTimeout(timer); delete window.__dataFusionLoginFillCleanup; };
           const observer = new MutationObserver(() => { if (fill()) cleanup(); });
-          observer.observe(document.documentElement, { childList: true, subtree: true });
+          observer.observe(document.documentElement, { childList: true, subtree: true, attributes: true,
+            attributeFilter: ['class', 'style', 'hidden', 'type', 'disabled'] });
           const timer = setTimeout(cleanup, 30000);
           window.__dataFusionLoginFillCleanup = cleanup;
         }

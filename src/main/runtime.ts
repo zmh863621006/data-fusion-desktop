@@ -89,9 +89,9 @@ b1oByVzE+8Uj5k4ApNg1P0JX3kxWn0qhcUFtRxsMO/nPAgMBAAE=
 const builtinModules = [
   { id: SHENZHEN_SYSTEM_ID, name: SHENZHEN_SYSTEM_NAME, version: SHENZHEN_VERSION,
     publisher: '数据融合助手', description: '经办业务列表与完整办理过程回流，按接收、受理或办结日期查询' },
-  { id: housingCatalog.id, name: housingCatalog.name, version: housingCatalog.version,
+  { id: housingCatalog.id, name: housingCatalog.clientName, version: housingCatalog.version,
     publisher: '数据融合助手', description: '根据受理编号、产权证与Excel房屋编码创建自动挂接任务' },
-  { id: oneWindowCatalog.id, name: oneWindowCatalog.name, version: oneWindowCatalog.version,
+  { id: oneWindowCatalog.id, name: oneWindowCatalog.clientName, version: oneWindowCatalog.version,
     publisher: '数据融合助手', description: '城管事项完整业务详情回流、定时采集与推送后台' },
   {
     id: FOOD_DRUG_SYSTEM_ID, name: FOOD_DRUG_SYSTEM_NAME, version: FOOD_DRUG_VERSION, publisher: '数据融合助手',
@@ -979,6 +979,7 @@ export class AppRuntime {
     await uploadsStopped;
     await this.licenseMonitor?.stop();
     await loginTabController.flushSessionStorage();
+    await this.credentialStore?.flush();
     await this.sessionRecovery?.flush();
     await this.sessionStore?.flush();
     await this.repository?.close();

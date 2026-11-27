@@ -41,8 +41,10 @@ export function createOneWindowPlugin(options: OneWindowClientOptions = {}): Bus
   const plugin: BusinessSystemPlugin = {
     id: ONE_WINDOW_SYSTEM_ID, name: ONE_WINDOW_SYSTEM_NAME, version: ONE_WINDOW_VERSION,
     description: '广告审批与门楣招牌备案完整详情回流、定时采集和推送后台',
-    workspaceMode: 'detail-ledger', loginMode: 'embedded',
+    workspaceMode: 'detail-ledger', loginMode: 'embedded', supportsCredentialConfiguration: true,
     loginPage: { url: ONE_WINDOW_LOGIN_URL, allowedOrigin: ONE_WINDOW_ORIGIN, partition: ONE_WINDOW_PARTITION,
+      credentialPaths: [new URL(ONE_WINDOW_LOGIN_URL).pathname],
+      credentialFields: { account: '#uname', password: '#password' },
       onLoginPageChange: visible => { loginVisible = visible; } },
     auth: {
       getState, login: getState,

@@ -18,6 +18,9 @@ it('keeps only the unimplemented population portal in the directory-only registr
   for (const plugin of systems) {
     expect(() => validatePluginContract(plugin)).not.toThrow();
     expect(plugin.workspaceMode).toBe('list-ledger');
+    expect(plugin.supportsCredentialConfiguration).toBe(true);
+    expect(plugin.loginPage?.credentialPaths).toEqual(['/login']);
+    expect(plugin.loginPage?.credentialFields).toEqual({ account: '#username', password: '#password' });
     for (const matter of plugin.matters) {
       expect(matter.querySchema.map(field => field.type)).toEqual(['date', 'date']);
       expect(() => validateFilters(matter.querySchema, matter.createDefaultContext!().filters)).not.toThrow();

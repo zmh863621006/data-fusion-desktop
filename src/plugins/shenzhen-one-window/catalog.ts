@@ -1,7 +1,7 @@
 import catalog from './matter-catalog.json';
 
 export const ONE_WINDOW_SYSTEM_ID = catalog.id;
-export const ONE_WINDOW_SYSTEM_NAME = catalog.name;
+export const ONE_WINDOW_SYSTEM_NAME = catalog.clientName;
 export const ONE_WINDOW_VERSION = catalog.version;
 export const ONE_WINDOW_MATTERS = catalog.matters;
 export const ONE_WINDOW_ORIGIN = 'http://10.248.79.52';

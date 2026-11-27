@@ -23,8 +23,9 @@ export function createCatalogOnlySystem({ id, name, version, description, loginU
     return { systemId: id, status: 'unverified', message: '请在原系统页面核对登录状态。' };
   };
   return {
-    id, name, version, description, workspaceMode: 'list-ledger', loginMode: 'embedded',
-    loginPage: { url: loginUrl, partition, allowedOrigin: origin },
+    id, name, version, description, workspaceMode: 'list-ledger', loginMode: 'embedded', supportsCredentialConfiguration: true,
+    loginPage: { url: loginUrl, partition, allowedOrigin: origin, credentialPaths: ['/login'],
+      credentialFields: { account: '#username', password: '#password' } },
     matters: matters.map(matter => createCatalogMatter(matter)),
     auth: {
       getState,

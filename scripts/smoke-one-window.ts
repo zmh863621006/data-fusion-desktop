@@ -95,7 +95,7 @@ async function click(text: string, selector = 'main button') {
 }
 try {
   await window.loadFile(resolve('out/renderer/index.html'));
-  await click('一窗受理平台', '.system-card-title');
+  await click('深圳市一窗综合', '.system-card-title');
   await until('Boolean(document.querySelector(".one-window-page"))');
   await until('!document.querySelector(".one-window-controls .primary").disabled');
   await dom('document.querySelector(".one-window-toggles input").click()');
@@ -121,7 +121,7 @@ try {
   await new Promise(resolve => setTimeout(resolve, 200));
   assert.equal(await dom('document.documentElement.scrollWidth <= window.innerWidth + 1'), true, 'Compact layout must keep table scrolling inside its panel');
   await writeFile(resolve(output, 'data-compact.png'), await capture());
-  await click('一窗受理平台', '.sidebar .system-nav-toggle');
+  await click('深圳市一窗综合', '.sidebar .system-nav-toggle');
   await until('Boolean(document.querySelector(".department-nav-title"))');
   await dom('document.querySelector(".department-nav-title").click()');
   await click(plugin.matters[1].name, '.sidebar button');

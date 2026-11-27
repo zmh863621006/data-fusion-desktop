@@ -1,3 +1,4 @@
+import { load } from 'cheerio';
 import { describe, expect, it, vi } from 'vitest';
 vi.mock('electron', () => ({ session: {} }));
 import { AppError } from '../../core/errors/app-error';
@@ -167,7 +168,16 @@ describe('Shenzhen one-window full business details', () => {
     const plugin = createOneWindowPlugin({ fetcher: source.fetcher, minimumIntervalMs: 0,
       cookieReader: async () => [{ name: 'webfinal.session.id', value: 'fixture-session' }] });
     expect(plugin.matters.map(matter => matter.id)).toEqual(ONE_WINDOW_MATTERS.map(matter => matter.id));
-    expect(plugin.supportsCredentialConfiguration).toBeUndefined();
+    expect(plugin.supportsCredentialConfiguration).toBe(true);
+    expect(plugin.loginMode).toBe('embedded');
+    expect(plugin.loginPage!.credentialPaths).toEqual(['/Accept/login']);
+    const fields = plugin.loginPage!.credentialFields!;
+    // IDs/types from the source login HAR; no account values or captured page data are retained.
+    const $ = load('<input id="checkcode_password" type="text"><input id="checkcode" type="text">'
+      + '<input id="uname" name="uname" type="text"><input id="capassword" type="password">'
+      + '<input id="password" name="password" type="password"><input id="loginBtn" type="submit">');
+    expect($(fields.account).map((_, el) => $(el).attr('id')).get()).toEqual(['uname']);
+    expect($(fields.password).map((_, el) => $(el).attr('id')).get()).toEqual(['password']);
     expect(plugin.workspaceMode).toBe('detail-ledger');
     expect((await plugin.getSessionState()).status).toBe('authenticated');
     plugin.loginPage!.onLoginPageChange!(true);

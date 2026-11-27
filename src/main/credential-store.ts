@@ -14,9 +14,11 @@ interface StoredCredentials {
 }
 
 export class SecureCredentialStore {
+  private pending: Promise<unknown> = Promise.resolve();
   constructor(private readonly storagePath: string) {}
 
   async get(systemId: string): Promise<SystemCredentials | null> {
+    await this.pending;
     const stored = await this.read();
     const encrypted = stored.systems[systemId];
     if (!encrypted) return null;
@@ -29,14 +31,20 @@ export class SecureCredentialStore {
   }
 
   async set(systemId: string, credentials: SystemCredentials): Promise<void> {
-    if (!secureStorageAvailable()) throw new Error('当前系统安全存储不可用，请解锁系统密钥环后再保存业务系统密码');
-    const stored = await this.read();
-    stored.systems[systemId] = safeStorage.encryptString(JSON.stringify(credentials)).toString('base64');
-    await mkdir(dirname(this.storagePath), { recursive: true });
-    const temporary = `${this.storagePath}.tmp`;
-    await writeFile(temporary, JSON.stringify(stored), { encoding: 'utf8', mode: 0o600 });
-    await rename(temporary, this.storagePath);
+    const result = this.pending.then(async () => {
+      if (!secureStorageAvailable()) throw new Error('当前系统安全存储不可用，请解锁系统密钥环后再保存业务系统密码');
+      const stored = await this.read();
+      stored.systems[systemId] = safeStorage.encryptString(JSON.stringify(credentials)).toString('base64');
+      await mkdir(dirname(this.storagePath), { recursive: true });
+      const temporary = `${this.storagePath}.tmp`;
+      await writeFile(temporary, JSON.stringify(stored), { encoding: 'utf8', mode: 0o600 });
+      await rename(temporary, this.storagePath);
+    });
+    this.pending = result.catch(() => {});
+    return result;
   }
+
+  async flush(): Promise<void> { await this.pending; }
 
   private async read(): Promise<StoredCredentials> {
     try {

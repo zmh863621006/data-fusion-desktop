@@ -22,9 +22,15 @@ export function createHousingRentalPlugin(options: HousingRentalClientOptions & 
   return {
     id: HOUSING_SYSTEM_ID, name: HOUSING_SYSTEM_NAME, version: HOUSING_VERSION,
     description: '按受理编号与产权证，导入房屋编码并逐条挂接、核对处理结果。',
-    supportsCredentialConfiguration: false, loginMode: 'embedded',
+    supportsCredentialConfiguration: true, loginMode: 'embedded',
     loginPage: {
       url: HOUSING_LOGIN_URL, partition: HOUSING_PARTITION, allowedOrigin: HOUSING_ORIGIN,
+      credentialPaths: [new URL(HOUSING_LOGIN_URL).pathname],
+      // The supplied HAR starts after sign-in; use semantic fields until the login HTML is available.
+      credentialFields: {
+        account: 'input[autocomplete="username"], input[name="username" i], input[id="username" i], input[name="account" i], input[id="account" i], input[placeholder*="用户名"], input[placeholder*="账号"], input[placeholder*="帐号"]',
+        password: 'input[type="password"]',
+      },
       onNavigate: url => client.noteNavigation(url), onLoginPageChange: visible => client.setLoginVisible(visible),
     },
     auth: {

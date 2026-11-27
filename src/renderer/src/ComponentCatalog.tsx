@@ -1,6 +1,6 @@
 import type { ComponentSummary } from '../../core/plugins/components';
 import type { LicenseStatus } from '../../core/license/types';
-import { AppIcon, systemIcon } from './AppIcon';
+import { AppIcon, SystemIcon } from './AppIcon';
 import { shortSystemName } from './ui-format';
 import { workspaceAccess } from './workspace-access';
 
@@ -16,7 +16,7 @@ export function ComponentCatalog({ components, license, onOpenSystem, onOpenTool
     <section className="panel data-panel component-table" aria-label="已授权组件">
       <table><thead><tr><th>组件名称</th><th>类型</th><th>当前版本</th><th>说明</th><th>操作</th></tr></thead>
         <tbody>{visible.map(component => <tr className="plugin-card" data-component-kind={component.kind} key={`${component.kind}:${component.id}`}>
-          <td><div className="component-name"><AppIcon name={component.kind === 'tool' ? 'document' : systemIcon(component.id)} size={24} />
+          <td><div className="component-name">{component.kind === 'tool' ? <AppIcon name="document" size={24} /> : <SystemIcon id={component.id} size={24} />}
             <span title={component.name}>{component.kind === 'tool' ? component.name : shortSystemName(component.id, component.name)}</span></div></td>
           <td><span className={`component-kind ${component.kind}`}>{component.kind === 'tool' ? '工具' : '业务系统'}</span></td>
           <td className="component-version">v{component.version}</td>

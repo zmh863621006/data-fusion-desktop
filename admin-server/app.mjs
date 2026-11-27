@@ -149,6 +149,10 @@ transaction(() => {
     seedSystem.run(catalog.id, catalog.name, catalog.version, now);
     for (const [order, matter] of catalog.matters.entries()) seedOrderedMatter.run(matter.id, catalog.id, matter.name, order, now);
   }
+  // Rename known defaults only; administrator-defined labels and every grant retain their original identity.
+  const renameDefault = database.prepare('UPDATE systems SET name=? WHERE id=? AND name IN (?,?)');
+  renameDefault.run(housingCatalog.name, housingCatalog.id, '房屋租赁管理信息系统', '房屋租赁');
+  renameDefault.run(oneWindowCatalog.name, oneWindowCatalog.id, '深圳市一窗综合服务受理平台', '一窗受理平台');
 });
 // Human-resources lists are an independent component. Adding its catalog never
 // expands an existing customer's signed scope or enables enterprise enrichment.

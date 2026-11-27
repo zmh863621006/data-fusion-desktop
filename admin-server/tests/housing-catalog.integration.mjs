@@ -39,7 +39,7 @@ test('housing catalog is available to administrator and has exactly the binding 
   assert.equal(bootstrap.status, 200);
   const system = bootstrap.body.systems.find(row => row.id === housing.id);
   assert(system);
-  assert.equal(system.name, '房屋租赁管理信息系统');
+  assert.equal(system.name, '深圳市房屋租赁备案登记管理系统');
   assert.equal(system.version, housing.version);
   assert.equal(system.enabled, 1);
   assert.deepEqual(bootstrap.body.matters.filter(row => row.system_id === housing.id).map(({ id, name, enabled, matter_order }) => ({ id, name, enabled, matter_order })),

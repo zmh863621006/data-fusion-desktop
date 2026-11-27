@@ -10,7 +10,7 @@ import { GovernmentCertificateEvidence } from './GovernmentCertificateEvidence';
 import { OversizeApplicationEvidence } from './OversizeApplicationEvidence';
 import { HealthPublicityPage } from './HealthPublicityPage';
 import { ExportNotice, type ExportResult } from './ExportNotice';
-import { AppIcon, BrandMark, SystemBadge, systemIcon } from './AppIcon';
+import { AppIcon, BrandMark, SystemBadge, SystemIcon } from './AppIcon';
 import { Modal } from './Modal';
 import { PageSizeOptions } from './PageSizeOptions';
 import { DEFAULT_APP_SETTINGS, type AppSettings } from '../../core/settings/types';
@@ -230,7 +230,7 @@ function WorkspaceSidebar({ systems, matters, license, selectedSystemId, selecte
           <button className={`nav-item system-nav-toggle ${system.id === selectedSystemId && activePage === 'workspace' ? 'active' : ''}`} aria-expanded={expanded} onClick={() => {
             setExpandedSystems((current) => ({ ...current, [system.id]: system.id !== selectedSystemId || !expanded }));
             onNavigate('workspace', system.id);
-          }} title={system.name} aria-label={system.name}><AppIcon name={systemIcon(system.id)} /><span className="nav-label">{shortSystemName(system.id, system.name)}</span><AppIcon name="chevron" size={13} style={{ transform: expanded ? 'rotate(90deg)' : undefined }} /></button>
+          }} title={system.name} aria-label={system.name}><SystemIcon id={system.id} /><span className="nav-label">{shortSystemName(system.id, system.name)}</span><AppIcon name="chevron" size={13} style={{ transform: expanded ? 'rotate(90deg)' : undefined }} /></button>
           {expanded && system.id === selectedSystemId && activePage === 'workspace' && (hasDepartmentNavigation
             ? <div className="department-subnav">{departments.map((group) => {
               const key = `${system.id}/${group.id}`;
@@ -621,7 +621,7 @@ function Workspace({ license, onLicenseChanged }: { license: LicenseStatus; onLi
         <div className="browser-tabbar" role="tablist" aria-label="工作区和原系统">
           <button role="tab" aria-selected={!loginTab} className={`browser-tab ${!loginTab ? 'active' : ''}`} onClick={() => void activateSourceTab(null)}><span className="tab-home">融</span><span>{access.hasSystems ? '工作台' : access.hasHealthTool ? '工具' : '设置'}</span></button>
           {visibleSourceTabs.map((tab) => <div className={`source-tab ${tab.systemId === loginTab?.systemId ? 'active' : ''}`} key={tab.systemId}>
-            <button role="tab" aria-selected={tab.systemId === loginTab?.systemId} title={tab.systemName} className="source-tab-select" onClick={() => void activateSourceTab(tab.systemId)}><i className={systems.find(system => system.id === tab.systemId)?.session.status === 'authenticated' ? 'source-session-dot online' : 'source-session-dot'} />{tab.loading ? '正在载入 · ' : ''}{shortSystemName(tab.systemId, tab.systemName)}</button>
+            <button role="tab" aria-selected={tab.systemId === loginTab?.systemId} title={tab.systemName} className="source-tab-select" onClick={() => void activateSourceTab(tab.systemId)}><i className={systems.find(system => system.id === tab.systemId)?.session.status === 'authenticated' ? 'source-session-dot online' : 'source-session-dot'} />{publicationPlatform(tab.systemId) ? <AppIcon name="government" size={16} /> : <SystemIcon id={tab.systemId} size={16} />}{tab.loading ? '正在载入 · ' : ''}{shortSystemName(tab.systemId, tab.systemName)}</button>
             <button className="source-tab-close" aria-label={`关闭${tab.systemName}标签页`} onClick={() => void closeSourceTab(tab.systemId)}>×</button>
           </div>)}
         </div>
@@ -662,7 +662,7 @@ function Workspace({ license, onLicenseChanged }: { license: LicenseStatus; onLi
         </header>
 
         {showPractitionerNumbers && numberMatters.length > 0 && <PractitionerNumberPanel key={numberMatters.join('/')} allowedMatters={numberMatters} onClose={() => setShowPractitionerNumbers(false)} />}
-        {showSystemCredentials && selectedSystem?.supportsCredentialConfiguration && <SystemCredentialPanel systemId={selectedSystemId} systemName={selectedSystem?.name ?? '当前业务系统'} onClose={() => setShowSystemCredentials(false)} onLogin={() => { setShowSystemCredentials(false); void login(); }} />}
+        {showSystemCredentials && selectedSystem?.supportsCredentialConfiguration && <SystemCredentialPanel key={selectedSystemId} systemId={selectedSystemId} systemName={selectedSystem?.name ?? '当前业务系统'} onClose={() => setShowSystemCredentials(false)} onLogin={() => { setShowSystemCredentials(false); void login(); }} />}
         {showBatchReturn && selectedSystem && selectedMatter && <BatchReturnPanel key={`${selectedSystemId}/${scope}`}
           systemId={selectedSystemId} systemName={selectedSystem.name} matters={matterSystemId === selectedSystemId ? matters : []}
           currentMatterId={selectedMatterId} startDate={String(filters.startDate ?? '')} endDate={String(filters.endDate ?? '')}
@@ -1130,21 +1130,35 @@ function SystemCredentialPanel({ systemId, systemName, onClose, onLogin }: { sys
   const [password, setPassword] = useState('');
   const [configured, setConfigured] = useState(false);
   const [message, setMessage] = useState('');
+  const [reading, setReading] = useState(true);
+  const [saving, setSaving] = useState(false);
+  const revision = useRef(0);
   useEffect(() => {
+    const current = ++revision.current;
+    setReading(true); setAccount(''); setPassword(''); setConfigured(false); setMessage('');
     void window.desktopApi.credentials.status(systemId).then((value) => {
+      if (revision.current !== current) return;
       const status = value as { configured: boolean; account: string };
       setConfigured(status.configured); setAccount(status.account);
-    }).catch((error) => setMessage(error instanceof Error ? error.message : '读取账号配置失败'));
+    }).catch((error) => {
+      if (revision.current === current) setMessage(error instanceof Error ? error.message : '读取账号配置失败');
+    }).finally(() => { if (revision.current === current) setReading(false); });
+    return () => { revision.current++; };
   }, [systemId]);
   const save = async () => {
+    if (reading || saving || !account.trim() || !password) return;
+    const current = revision.current;
+    setSaving(true);
     setMessage('');
     try {
       const result = await window.desktopApi.credentials.save(systemId, account, password) as { configured: boolean; account: string };
+      if (revision.current !== current) return;
       setConfigured(result.configured); setAccount(result.account); setPassword('');
       onLogin();
-    } catch (error) { setMessage(error instanceof Error ? error.message : '账号密码保存失败'); }
+    } catch (error) { if (revision.current === current) setMessage(error instanceof Error ? error.message : '账号密码保存失败'); }
+    finally { if (revision.current === current) setSaving(false); }
   };
-  return <section className="panel credential-card system-credential-card"><div className="panel-head"><div><span className="eyebrow">当前系统 / 账号</span><h3>{systemName} · 系统账号配置</h3></div><div className="drawer-actions"><span className={`status-chip ${configured ? 'ready' : 'disabled'}`}>{configured ? '已配置' : '未配置'}</span><button className="secondary" onClick={onClose}>收起</button></div></div><p>这是当前业务系统自己的账号配置，仅供该系统内部事项共用，不会应用到其他业务系统。</p><div className="credential-form"><label><span>系统账号</span><input value={account} onChange={(event) => setAccount(event.target.value)} autoComplete="username" placeholder="请输入系统账号" /></label><label><span>系统密码</span><input type="password" value={password} onChange={(event) => setPassword(event.target.value)} autoComplete="current-password" placeholder={configured ? '输入新密码可更新配置' : '请输入系统密码'} /></label><button className="primary" disabled={!account.trim() || !password} onClick={() => void save()}>{configured ? '更新并打开登录页' : '保存并打开登录页'}</button></div>{message && <div className="message page-message">{message}</div>}</section>;
+  return <section className="panel credential-card system-credential-card"><div className="panel-head"><div><span className="eyebrow">当前系统 / 账号</span><h3>{systemName} · 系统账号配置</h3></div><div className="drawer-actions"><span className={`status-chip ${configured ? 'ready' : 'disabled'}`}>{reading ? '读取中' : configured ? '已配置' : '未配置'}</span><button className="secondary" onClick={onClose}>收起</button></div></div><p>配置仅供当前系统使用。保存后打开原系统并填入账号密码，验证码及密钥验证仍在原页面完成。</p><form className="credential-form" onSubmit={event => { event.preventDefault(); void save(); }}><label><span>系统账号</span><input name="username" disabled={reading || saving} value={account} onChange={(event) => setAccount(event.target.value)} autoComplete="username" placeholder="请输入系统账号" /></label><label><span>系统密码</span><input name="password" type="password" disabled={reading || saving} value={password} onChange={(event) => setPassword(event.target.value)} autoComplete="current-password" placeholder={configured ? '输入新密码可更新配置' : '请输入系统密码'} /></label><button className="primary" disabled={reading || saving || !account.trim() || !password}>{saving ? '正在保存…' : configured ? '更新并打开原系统' : '保存并打开原系统'}</button></form>{message && <div className="message page-message" role="status">{message}</div>}</section>;
 }
 
 function SettingsPage({ license, onOpenDiagnostics, onPageSizeSaved, onLicenseChanged }: {
