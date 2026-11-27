@@ -165,11 +165,11 @@ describe('人社访问凭据与接口边界',()=>{
     expect(fetcher).toHaveBeenCalledTimes(2);
     const restored=new HrssClient({fetcher,minimumIntervalMs:0});restored.restoreSession(client.exportSession()!);expect(restored.hasSession()).toBe(true);
   });
-  it('rejects a training login page and a CSRF failure instead of returning an empty success',async()=>{
+  it('keeps an incomplete training HTML page unverified but expires explicit CSRF failure',async()=>{
     const client=new HrssClient({fetcher:async()=>new Response('<title>登录</title>',{headers:{'content-type':'text/html'}}),minimumIntervalMs:0});
     client.acceptTrainingCookie('ZXZJ_SESSION=fixture; hz_zxzj=csrf');
-    await expect(client.prepareTrainingSession()).rejects.toMatchObject({code:'SESSION_EXPIRED'});
-    expect(client.exportSession()).toBeNull();
+    await expect(client.prepareTrainingSession()).rejects.toMatchObject({code:'REMOTE_REQUEST_FAILED',details:{reason:'HRSS_TRAINING_PAGE_INVALID'}});
+    expect(client.exportSession()).toMatchObject({trainingCookie:'ZXZJ_SESSION=fixture; hz_zxzj=csrf'});
     const fetcher=vi.fn(async(url:string)=>url.endsWith('cxjd.do')?new Response(`<form name="editform"><input name="BAE001" value="163374"></form><script>WHEREKEY='fixture';headtoken='hz_zxzj';</script>`):json({FHZ:'CSRF',rows:[],total:0}));
     const rejected=new HrssClient({fetcher,minimumIntervalMs:0});rejected.acceptTrainingCookie('ZXZJ_SESSION=fixture; hz_zxzj=csrf');
     await expect(rejected.requestTrainingList({confid:'jycyzjgl_cypxbt_cxjd_bljdcxjglb'})).rejects.toMatchObject({code:'SESSION_EXPIRED'});
@@ -224,5 +224,106 @@ describe('人社访问凭据与接口边界',()=>{
     const controller=new AbortController();const fetcher=vi.fn(async(_url:string,init:RequestInit)=>{expect(init.signal).toBeInstanceOf(AbortSignal);return json({code:403});});
     const client=new HrssClient({fetcher,now,minimumIntervalMs:0});client.acceptBrowserAccessToken('test-access');
     await expect(client.request(source,{},controller.signal)).rejects.toMatchObject({code:'SESSION_EXPIRED'});expect(client.hasAccessToken()).toBe(false);expect(fetcher).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe('人社子会话准备状态与换代保护',()=>{
+  function deferred<T>(){let resolve!:(value:T)=>void,reject!:(error:unknown)=>void;const promise=new Promise<T>((done,fail)=>{resolve=done;reject=fail;});return {promise,resolve,reject};}
+  const trainingHtml=`<form name="editform"><input name="BAE001" value="163374"></form><script>WHEREKEY='fixture';headtoken='hz_zxzj';</script>`;
+  const trainingParams={confid:'jycyzjgl_cypxbt_cxjd_bljdcxjglb'};
+
+  it('reports missing employment, WGBT and training credentials as not-ready without declaring expiry',async()=>{
+    const fetcher=vi.fn();const client=new HrssClient({fetcher,minimumIntervalMs:0});
+    await expect(client.validateSession(new AbortController().signal)).rejects.toMatchObject({code:'SYSTEM_LOGIN_REQUIRED',details:{reason:'HRSS_EMPLOYMENT_NOT_READY'}});
+    await expect(client.request(source,{})).rejects.toMatchObject({code:'SYSTEM_LOGIN_REQUIRED',details:{reason:'HRSS_EMPLOYMENT_NOT_READY'}});
+    await expect(client.request(wgbt,{})).rejects.toMatchObject({code:'SYSTEM_LOGIN_REQUIRED',details:{reason:'HRSS_WGBT_NOT_READY'}});
+    await expect(client.prepareTrainingSession()).rejects.toMatchObject({code:'SYSTEM_LOGIN_REQUIRED',details:{reason:'HRSS_TRAINING_NOT_READY'}});
+    expect(fetcher).not.toHaveBeenCalled();
+    client.acceptBrowserCookie('WGBT_SESSION=fixture-valid');client.acceptTrainingCookie('hz_zxzj=fixture-valid');const saved=client.exportSession();
+    await expect(client.validateSession(new AbortController().signal)).rejects.toMatchObject({code:'SYSTEM_LOGIN_REQUIRED'});
+    expect(client.exportSession()).toEqual(saved);
+  });
+
+  it.each([401,403])('does not let a late HTTP %s erase a newly captured access token',async status=>{
+    const pending=deferred<Response>();const fetcher=vi.fn(()=>pending.promise);const client=new HrssClient({fetcher,minimumIntervalMs:0});
+    client.acceptBrowserAccessToken('fixture-old');const result=client.request(source,{}).catch(error=>error);
+    await vi.waitFor(()=>expect(fetcher).toHaveBeenCalledOnce());client.acceptBrowserAccessToken('fixture-new');pending.resolve(json({},status));
+    expect(await result).toMatchObject({code:'REMOTE_REQUEST_FAILED',details:{reason:'HRSS_SESSION_CHANGED'}});
+    expect(client.exportSession()?.accessToken).toBe('fixture-new');
+  });
+
+  it.each(['business-401','unexpected-html','invalid-json','success'])('does not accept or clear new credentials after a late %s body',async mode=>{
+    const pending=deferred<unknown>();const parse=vi.fn(()=>pending.promise);
+    const response={status:200,ok:true,headers:new Headers({'content-type':mode==='unexpected-html'?'text/html':'application/json'}),json:parse} as unknown as Response;
+    const fetcher=vi.fn(async()=>response);const client=new HrssClient({fetcher,minimumIntervalMs:0});client.acceptBrowserAccessToken('fixture-old');
+    const result=client.request(source,{}).catch(error=>error);await vi.waitFor(()=>expect(parse).toHaveBeenCalledOnce());
+    client.acceptBrowserAccessToken('fixture-new');
+    if(mode==='unexpected-html'||mode==='invalid-json')pending.reject(new SyntaxError('synthetic invalid body'));else pending.resolve(mode==='business-401'?{code:401}:{data:{total:0,records:[]}});
+    expect(await result).toMatchObject({code:'REMOTE_REQUEST_FAILED',details:{reason:'HRSS_SESSION_CHANGED'}});expect(client.exportSession()?.accessToken).toBe('fixture-new');
+  });
+
+  it('rejects queued work associated with old credentials before making a second request',async()=>{
+    const pending=deferred<Response>();const fetcher=vi.fn(()=>pending.promise);const client=new HrssClient({fetcher,minimumIntervalMs:0});client.acceptBrowserAccessToken('fixture-old');
+    const first=client.request(source,{}).catch(error=>error),second=client.request(source,{}).catch(error=>error);
+    await vi.waitFor(()=>expect(fetcher).toHaveBeenCalledOnce());client.acceptBrowserAccessToken('fixture-new');pending.resolve(json({data:{total:0,records:[]}}));
+    for(const value of await Promise.all([first,second]))expect(value).toMatchObject({code:'REMOTE_REQUEST_FAILED',details:{reason:'HRSS_SESSION_CHANGED'}});
+    expect(fetcher).toHaveBeenCalledOnce();expect(client.exportSession()?.accessToken).toBe('fixture-new');
+  });
+
+  it('accepts valid JSON served as text/html and preserves credentials for an unexpected HTML body',async()=>{
+    const fetcher=vi.fn().mockResolvedValueOnce(new Response(JSON.stringify({data:{total:0,records:[]}}),{headers:{'content-type':'text/html'}}))
+      .mockResolvedValueOnce(new Response('<title>unexpected proxy page</title>',{headers:{'content-type':'text/html'}}));
+    const client=new HrssClient({fetcher,minimumIntervalMs:0});client.acceptBrowserAccessToken('fixture-access');
+    expect(await client.request(source,{})).toEqual({total:0,rows:[]});
+    await expect(client.request(source,{})).rejects.toMatchObject({code:'REMOTE_REQUEST_FAILED',details:{reason:'HRSS_UNEXPECTED_HTML'}});
+    expect(client.exportSession()?.accessToken).toBe('fixture-access');
+  });
+
+  it('clears only the matching credential family for a current explicit authorization failure',async()=>{
+    const fetcher=vi.fn(async()=>json({},401));const client=new HrssClient({fetcher,minimumIntervalMs:0});
+    client.acceptBrowserAccessToken('fixture-access');client.acceptBrowserCookie('WGBT_SESSION=fixture');client.acceptTrainingCookie('hz_zxzj=fixture');
+    await expect(client.request(wgbt,{})).rejects.toMatchObject({code:'SESSION_EXPIRED',details:{reason:'HRSS_AUTH_HTTP',credentialKind:'wgbt',httpStatus:401}});
+    expect(client.hasAccessToken()).toBe(true);expect(client.hasCookie()).toBe(false);expect(client.exportSession()?.trainingCookie).toBe('hz_zxzj=fixture');
+  });
+
+  it('preserves access credentials after HTTP403 and can recover on the next permitted request',async()=>{
+    const fetcher=vi.fn().mockResolvedValueOnce(json({},403)).mockResolvedValueOnce(json({data:{total:0,records:[]}}));
+    const client=new HrssClient({fetcher,minimumIntervalMs:0});client.acceptBrowserAccessToken('fixture-access');client.acceptBrowserCookie('WGBT_SESSION=fixture');
+    const saved=client.exportSession();
+    await expect(client.request(source,{})).rejects.toMatchObject({code:'REMOTE_REQUEST_FAILED',details:{reason:'HRSS_ACCESS_DENIED',credentialKind:'access',httpStatus:403,retryable:false}});
+    expect(client.exportSession()).toEqual(saved);expect(client.hasAccessToken()).toBe(true);expect(fetcher).toHaveBeenCalledTimes(1);
+    expect(await client.request(source,{})).toEqual({rows:[],total:0});expect(fetcher).toHaveBeenCalledTimes(2);expect(client.exportSession()).toEqual(saved);
+  });
+
+  it('preserves a new independent WGBT cookie after the old request is rejected',async()=>{
+    const pending=deferred<Response>();const fetcher=vi.fn(()=>pending.promise);const client=new HrssClient({fetcher,minimumIntervalMs:0});client.acceptBrowserCookie('WGBT_SESSION=old');
+    const result=client.request(wgbt,{}).catch(error=>error);await vi.waitFor(()=>expect(fetcher).toHaveBeenCalledOnce());client.acceptBrowserCookie('WGBT_SESSION=new');pending.resolve(json({},401));
+    expect(await result).toMatchObject({code:'REMOTE_REQUEST_FAILED',details:{reason:'HRSS_SESSION_CHANGED'}});expect(client.exportSession()?.rawCookie).toBe('WGBT_SESSION=new');
+  });
+
+  it('does not overwrite a new training cookie with a delayed cookie-store read',async()=>{
+    const pending=deferred<string|undefined>();const fetcher=vi.fn(async()=>new Response(trainingHtml));const client=new HrssClient({fetcher,readTrainingCookie:()=>pending.promise,minimumIntervalMs:0});
+    const result=client.prepareTrainingSession();client.acceptTrainingCookie('hz_zxzj=new');pending.resolve('hz_zxzj=old');
+    expect(await result).toMatchObject({csrfToken:'new'});expect(client.exportSession()?.trainingCookie).toBe('hz_zxzj=new');
+  });
+
+  it('ignores an old training query-page result after the cookie changes',async()=>{
+    const pending=deferred<Response>();const fetcher=vi.fn(()=>pending.promise);const client=new HrssClient({fetcher,minimumIntervalMs:0});client.acceptTrainingCookie('hz_zxzj=old');
+    const result=client.prepareTrainingSession().catch(error=>error);await vi.waitFor(()=>expect(fetcher).toHaveBeenCalledOnce());client.acceptTrainingCookie('hz_zxzj=new');pending.resolve(new Response('<title>unexpected</title>'));
+    expect(await result).toMatchObject({code:'REMOTE_REQUEST_FAILED',details:{reason:'HRSS_SESSION_CHANGED'}});expect(client.exportSession()?.trainingCookie).toBe('hz_zxzj=new');
+  });
+
+  it('ignores an old training CSRF or HTML response after the cookie changes',async()=>{
+    const pending=deferred<Response>();const fetcher=vi.fn().mockResolvedValueOnce(new Response(trainingHtml)).mockReturnValueOnce(pending.promise);
+    const client=new HrssClient({fetcher,minimumIntervalMs:0});client.acceptTrainingCookie('hz_zxzj=old');
+    const result=client.requestTrainingList(trainingParams).catch(error=>error);await vi.waitFor(()=>expect(fetcher).toHaveBeenCalledTimes(2));client.acceptTrainingCookie('hz_zxzj=new');pending.resolve(json({FHZ:'CSRF'}));
+    expect(await result).toMatchObject({code:'REMOTE_REQUEST_FAILED',details:{reason:'HRSS_SESSION_CHANGED'}});expect(client.exportSession()?.trainingCookie).toBe('hz_zxzj=new');
+  });
+
+  it('retains a safe network cause for diagnostics without exposing raw network messages',async()=>{
+    const cause=Object.assign(new Error('synthetic-private-network-message'),{code:'ERR_CERT_AUTHORITY_INVALID'});
+    const fetcher=vi.fn(async()=>{throw cause;});const client=new HrssClient({fetcher,minimumIntervalMs:0});client.acceptBrowserAccessToken('fixture-access');
+    const result=await client.request(source,{}).catch(error=>error);expect(result).toMatchObject({code:'REMOTE_REQUEST_FAILED',cause});
+    expect(result.message).not.toContain('synthetic-private-network-message');expect(client.hasAccessToken()).toBe(true);
   });
 });

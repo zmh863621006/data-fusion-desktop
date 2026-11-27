@@ -7,6 +7,7 @@ import { configurePractitionerCredentials, transportPractitionerPlugin } from '.
 import { configureOversizeTransportCredentials, oversizeTransportPlugin } from '../plugins/oversize-transport';
 import { configureOnlineCarPermitCredentials, onlineCarPermitPlugin } from '../plugins/online-car-permit';
 import { createGuangdongHrssPlugin } from '../plugins/guangdong-hrss';
+import { prepareHrssBrowserSession } from './hrss-browser-session';
 import { createShenzhenIntegratedPlugin } from '../plugins/shenzhen-integrated-services';
 import { SHENZHEN_SYSTEM_ID, SHENZHEN_SYSTEM_NAME, SHENZHEN_VERSION, shenzhenRecordMatterId } from '../plugins/shenzhen-integrated-services/catalog';
 import { createShenzhenHazardousPlugin } from '../plugins/shenzhen-hazardous-chemicals';
@@ -318,6 +319,7 @@ export class AppRuntime {
     ]);
     await installSourceCertificateVerifiers(sources, { ...HRSS_SOURCE_CERTIFICATE_TRUST, vault: sessionStore })
       .catch(() => console.warn('原系统公共证书复验配置未能完整加载，将继续使用内置浏览器的证书校验'));
+    await prepareHrssBrowserSession();
     for (const plugin of plugins) await plugin.initialize();
     this.sessionRecovery = new SessionRecoveryService(sessionStore);
     for (const plugin of this.plugins.list()) await this.sessionRecovery.register(plugin);
@@ -969,6 +971,7 @@ export class AppRuntime {
 
   async shutdown(): Promise<void> {
     this.shuttingDown = true;
+    await Promise.all(this.plugins.list().map(plugin => plugin.loginPage?.cancelBackgroundWork?.()));
     // Abort the queue before waiting for collectors that may be awaiting its HTTP work.
     const uploadsStopped = this.returnUploads?.stop();
     await this.housingBindingService?.stop();

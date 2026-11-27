@@ -17,6 +17,12 @@ interface SavedSession {
   cookies: Cookie[];
   sessionStorage: Record<string, string>;
 }
+const verificationReasons = new Set([
+  'EMPTY_RESPONSE', 'INVALID_RPC_RESPONSE', 'UNEXPECTED_RESULT',
+  'HRSS_EMPLOYMENT_NOT_READY', 'HRSS_WGBT_NOT_READY', 'HRSS_TRAINING_NOT_READY',
+  'HRSS_SESSION_CHANGED', 'HRSS_UNEXPECTED_HTML', 'HRSS_INVALID_JSON', 'HRSS_TRAINING_PAGE_INVALID',
+  'HRSS_AUTH_HTTP', 'HRSS_AUTH_RESPONSE', 'HRSS_TRAINING_CSRF', 'HRSS_ACCESS_DENIED',
+]);
 interface Entry {
   plugin: BusinessSystemPlugin;
   browser: Session;
@@ -276,11 +282,15 @@ export class SessionRecoveryService {
     const knownNames = new Set(['AppError', 'Error', 'TypeError', 'SyntaxError', 'AbortError', 'TimeoutError']);
     const value = error as { name?: string; code?: unknown; cause?: { code?: unknown; cause?: { code?: unknown } } } | null;
     const safeCode = (code: unknown) => typeof code === 'string' && /^[A-Z][A-Z0-9_]{0,63}$/.test(code) ? code : undefined;
+    const details = error instanceof AppError ? error.details : undefined;
+    const hrssDetails = entry.plugin.id === 'guangdong-hrss' ? details : undefined;
     const diagnostic = { systemId: entry.plugin.id,
       errorType: knownNames.has(value?.name ?? '') ? value!.name : 'Error',
       errorCode: error instanceof AppError ? error.code : undefined,
-      reason: error instanceof AppError && ['EMPTY_RESPONSE', 'INVALID_RPC_RESPONSE', 'UNEXPECTED_RESULT'].includes(String(error.details?.reason))
-        ? error.details?.reason : undefined,
+      reason: typeof details?.reason === 'string' && verificationReasons.has(details.reason) ? details.reason : undefined,
+      ...(hrssDetails?.httpStatus === 401 || hrssDetails?.httpStatus === 403 ? { httpStatus: hrssDetails.httpStatus } : {}),
+      ...(hrssDetails?.credentialKind === 'access' || hrssDetails?.credentialKind === 'wgbt' || hrssDetails?.credentialKind === 'training'
+        ? { credentialKind: hrssDetails.credentialKind } : {}),
       causeCode: safeCode(value?.cause?.cause?.code ?? value?.cause?.code ?? value?.code) };
     const key = JSON.stringify(diagnostic);
     if (entry.diagnosticKey === key && Date.now() - (entry.diagnosticAt ?? 0) < 60_000) return;

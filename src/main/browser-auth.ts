@@ -7,6 +7,8 @@ export interface BrowserAuthObservation {
   /** Drop observations from an earlier session. Null pauses credential observation. */
   credentialGeneration?(): number | null;
   acceptsResponse?(details: OnCompletedListenerDetails, contentType: string): boolean;
+  /** Some systems distinguish a forbidden business from an expired login. */
+  sessionRejected?(details: OnCompletedListenerDetails): boolean;
   accept(value: string, sourceUrl?: string): void;
   clear(): void;
 }
@@ -36,7 +38,10 @@ export function observeBrowserAuthMany(partition: string, observations: BrowserA
     const contentType = Object.entries(details.responseHeaders ?? {}).find(([key]) => key.toLowerCase() === 'content-type')?.[1]?.join('') ?? '';
     for (const { options, value, generation } of matches) {
       if (options.credentialGeneration?.() !== generation) continue;
-      if (details.statusCode === 401 || details.statusCode === 403) { options.clear(); continue; }
+      if (details.statusCode === 401 || details.statusCode === 403) {
+        if (options.sessionRejected?.(details) ?? true) options.clear();
+        continue;
+      }
       const accepted = options.acceptsResponse?.(details, contentType) ?? /json/i.test(contentType);
       if (details.statusCode >= 200 && details.statusCode < 300 && accepted) options.accept(value, details.url);
     }

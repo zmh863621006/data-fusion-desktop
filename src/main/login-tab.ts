@@ -355,6 +355,7 @@ export class LoginTabController {
       this.closeVersions.set(systemId, this.closeVersion(systemId) + 1);
       const tab = this.tabs.get(systemId);
       if (!tab) return;
+      tab.plugin.loginPage?.cancelBackgroundWork?.();
       if (this.activeSystemId === systemId) this.activate(null);
       this.tabs.delete(systemId);
       if (!this.tabs.size && this.sessionTimer) { clearInterval(this.sessionTimer); this.sessionTimer = undefined; }

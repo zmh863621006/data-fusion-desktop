@@ -5,12 +5,78 @@ import { observeBrowserAuthMany } from '../../main/browser-auth';
 import { validatePluginContract } from '../../core/plugins/types';
 import { createGuangdongHrssPlugin,HRSS_MATTER_DEFINITIONS } from './index';
 import { validateFilters } from '../../core/query/validation';
+import { session } from 'electron';
 
 it('opens the SSO entry for login and restores the full portal instead of a single business page',()=>{
   const plugin=createGuangdongHrssPlugin();
   expect(plugin.loginPage?.url).toBe('https://hrss.gdgov.cn/sso/login.html');
   expect(plugin.loginPage?.allowedOrigin).toBe('https://hrss.gdgov.cn');
   expect(plugin.sessionRecovery?.homeUrl()).toBe('https://hrss.gdgov.cn/portal/template/system.html');
+});
+
+describe('人社登录验证及浏览器凭据代次',()=>{
+  const response=(body:unknown,status=200)=>new Response(JSON.stringify(body),{status,headers:{'content-type':'application/json'}});
+
+  it('does not mark an unverified token or an independent cookie as authenticated',async()=>{
+    const fetcher=vi.fn(async()=>response({}));const plugin=createGuangdongHrssPlugin({fetcher,minimumIntervalMs:0});
+    await plugin.sessionRecovery!.restore({accessToken:'fixture-unverified'});
+    expect((await plugin.getSessionState()).status).toBe('unverified');expect((await plugin.auth.getState()).status).toBe('unverified');
+    await plugin.sessionRecovery!.restore({rawCookie:'WGBT_SESSION=fixture'});const saved=await plugin.sessionRecovery!.snapshot();
+    expect((await plugin.getSessionState()).status).toBe('unverified');
+    await expect(plugin.sessionRecovery!.validate(new AbortController().signal)).rejects.toMatchObject({code:'SYSTEM_LOGIN_REQUIRED',details:{reason:'HRSS_EMPLOYMENT_NOT_READY'}});
+    expect(await plugin.sessionRecovery!.snapshot()).toEqual(saved);
+    expect(plugin.sessionRecovery?.apiCredentials).toBeUndefined();
+  });
+
+  it('requires an actual successful probe before returning authenticated',async()=>{
+    const fetcher=vi.fn(async(_url:string,_init:RequestInit)=>response({data:{total:0}}));const plugin=createGuangdongHrssPlugin({fetcher,minimumIntervalMs:0});
+    expect((await plugin.getSessionState()).status).toBe('logged-out');expect(fetcher).not.toHaveBeenCalled();
+    await plugin.sessionRecovery!.restore({accessToken:'fixture-access'});expect((await plugin.getSessionState()).status).toBe('authenticated');expect(fetcher).toHaveBeenCalledOnce();
+    expect(new URL(fetcher.mock.calls[0]?.[0] as string).pathname).toContain('/employment/main/rest/');
+  });
+
+  it('uses a successful navigation to the known SSO login route to clear credentials and stop stale observation',async()=>{
+    const plugin=createGuangdongHrssPlugin();await plugin.initialize();await plugin.sessionRecovery!.restore({accessToken:'fixture-access',rawCookie:'WGBT_SESSION=fixture'});
+    const rules=vi.mocked(observeBrowserAuthMany).mock.calls.at(-1)![1];
+    expect(rules.every(rule=>typeof rule.credentialGeneration==='function')).toBe(true);
+    plugin.loginPage!.onLoginPageChange!(true);expect(await plugin.sessionRecovery!.snapshot()).toBeNull();expect(rules.every(rule=>rule.credentialGeneration?.()===null)).toBe(true);
+    rules[0].accept('fixture-late-token');expect(await plugin.sessionRecovery!.snapshot()).toBeNull();
+    plugin.loginPage!.onLoginPageChange!(false);rules[0].accept('fixture-new-token');expect(await plugin.sessionRecovery!.snapshot()).toMatchObject({accessToken:'fixture-new-token'});
+  });
+
+  it('drops late browser 401 and successful observations after a new token is captured',async()=>{
+    const plugin=createGuangdongHrssPlugin();await plugin.initialize();
+    const rules=vi.mocked(observeBrowserAuthMany).mock.calls.at(-1)![1];
+    const hooks={onBeforeSendHeaders:vi.fn(),onCompleted:vi.fn(),onBeforeRedirect:vi.fn(),onErrorOccurred:vi.fn()};
+    vi.mocked(session.fromPartition).mockReturnValue({webRequest:hooks} as unknown as ReturnType<typeof session.fromPartition>);
+    const actual=await vi.importActual<typeof import('../../main/browser-auth')>('../../main/browser-auth');actual.observeBrowserAuthMany('persist:guangdong-hrss',rules);
+    const before=hooks.onBeforeSendHeaders.mock.calls[0][1],completed=hooks.onCompleted.mock.calls[0][1],url='https://hrss.gdgov.cn/employment/main/rest/fixture';
+    before({id:1,url,requestHeaders:{'Access-Token':'fixture-old'}},()=>{});before({id:2,url,requestHeaders:{'Access-Token':'fixture-old'}},()=>{});
+    rules[0].accept('fixture-new');
+    completed({id:1,url,statusCode:401,responseHeaders:{'content-type':['application/json']}});
+    completed({id:2,url,statusCode:200,responseHeaders:{'content-type':['application/json']}});
+    expect(await plugin.sessionRecovery!.snapshot()).toMatchObject({accessToken:'fixture-new'});
+  });
+
+  it('keeps new employment credentials when an independent WGBT observation fails',async()=>{
+    const plugin=createGuangdongHrssPlugin();await plugin.initialize();
+    const rules=vi.mocked(observeBrowserAuthMany).mock.calls.at(-1)![1];rules.find(rule=>rule.urlPattern.includes('/WGBT/'))!.accept('WGBT_SESSION=fixture');rules.find(rule=>rule.urlPattern.includes('/ZXZJ/'))!.accept('hz_zxzj=fixture');
+    const hooks={onBeforeSendHeaders:vi.fn(),onCompleted:vi.fn(),onBeforeRedirect:vi.fn(),onErrorOccurred:vi.fn()};
+    vi.mocked(session.fromPartition).mockReturnValue({webRequest:hooks} as unknown as ReturnType<typeof session.fromPartition>);
+    const actual=await vi.importActual<typeof import('../../main/browser-auth')>('../../main/browser-auth');actual.observeBrowserAuthMany('persist:guangdong-hrss',rules);
+    const before=hooks.onBeforeSendHeaders.mock.calls[0][1],completed=hooks.onCompleted.mock.calls[0][1],url='https://hrss.gdgov.cn/WGBT/fixture';
+    before({id:1,url,requestHeaders:{Cookie:'WGBT_SESSION=fixture'}},()=>{});rules[0].accept('fixture-new');
+    completed({id:1,url,statusCode:401,responseHeaders:{'content-type':['application/json']}});
+    expect(await plugin.sessionRecovery!.snapshot()).toMatchObject({accessToken:'fixture-new',trainingCookie:'hz_zxzj=fixture'});
+    expect(await plugin.sessionRecovery!.snapshot()).not.toHaveProperty('rawCookie');
+  });
+
+  it('preserves observed employment credentials on forbidden responses while still clearing a confirmed unauthorized login',async()=>{
+    const plugin=createGuangdongHrssPlugin();await plugin.initialize();
+    const rules=vi.mocked(observeBrowserAuthMany).mock.calls.at(-1)![1];rules[0].accept('fixture-access');
+    expect(rules[0].sessionRejected?.({statusCode:403} as any)).toBe(false);
+    expect(rules[0].sessionRejected?.({statusCode:401} as any)).toBe(true);
+  });
 });
 
 describe('广东人社插件',()=>{
@@ -38,7 +104,7 @@ describe('广东人社插件',()=>{
     expect(plugin.matters.every(m=>m.listColumns?.every(c=>c.key!=='recordKey'))).toBe(true);
     await plugin.initialize();await plugin.initialize();
     expect(observeBrowserAuthMany).toHaveBeenCalledTimes(1);
-    expect(vi.mocked(observeBrowserAuthMany).mock.calls[0][1].map(o=>o.header)).toEqual(['access-token','access-token','access-token','cookie','cookie']);
+    expect(vi.mocked(observeBrowserAuthMany).mock.calls[0][1].map(o=>o.header)).toEqual(['access-token','access-token','access-token','access-token','access-token','cookie','cookie']);
   });
   it('only invokes catalogued list/count endpoints for empty lists and preserves independent training login requirements',async()=>{
     const now=()=>Date.parse('2025-05-01T04:00:00Z');

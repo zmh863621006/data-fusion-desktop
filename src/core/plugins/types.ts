@@ -27,6 +27,8 @@ export interface BusinessSystemPlugin {
     /** Opt in when returning to the configured portal login path confirms sign-out. */
     onLoginPageChange?: (visible: boolean) => void;
     onNavigate?: (url: string) => void;
+    /** Stop source-only initialization when its tab closes or the app shuts down. */
+    cancelBackgroundWork?: () => void | Promise<void>;
   };
   matters: BusinessMatter[];
 

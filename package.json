@@ -39,6 +39,7 @@
     "test:ui:admin": "npm run admin:web:build && esbuild scripts/smoke-admin-ui-redesign.ts --bundle --platform=node --format=cjs --external:electron --outfile=.tmp/smoke-admin-ui-redesign.cjs && node scripts/run-ui-smoke.mjs admin",
     "test:hrss": "npm run build && esbuild scripts/fixtures/ui-redesign-preload.ts --bundle --platform=node --format=cjs --external:electron --outfile=.tmp/ui-redesign-preload.cjs && esbuild scripts/smoke-hrss.ts --bundle --platform=node --format=cjs --external:electron --outfile=.tmp/smoke-hrss.cjs && node scripts/run-ui-smoke.mjs hrss",
     "test:hrss:login": "esbuild scripts/smoke-hrss-certificate.ts --bundle --platform=node --format=cjs --external:electron --outfile=.tmp/smoke-hrss-certificate.cjs && node scripts/run-ui-smoke.mjs hrss-certificate",
+    "test:hrss:bootstrap": "esbuild scripts/smoke-hrss-background-session.ts --bundle --platform=node --format=cjs --external:electron --outfile=.tmp/smoke-hrss-background-session.cjs && node scripts/run-ui-smoke.mjs hrss-background-session",
     "test:ui": "npm run test:ui:desktop && npm run test:ui:admin",
     "keys:generate": "node scripts/generate-signing-keys.mjs",
     "license:issue": "node scripts/issue-license.mjs",

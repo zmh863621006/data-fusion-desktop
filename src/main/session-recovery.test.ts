@@ -6,6 +6,7 @@ import { AppError } from '../core/errors/app-error';
 import type { BusinessSystemPlugin } from '../core/plugins/types';
 import { restoredCookie, SessionRecoveryService, type SessionVault } from './session-recovery';
 import { createShenzhenHazardousPlugin } from '../plugins/shenzhen-hazardous-chemicals';
+import { createGuangdongHrssPlugin } from '../plugins/guangdong-hrss';
 
 function vault() {
   const values = new Map<string, string>();
@@ -36,6 +37,87 @@ function fixture(id = 'a', token: string | null = 'fixture-token') {
 const cookie = { name: 'sid', value: 'fixture-cookie', domain: 'a.example', path: '/app', hostOnly: true, httpOnly: true, secure: true, session: true } as Cookie;
 const key = 'browser-session.v1.a';
 afterEach(() => { vi.useRealTimers(); vi.restoreAllMocks(); });
+
+describe('HRSS portal and independent subsystem session recovery', () => {
+  const hrssKey = 'browser-session.v1.guangdong-hrss';
+  const hrssCookie = { ...cookie, domain: 'hrss.gdgov.cn', path: '/' };
+  const validReply = () => new Response(JSON.stringify({ appcode: '200', success: true, data: { total: 0 } }));
+
+  it.each([null, { rawCookie: 'WGBT_SESSION=fixture-secret', observedAt: 100 }])(
+    'preserves portal cookies and independent login data before employment credentials are available: %j', async (savedApi) => {
+      const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+      const fetcher = vi.fn(async () => validReply());
+      const plugin = createGuangdongHrssPlugin({ fetcher });
+      const store = vault(), target = browser([hrssCookie]);
+      const service = new SessionRecoveryService(store, () => target);
+      await service.register(plugin);
+      if (savedApi) plugin.sessionRecovery!.restore(savedApi);
+      expect(await plugin.getSessionState()).toMatchObject({ status: 'unverified' });
+      expect(fetcher).not.toHaveBeenCalled();
+      expect(store.delete).not.toHaveBeenCalled();
+      expect(JSON.parse(store.values.get(hrssKey)!)).toMatchObject({ api: savedApi, cookies: [hrssCookie] });
+      expect(service.canRestore(plugin.id)).toBe(false);
+      expect(warn).toHaveBeenCalledWith('原系统登录验证未通过', expect.objectContaining({
+        systemId: plugin.id, errorCode: 'SYSTEM_LOGIN_REQUIRED', reason: 'HRSS_EMPLOYMENT_NOT_READY',
+      }));
+      await service.flush();
+      const reopened = createGuangdongHrssPlugin({ fetcher }), restoredBrowser = browser();
+      await new SessionRecoveryService(store, () => restoredBrowser).register(reopened);
+      expect(restoredBrowser.cookies.set).toHaveBeenCalledWith(expect.objectContaining({ value: hrssCookie.value }));
+      expect(reopened.sessionRecovery!.snapshot()).toEqual(savedApi);
+      expect(JSON.stringify(warn.mock.calls)).not.toContain('fixture-secret');
+    },
+  );
+
+  it('keeps an unexpected HTML response unverified and preserves the login for a later successful check', async () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const fetcher = vi.fn(async () => validReply()).mockResolvedValueOnce(new Response('<html>fixture-secret proxy challenge</html>', { headers: { 'content-type': 'text/html' } }));
+    const plugin = createGuangdongHrssPlugin({ fetcher });
+    const store = vault(), service = new SessionRecoveryService(store, () => browser([hrssCookie]));
+    await service.register(plugin);
+    plugin.sessionRecovery!.restore({ accessToken: 'fixture-secret', observedAt: 100 });
+    expect(await plugin.getSessionState()).toMatchObject({ status: 'unverified' });
+    expect(JSON.parse(store.values.get(hrssKey)!).api.accessToken).toBe('fixture-secret');
+    expect(store.delete).not.toHaveBeenCalled();
+    expect(warn).toHaveBeenCalledWith('原系统登录验证未通过', expect.objectContaining({ reason: 'HRSS_UNEXPECTED_HTML' }));
+    expect(JSON.stringify(warn.mock.calls)).not.toContain('fixture-secret');
+    expect(await plugin.getSessionState({ force: true })).toMatchObject({ status: 'authenticated' });
+  });
+
+  it('does not erase a freshly restored HRSS login when the old verification returns an auth failure', async () => {
+    vi.spyOn(console, 'warn').mockImplementation(() => {});
+    let finish!: (value: Response) => void;
+    const fetcher = vi.fn(async () => validReply()).mockImplementationOnce(() => new Promise(resolve => { finish = resolve; }));
+    const plugin = createGuangdongHrssPlugin({ fetcher });
+    const store = vault(), service = new SessionRecoveryService(store, () => browser([hrssCookie]));
+    await service.register(plugin);
+    plugin.sessionRecovery!.restore({ accessToken: 'old-fixture-secret', observedAt: 100 });
+    const oldCheck = plugin.getSessionState();
+    await vi.waitFor(() => expect(finish).toBeDefined());
+    plugin.sessionRecovery!.restore({ accessToken: 'new-fixture-secret', observedAt: 200 });
+    await service.capture(plugin.id);
+    finish(new Response(null, { status: 401 }));
+    expect((await oldCheck).status).not.toBe('expired');
+    expect(store.delete).not.toHaveBeenCalled();
+    expect(JSON.parse(store.values.get(hrssKey)!).api.accessToken).toBe('new-fixture-secret');
+    expect(await plugin.getSessionState({ force: true })).toMatchObject({ status: 'authenticated' });
+  });
+
+  it('logs a confirmed HRSS HTTP rejection with only approved diagnostics', async () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const plugin = createGuangdongHrssPlugin({ fetcher: async () => new Response('fixture-secret', { status: 401 }) });
+    const store = vault(), service = new SessionRecoveryService(store, () => browser([hrssCookie]));
+    await service.register(plugin);
+    plugin.sessionRecovery!.restore({ accessToken: 'fixture-secret', observedAt: 100 });
+    await service.capture(plugin.id);
+    expect(await plugin.getSessionState()).toMatchObject({ status: 'expired' });
+    expect(store.values.has(hrssKey)).toBe(false);
+    expect(warn).toHaveBeenCalledWith('原系统登录验证未通过', expect.objectContaining({
+      errorCode: 'SESSION_EXPIRED', reason: 'HRSS_AUTH_HTTP', httpStatus: 401, credentialKind: 'access',
+    }));
+    expect(JSON.stringify(warn.mock.calls)).not.toContain('fixture-secret');
+  });
+});
 
 describe('encrypted browser and API session recovery coordination', () => {
   const credentials = { Authorization: 'fixture-token', userId: 'fixture-user' };
@@ -237,6 +319,21 @@ describe('encrypted browser and API session recovery coordination', () => {
     expect(JSON.stringify(warn.mock.calls)).not.toContain('fixture-secret');
     vi.setSystemTime(Date.now() + 60_001); await client.plugin.getSessionState({ force: true });
     expect(warn).toHaveBeenCalledTimes(2);
+  });
+
+  it('does not log arbitrary diagnostic details that resemble HRSS failure metadata', async () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const client = fixture('guangdong-hrss');
+    const service = new SessionRecoveryService(vault(), () => browser());
+    await service.register(client.plugin);
+    client.validate.mockRejectedValue(new AppError('REMOTE_REQUEST_FAILED', 'fixture-secret', {
+      reason: 'fixture-secret', credentialKind: 'fixture-secret', httpStatus: '401 fixture-secret',
+      sourcePath: '/fixture-secret', cookie: 'fixture-secret',
+    }));
+    expect(await client.plugin.getSessionState()).toMatchObject({ status: 'unverified' });
+    expect(JSON.stringify(warn.mock.calls)).not.toContain('fixture-secret');
+    expect(warn.mock.calls[0][1]).not.toHaveProperty('httpStatus');
+    expect(warn.mock.calls[0][1]).not.toHaveProperty('credentialKind');
   });
 
   it('limits automatic recovery to saved and licensed systems', async () => {
