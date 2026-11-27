@@ -38,6 +38,7 @@
 32. [31-business-startup-updates.md](./31-business-startup-updates.md) — 启动更新、OSS清单、发布与运维规则
 33. [batch-return.md](./batch-return.md) — 多业务批量回流、独立系统串行及任务组操作
 34. [32-release-1.1.11.md](./32-release-1.1.11.md) — 1.1.11五路线上发布、摘要与验证记录
+35. [34-housing-rental-binding.md](./34-housing-rental-binding.md) — 房屋租赁Excel编码挂接、任务结果、后台权限与本地1.1.12交付
 
 ## 核心不可破坏原则
 
