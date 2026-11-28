@@ -16,6 +16,7 @@ import { governmentInfoPlugin } from '../plugins/government-info';
 import { createSpecialEquipmentPlugin } from '../plugins/guangdong-special-equipment';
 import { createFoodDrugPlugin } from '../plugins/guangdong-food-drug';
 import ExcelJS from 'exceljs';
+import { createGuangdongHrssPlugin } from '../plugins/guangdong-hrss';
 
 const creditCode = '91440300123456789Q';
 const canonical = { xzxkmc: '许可事项', xkWsh: 'TEST-001', xkJdrq: '2026-10-06', xkXkjg: '测试机关',
@@ -24,6 +25,28 @@ const directories: string[] = [];
 afterEach(async () => { await Promise.all(directories.splice(0).map(path => rm(path, { recursive: true, force: true }))); });
 
 describe('reflow enterprise completion and managed export integration', () => {
+  it('exports an empty timed-out HRSS batch with an honest completeness sheet and the requested dates', async () => {
+    const directory = await mkdtemp(join(tmpdir(), 'fusion-empty-batch-')); directories.push(directory);
+    const runtime = new AppRuntime(), plugin = createGuangdongHrssPlugin();
+    runtime.plugins.register(plugin);
+    const task = { id: 'empty-partial', type: 'data-return', name: '失业信息', systemId: plugin.id,
+      matterId: 'unemployment', status: 'completed', createdAt: 1, progress: { current: 0, skippedRequests: 2 },
+      details: { dateFilterStatus: 'applied', startDate: '2026-11-01', endDate: '2026-11-02', dateBasisLabel: '登记日期' },
+      result: { total: 0, partial: true, skippedRequests: 2 } };
+    Object.assign(runtime, { exportDirectory: new ApplicationExportDirectory(directory),
+      currentGrant: async () => ({ allowExport: true }), requireLicense: async () => {},
+      platformStore: { getTask: async () => task, taskRowsForExport: async () => [], taskOutputCompleteness: async () => ({ batchRowCount: 0, incompleteHandling: 0 }) } });
+    const result = await runtime.exportTaskOutput(task.id);
+    expect(result).toMatchObject({ rowCount: 0, completenessWarning: expect.stringContaining('请勿视为') });
+    expect(basename(result!.path)).toMatch(/^业务台账-.*2026-11-01至2026-11-02.xlsx$/);
+    const workbook = await new ExcelJS.Workbook().xlsx.readFile(result!.path);
+    expect(workbook.getWorksheet('业务列表台账')!.rowCount).toBe(1);
+    const summary = workbook.getWorksheet('批次说明')!;
+    const entries: Record<string, unknown> = {};
+    summary.eachRow(row => { entries[String(row.getCell(1).value)] = row.getCell(2).value; });
+    expect(entries).toMatchObject({ '跳过请求次数': 2, '日期口径': '登记日期', '本次导出条数': 0,
+      '空表说明': expect.stringContaining('不代表原系统') });
+  });
   it('persists the matched source application code and waits for code-based legal-person completion', async () => {
     const runtime = new AppRuntime(), repository = new MemoryLocalRepository(), engine = new DefaultLocalSyncEngine(repository);
     const plugin = oversizeTransportPlugin, matter = plugin.matters[0], order: string[] = [];

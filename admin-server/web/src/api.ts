@@ -5,7 +5,7 @@ import { releaseFileError, releaseTarget, type UploadedRelease, type UploadRelea
 export class ApiError extends Error {
   constructor(message: string, public readonly status: number, public readonly code?: string, public readonly retryAfterSeconds = 0) { super(message); }
 }
-const localError = (path: string) => ['/api/admin/login','/api/admin/captcha','/api/admin/bootstrap'].includes(path);
+const localError = (path: string) => ['/api/admin/login','/api/admin/captcha','/api/admin/bootstrap'].includes(path.split('?')[0]);
 
 export async function request<T>(path: string, options: RequestInit = {}): Promise<T> {
   let response: Response;
@@ -93,7 +93,7 @@ export function uploadRelease(file: File, values: UploadReleaseValues, options: 
 
 export const adminApi = {
   captcha: () => request<{ id: string; image: string; expiresAt: number }>('/api/admin/captcha'),
-  bootstrap: () => request<BootstrapData>('/api/admin/bootstrap'),
+  bootstrap: () => request<BootstrapData>('/api/admin/bootstrap?compact=1'),
   users: () => request<AdminUser[]>('/api/admin/users'),
   createUser: (body: Record<string, unknown>) => request('/api/admin/users', { method: 'POST', body: JSON.stringify(body) }),
   updateUser: (id: string, body: Record<string, unknown>) => request(`/api/admin/users/${encodeURIComponent(id)}`, { method: 'PATCH', body: JSON.stringify(body) }),

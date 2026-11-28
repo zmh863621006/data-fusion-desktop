@@ -38,9 +38,18 @@ export function BusinessUpdatesPage({ data }: { data: BootstrapData }) {
   const [frozenTarget, setFrozenTarget] = useState(target), [file, setFile] = useState<File | null>(null), [uploaded, setUploaded] = useState<BusinessRelease | null>(null);
   const [changing, setChanging] = useState<BusinessRelease | null>(null), [inspecting, setInspecting] = useState<BusinessRelease | null>(null), [publishError, setPublishError] = useState('');
   const [form] = Form.useForm<{ version: string; notes?: string }>(); const picker = useRef<HTMLInputElement>(null), controller = useRef<AbortController | null>(null), alive = useRef(true);
-  const load = async () => { try { const rows = await businessApi.list(); if (alive.current) { setCatalog(rows); setLoadError(''); } } catch (error) { if (alive.current) setLoadError(errorText(error)); } };
-  useEffect(() => { alive.current = true; void load(); return () => { alive.current = false; controller.current?.abort(); }; }, [data]);
-  const changeTarget = (patch: Partial<BusinessTarget>) => setTarget(value => { const next = { ...value, ...patch }; if (next.platform === 'win32') { next.arch = 'x64'; next.variant = 'standard'; } else next.electronMajor = 44; return next; });
+  const [page, setPage] = useState(1), [loading, setLoading] = useState(false);
+  const listController = useRef<AbortController | null>(null);
+  const load = async () => {
+    listController.current?.abort(); const pending = new AbortController(); listController.current = pending; setLoading(true);
+    try { const rows = await businessApi.list(data.paginated ? { paginated: '1', page: String(page), pageSize: '10', ...target, electronMajor: String(target.electronMajor) } : undefined, pending.signal);
+      if (alive.current && !pending.signal.aborted) { setCatalog(rows); setLoadError(''); } }
+    catch (error) { if (alive.current && !pending.signal.aborted) setLoadError(errorText(error)); }
+    finally { if (alive.current && !pending.signal.aborted) setLoading(false); }
+  };
+  useEffect(() => { alive.current = true; return () => { alive.current = false; controller.current?.abort(); listController.current?.abort(); }; }, []);
+  useEffect(() => { void load(); return () => listController.current?.abort(); }, [data, target, page]);
+  const changeTarget = (patch: Partial<BusinessTarget>) => { setPage(1); setTarget(value => { const next = { ...value, ...patch }; if (next.platform === 'win32') { next.arch = 'x64'; next.variant = 'standard'; } else next.electronMajor = 44; return next; }); };
   const begin = () => { setFrozenTarget({ ...target }); form.resetFields(); setFile(null); setUploaded(null); setUploadError(''); setPercent(0); setOpen(true); };
   const close = () => { if (uploading) controller.current?.abort(); else setOpen(false); };
   const upload = async () => {
@@ -68,7 +77,7 @@ export function BusinessUpdatesPage({ data }: { data: BootstrapData }) {
       options={[{ label: 'Windows 10/11 · Electron 44', value: 44 }, { label: 'Windows 7 · Electron 22', value: 22 }]} /></div>}
     {!loadError && <BusinessDistributionNotice catalog={catalog} />}
     {loadError && <Alert className="page-notice" type="error" showIcon message={loadError} action={<Button onClick={() => void load()}>重试</Button>} />}
-    <ProTable<BusinessRelease> key={JSON.stringify(target)} rowKey="id" headerTitle="业务版本记录" dataSource={businessReleasesForTarget(catalog.rows, target)} columns={columns} search={false} options={{ reload: () => void load() }} pagination={{ pageSize: 10 }} scroll={{ x: 1050 }}
+    <ProTable<BusinessRelease> loading={loading} key={JSON.stringify(target)} rowKey="id" headerTitle="业务版本记录" dataSource={businessReleasesForTarget(catalog.rows, target)} columns={columns} search={false} options={{ reload: () => void load() }} pagination={data.paginated ? { current: page, total: catalog.total, pageSize: 10, showSizeChanger: false, onChange: setPage } : { pageSize: 10 }} scroll={{ x: 1050 }}
       toolBarRender={() => canManage ? [<Button key="upload" type="primary" icon={<PlusOutlined />} onClick={begin}>上传业务包</Button>] : []} />
     <Modal title={`上传业务包 · ${businessTargetLabel(frozenTarget)}`} width={700} open={open} onCancel={close} maskClosable={!uploading} keyboard={!uploading} destroyOnClose
       footer={uploaded ? [<Button key="close" onClick={close}>暂不发布</Button>, <Button key="publish" type="primary" disabled={!catalog.configured} onClick={() => { setOpen(false); setChanging(uploaded); setPublishError(''); }}>核对并发布</Button>]

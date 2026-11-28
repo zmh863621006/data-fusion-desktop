@@ -37,4 +37,11 @@ describe('one-window record delivery presentation', () => {
     expect(html).toContain('生成 Excel'); expect(html).toContain('推送失败'); expect(html).toContain('打开文件夹'); expect(html).toContain('重新推送');
     expect(renderToStaticMarkup(<OneWindowDeliveryDescription />)).not.toContain('Excel');
   });
+  it('keeps paused workbook batches visible and recoverable', () => {
+    const paused = { ...batch, uploadStatus: 'paused' as const, uploadError: '授权恢复后将自动重试' };
+    const html = renderToStaticMarkup(<><OneWindowUploadStatus batch={paused} deliveryMode="workbook" />
+      <OneWindowBatchActions batch={paused} deliveryMode="workbook" allowExport retrying="" {...callbacks} /></>);
+    expect(html).toContain('推送已暂停'); expect(html).toContain('授权恢复后将自动重试');
+    expect(html).toContain('重新推送'); expect(html).toContain('打开文件夹');
+  });
 });

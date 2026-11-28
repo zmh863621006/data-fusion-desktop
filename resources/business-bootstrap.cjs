@@ -99,11 +99,18 @@ async function prepare() {
   if (shell.schema !== 1 || shell.product !== 'data-fusion-desktop' || Object.keys(target).some(key => target[key] !== shell.target?.[key])) throw Object.assign(Error('BASE_TARGET_MISMATCH'), { code: 'BASE_TARGET_MISMATCH' });
   const result = await updater.runStartupUpdate({ ...options, onProgress, manifestTimeoutMs: 3000, signal: coldStartAbort.signal, repairCache: true });
   if (result.status === 'blocked') return result;
-  if (result.root) return result;
   const builtin = { schema: 1, product: shell.product, version: shell.baseBusinessVersion, minShellVersion: shell.builtin.minShellVersion,
     target, backend: shell.builtin.backend, bytes: shell.builtin.bytes, sha256: shell.builtin.sha256 };
-  const selected = await updater.ensureBuiltinPayload({ ...options, asarFile: path.join(process.resourcesPath, 'business', 'builtin.asar'), manifest: builtin,
+  const selected = result.root ? result : await updater.ensureBuiltinPayload({ ...options, asarFile: path.join(process.resourcesPath, 'business', 'builtin.asar'), manifest: builtin,
     signal: coldStartAbort.signal, repairCache: true });
+  // A failed renderer retry still has business modules loaded; defer cleanup to
+  // the fresh process instead of deleting any files that process might use.
+  if (!businessAttempted) {
+    try {
+      const cleanup = await updater.pruneStartupCache({ ...options, selectedManifest: selected.manifest, builtinManifest: builtin, signal: coldStartAbort.signal });
+      if (cleanup.removed || cleanup.skipped) record('cache-cleanup', cleanup);
+    } catch { record('cache-cleanup-skipped'); }
+  }
   return { ...result, ...selected, status: result.status };
 }
 async function start() {

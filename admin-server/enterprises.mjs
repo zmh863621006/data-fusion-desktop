@@ -53,6 +53,20 @@ export function createEnterpriseStore(db, { provider, configured = false, audit,
     CREATE TABLE IF NOT EXISTS enterprise_resolution_queries(request_id TEXT NOT NULL REFERENCES enterprise_requests(id) ON DELETE CASCADE,
       strategy TEXT NOT NULL,status TEXT NOT NULL,queried_at INTEGER NOT NULL,PRIMARY KEY(request_id,strategy));
   `);
+  for (const [table, name, type] of [
+    ['enterprises','last_verified_at','INTEGER'],
+    ['enterprise_requests','revalidated_at','INTEGER'],
+    ['enterprise_requests','revalidation_status',"TEXT NOT NULL DEFAULT ''"],
+    ['enterprise_requests','revalidation_reason',"TEXT NOT NULL DEFAULT ''"],
+    ['enterprise_requests','proposal_json',"TEXT NOT NULL DEFAULT ''"],
+  ]) if (!db.prepare(`PRAGMA table_info(${table})`).all().some(column => column.name === name)) db.exec(`ALTER TABLE ${table} ADD COLUMN ${name} ${type}`);
+  db.exec(`CREATE TABLE IF NOT EXISTS enterprise_query_counters(kind TEXT PRIMARY KEY,total INTEGER NOT NULL DEFAULT 0,started_at INTEGER NOT NULL);
+    CREATE TABLE IF NOT EXISTS enterprise_provider_attempts(id TEXT PRIMARY KEY,requested_at INTEGER NOT NULL);
+    CREATE INDEX IF NOT EXISTS enterprise_provider_attempt_time ON enterprise_provider_attempts(requested_at);`);
+  db.prepare("UPDATE enterprise_requests SET revalidation_status='error',revalidation_reason='上次核验被中断，保留原资料，可重新核验' WHERE revalidation_status='running'").run();
+  const count = kind => db.prepare(`INSERT INTO enterprise_query_counters(kind,total,started_at) VALUES(?,1,?)
+    ON CONFLICT(kind) DO UPDATE SET total=total+1`).run(kind, now());
+  const statistics = () => Object.fromEntries(db.prepare('SELECT kind,total FROM enterprise_query_counters').all().map(row => [row.kind, row.total]));
   let job = null;
   let closed = false;
   const resolving = new Map(), requestTails = new Map(), querying = new Map(), waiting = [];
@@ -60,7 +74,8 @@ export function createEnterpriseStore(db, { provider, configured = false, audit,
   const providerLimit = 240, providerConcurrency = 4;
   const get = id => db.prepare('SELECT * FROM enterprise_requests WHERE id=?').get(id);
   const entity = id => db.prepare('SELECT * FROM enterprises WHERE id=?').get(id);
-  const settings = () => ({ configured, enabled: Boolean(db.prepare('SELECT enabled FROM enterprise_settings WHERE id=1').get().enabled), batchLimit: 20 });
+  const settings = () => ({ configured, enabled: Boolean(db.prepare('SELECT enabled FROM enterprise_settings WHERE id=1').get().enabled), batchLimit: 20,
+    statistics: { libraryHits: 0, providerCacheHits: 0, providerRequests: 0, ...statistics() } });
   function history(id, actor, source, before, after) {
     db.prepare('INSERT INTO enterprise_history VALUES(?,?,?,?,?,?,?)').run(randomUUID(), id, actor, source, JSON.stringify(before), JSON.stringify(after), Date.now());
   }
@@ -121,7 +136,8 @@ export function createEnterpriseStore(db, { provider, configured = false, audit,
     const configurationReason = !configured ? '后台尚未配置阿里云企业查询，已保留现有字段' : !settings().enabled ? '后台尚未开启企业查询，已保留现有字段' : '';
     return { requestId: id, status: request.status, reason: request.reason || (['pending','partial'].includes(request.status) ? configurationReason : ''), enterprise: value ? {
       id: value.id, name: value.name, creditCode: value.credit_code, legalPerson: value.legal_person,
-      source: value.source, updatedAt: value.updated_at,
+      source: value.source, updatedAt: value.updated_at, lastVerifiedAt: value.last_verified_at ?? null,
+      freshness: !value.last_verified_at ? 'unknown' : now() - value.last_verified_at > 90 * 86400000 ? 'stale' : 'current',
     } : null };
   }
   function save(id, value, source, actor, manual = false) {
@@ -145,10 +161,12 @@ export function createEnterpriseStore(db, { provider, configured = false, audit,
         db.prepare('UPDATE enterprises SET name=?,credit_code=?,legal_person=?,source=?,updated_at=? WHERE id=?')
           .run(name, code, legalPerson || existing.legal_person || '', source, Date.now(), entityId);
       } else {
-        db.prepare(`INSERT INTO enterprises VALUES(?,?,?,?,?,?) ON CONFLICT(credit_code) DO UPDATE SET
+        db.prepare(`INSERT INTO enterprises(id,name,credit_code,legal_person,source,updated_at) VALUES(?,?,?,?,?,?) ON CONFLICT(credit_code) DO UPDATE SET
           name=excluded.name,legal_person=excluded.legal_person,source=excluded.source,updated_at=excluded.updated_at`)
           .run(entityId, name, code, legalPerson || existing?.legal_person || '', source, Date.now());
       }
+      db.prepare('UPDATE enterprises SET last_verified_at=? WHERE id=?').run(now(), entityId);
+      db.prepare("UPDATE enterprise_requests SET proposal_json='',revalidation_status='',revalidation_reason='' WHERE id=?").run(id);
       history(id, actor, source, { request, enterprise: existing ?? null }, { enterprise: entity(entityId) });
       link(id, entity(entityId), source, actor);
       // Preserve each original name/code while connecting compatible aliases to the same canonical enterprise.
@@ -157,14 +175,15 @@ export function createEnterpriseStore(db, { provider, configured = false, audit,
       for (const row of related) if (row.status !== 'review' || row.enterprise_id === entityId) link(row.id, entity(entityId), source, actor);
     });
   }
-  async function providerQuery(keyword) {
-    if (querying.has(keyword)) return querying.get(keyword);
+  async function providerQuery(keyword, fresh = false) {
+    if (querying.has(keyword)) { count('providerCacheHits'); return querying.get(keyword); }
     const saved = db.prepare('SELECT * FROM enterprise_provider_queries WHERE keyword=?').get(keyword);
     // Persist cooldowns across application restarts. Empty/partial answers are not paid again on every export.
     const ttl = saved?.status === 'error' ? 15 * 60_000 : saved?.status === 'running' ? 60_000 : 24 * 60 * 60_000;
-    if (saved && now() - saved.queried_at < ttl) {
+    if (!fresh && saved && now() - saved.queried_at < ttl) {
       if (saved.status === 'error') fail('企业查询服务暂不可用，请稍后重试', 502);
       if (saved.status === 'running') fail('企业查询正在恢复，请稍后重试', 429);
+      count('providerCacheHits');
       return saved.status === 'not_found' ? null : JSON.parse(saved.result_json);
     }
     const work = (async () => {
@@ -172,12 +191,17 @@ export function createEnterpriseStore(db, { provider, configured = false, audit,
       else activeQueries++;
       try {
         if (closed || !settings().enabled || !configured) fail('付费企业查询未配置或未开启', 409);
-        if (db.prepare('SELECT count(*) n FROM enterprise_provider_queries WHERE queried_at>?').get(now() - 60_000).n >= providerLimit) {
+        db.prepare('DELETE FROM enterprise_provider_attempts WHERE requested_at<=?').run(now() - 60_000);
+        const recentAttempts = db.prepare('SELECT count(*) n FROM enterprise_provider_attempts').get().n;
+        const legacyKeywords = db.prepare('SELECT count(*) n FROM enterprise_provider_queries WHERE queried_at>?').get(now() - 60_000).n;
+        if (Math.max(recentAttempts, legacyKeywords) >= providerLimit) {
           fail('企业查询达到每分钟安全限额，请稍后重试', 429);
         }
         db.prepare(`INSERT INTO enterprise_provider_queries(keyword,status,result_json,queried_at) VALUES(?,'running','',?)
           ON CONFLICT(keyword) DO UPDATE SET status='running',result_json='',queried_at=excluded.queried_at`).run(keyword, now());
         try {
+          db.prepare('INSERT INTO enterprise_provider_attempts VALUES(?,?)').run(randomUUID(), now());
+          count('providerRequests');
           const raw = await provider(keyword);
           // Keep only the three permitted fields; never cache an upstream body or credential.
           const value = raw ? { name: clean(raw.name), creditCode: clean(raw.creditCode).toUpperCase(), legalPerson: clean(raw.legalPerson) } : null;
@@ -199,7 +223,7 @@ export function createEnterpriseStore(db, { provider, configured = false, audit,
   async function performQuery(id, user, strategy = 'name-first') {
     let row = get(id);
     if (!row || row.status === 'review') return;
-    if (cached(row, user.username, strategy) && get(id).status !== 'partial') return;
+    if (cached(row, user.username, strategy) && get(id).status !== 'partial') { count('libraryHits'); return; }
     row = get(id);
     const previous = db.prepare('SELECT * FROM enterprise_resolution_queries WHERE request_id=? AND strategy=?').get(id, strategy);
     const cooldown = previous?.status === 'not_found' ? 24 * 60 * 60_000 : previous?.status === 'error' ? 15 * 60_000 : 60_000;
@@ -231,13 +255,43 @@ export function createEnterpriseStore(db, { provider, configured = false, audit,
     }
     if (!closed && user.id) audit(user, 'enterprise.queried', 'enterprise_request', id, { status: get(id).status });
   }
+  async function revalidate(id, user) {
+    const request = get(id), original = request?.enterprise_id && entity(request.enterprise_id);
+    if (!original || !['success','partial'].includes(request.status)) fail('请先补全或核实企业资料再重新核验', 409);
+    const timestamp = now();
+    db.prepare("UPDATE enterprise_requests SET revalidated_at=?,revalidation_status='running',revalidation_reason='' WHERE id=?").run(timestamp, id);
+    const finish = (status, reason, proposal = '') => {
+      db.prepare('UPDATE enterprise_requests SET revalidation_status=?,revalidation_reason=?,proposal_json=? WHERE id=?').run(status, reason, proposal, id);
+      history(id, user.username, 'manual-revalidation', { enterprise: original }, { status, reason, proposal: proposal ? JSON.parse(proposal) : null });
+      audit(user, 'enterprise.revalidated', 'enterprise_request', id, { status });
+    };
+    try {
+      // Revalidation is only started by an explicit administrator action. Aged
+      // canonical rows remain usable and never silently trigger paid refreshes.
+      const value = await providerQuery(original.credit_code, true);
+      if (closed) return;
+      if (JSON.stringify(entity(original.id)) !== JSON.stringify(original) || get(id).enterprise_id !== original.id) {
+        finish('error', '查询期间资料已被修改，本次结果未应用，请重新核验'); return;
+      }
+      if (!value) { finish('not_found', '云端未查到，继续保留原资料'); return; }
+      if (value.creditCode !== original.credit_code) { finish('error', '返回信用代码与原资料不符，未覆盖原资料'); return; }
+      if (value.name !== original.name || (value.legalPerson && value.legalPerson !== original.legal_person)) {
+        finish('different', '核验发现差异，原资料仍可使用；请人工确认后保存', JSON.stringify({ ...value, legalPerson: value.legalPerson || original.legal_person,
+          expected: { name: original.name, creditCode: original.credit_code, legalPerson: original.legal_person } })); return;
+      }
+      if (!value.legalPerson) { finish('incomplete', '云端未返回法人，本次未确认全部字段，保留原资料'); return; }
+      db.prepare('UPDATE enterprises SET last_verified_at=? WHERE id=?').run(now(), original.id);
+      finish('same', '云端资料一致，已更新最近核验时间');
+    } catch (error) { if (!closed) finish('error', error.status ? error.message : '核验失败，继续保留原资料'); }
+  }
   async function query(id, user, strategy = 'name-first') {
     const key = `${id}:${strategy}`;
     if (resolving.has(key)) return resolving.get(key);
     // Different callers may resolve one shared request under different policies. Serialize mutation,
     // but deduplicate only equal policies and return this execution's snapshot to its own caller.
     const work = (requestTails.get(id) ?? Promise.resolve()).catch(() => {}).then(async () => {
-      await performQuery(id, user, strategy);
+      if (strategy === 'revalidate') await revalidate(id, user);
+      else await performQuery(id, user, strategy);
       return result(id);
     });
     resolving.set(key, work); requestTails.set(id, work);
@@ -258,7 +312,7 @@ export function createEnterpriseStore(db, { provider, configured = false, audit,
       return registered.map(item => resolved.get(item.requestId));
     },
     close() { closed = true; },
-    async route(request, response, url, { user, readJson, json }) {
+    async route(request, response, url, { user, readJson, json, authorize }) {
       const base = '/api/admin/enterprises';
       if (request.method === 'GET' && url.pathname === `${base}/settings`) return json(response, 200, { ...settings(), job });
       if (request.method === 'PATCH' && url.pathname === `${base}/settings`) {
@@ -276,23 +330,31 @@ export function createEnterpriseStore(db, { provider, configured = false, audit,
         const args = [keyword,keyword,keyword,keyword,status,status];
         const from = 'FROM enterprise_requests r LEFT JOIN enterprises e ON e.id=r.enterprise_id';
         return json(response, 200, { total: db.prepare(`SELECT count(*) n ${from} ${where}`).get(...args).n,
-          rows: db.prepare(`SELECT r.*,e.name standard_name,e.credit_code standard_code,e.legal_person,e.source,e.updated_at ${from} ${where} ORDER BY r.created_at DESC,r.id LIMIT 20 OFFSET ?`).all(...args, (page-1)*20) });
+          rows: db.prepare(`SELECT r.*,e.name standard_name,e.credit_code standard_code,e.legal_person,e.source,e.updated_at,e.last_verified_at ${from} ${where} ORDER BY r.created_at DESC,r.id LIMIT 20 OFFSET ?`).all(...args, (page-1)*20) });
       }
       if (request.method === 'POST' && url.pathname === base) {
         const value = register(await readJson(request));
         audit(user, 'enterprise.created', 'enterprise_request', value.requestId);
         return json(response, 201, value);
       }
-      if (request.method === 'POST' && url.pathname === `${base}/query`) {
+      if (request.method === 'POST' && [ `${base}/query`, `${base}/revalidate` ].includes(url.pathname)) {
         if (!settings().enabled || !configured) return json(response, 409, { error: '付费企业查询未配置或未开启' });
         if (job?.running) return json(response, 409, { error: '已有企业补全批次正在运行' });
         const body = await readJson(request);
+        if (job?.running) return json(response, 409, { error: '已有企业查询批次正在运行' });
+        if (!settings().enabled || !configured) return json(response, 409, { error: '付费企业查询未配置或未开启' });
         if (!Array.isArray(body.ids) || !body.ids.length || body.ids.length > 20 || body.ids.some(id => typeof id !== 'string' || !get(id))) fail('请选择 1–20 条企业记录');
         const ids = [...new Set(body.ids)];
+        const refreshing = url.pathname === `${base}/revalidate`;
+        if (refreshing && ids.some(id => !get(id).enterprise_id || !['success','partial'].includes(get(id).status))) fail('仅支持重新核验已有标准资料的企业', 409);
         job = { id: randomUUID(), running: true, total: ids.length, completed: 0 };
         const currentJob = job;
         void (async () => {
-          try { for (const id of ids) { if (closed || !settings().enabled) break; await query(id, user); currentJob.completed++; } }
+          try { for (const id of ids) {
+            if (closed || !settings().enabled) break;
+            if (authorize) { const fresh = authorize(request); if (!fresh || fresh.id !== user.id || fresh.role !== user.role || fresh.passwordChangeRequired) { currentJob.error = '账号权限已变更，已停止剩余查询'; break; } }
+            await query(id, user, refreshing ? 'revalidate' : 'name-first'); currentJob.completed++;
+          } }
           finally { currentJob.running = false; }
         })().catch(() => { currentJob.error = '补全批次中断，请查看记录状态后重试'; });
         return json(response, 202, currentJob);
@@ -303,7 +365,14 @@ export function createEnterpriseStore(db, { provider, configured = false, audit,
       }
       if (match && request.method === 'PATCH' && !match[2]) {
         if (job?.running) return json(response, 409, { error: '请等待当前查询批次结束再人工修正，避免结果覆盖' });
-        save(match[1], await readJson(request), 'manual', user.username, true);
+        const body = await readJson(request);
+        if (job?.running) return json(response, 409, { error: '请等待当前查询批次结束再人工修正，避免结果覆盖' });
+        const current = get(match[1]);
+        if (body.expected) {
+          const previous = current?.enterprise_id && entity(current.enterprise_id);
+          if (!previous || body.expected.name !== previous.name || body.expected.creditCode !== previous.credit_code || body.expected.legalPerson !== previous.legal_person) fail('企业资料已变更，请刷新后重新核对', 409);
+        }
+        save(match[1], body, 'manual', user.username, true);
         audit(user, 'enterprise.corrected', 'enterprise_request', match[1]);
         return json(response, 200, result(match[1]));
       }

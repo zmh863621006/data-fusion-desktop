@@ -1,6 +1,7 @@
 import { PractitionerNumberPanel } from './PractitionerNumberPanel';
 import { PRACTITIONER_NUMBER_MATTERS } from '../../core/config/practitioner-numbers';
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
+import { useRendererReady } from './useRendererReady';
 import type { SourceTabsState } from '../../core/session/source-tabs';
 import { DOUBLE_PUBLICITY_TEMPLATE } from '../../core/double-publicity/template';
 import { validateExport } from '../../core/double-publicity/validation';
@@ -102,6 +103,7 @@ export function App() {
 
 function LicensedApp() {
   const [license, setLicense] = useState<LicenseStatus | null>(null);
+  useRendererReady(Boolean(license && license.state !== 'active'));
   const licenseRevision = useRef(0);
   const applyLicense = (status: LicenseStatus) => {
     licenseRevision.current++;
@@ -303,6 +305,7 @@ function Workspace({ license, onLicenseChanged }: { license: LicenseStatus; onLi
   const [checkingLogin, setCheckingLogin] = useState(false);
   const pendingTaskNavigation = useRef<{ systemId: string; matterId: string; batchId: string } | null>(null);
   const [openingPublication, setOpeningPublication] = useState<PublicationPlatformId | null>(null);
+  useRendererReady(catalogScope === scope && !catalogError);
   const visibleSourceTabs = sourceTabs.tabs.filter(tab => access.canOpenSourceTab(tab.systemId));
   const loginTab = visibleSourceTabs.find((tab) => tab.systemId === sourceTabs.activeSystemId);
   const publicationTab = publicationPlatform(loginTab?.systemId);
@@ -973,6 +976,8 @@ function LocalDataPage({ systemId, matterId, matterName, selectedBatchId, onBatc
   const exportGeneration = useRef(0);
   const listGeneration = useRef(0);
   const detailGeneration = useRef(0);
+  const [enrichmentRevision, setEnrichmentRevision] = useState(0);
+  const consumedEnrichment = useRef(0);
   const [loadingRows, setLoadingRows] = useState(true);
   const [listError, setListError] = useState('');
   useLayoutEffect(() => {
@@ -981,11 +986,13 @@ function LocalDataPage({ systemId, matterId, matterName, selectedBatchId, onBatc
     return () => { exportGeneration.current++; listGeneration.current++; detailGeneration.current++; };
   }, [systemId, matterId, selectedBatchId]);
   const rowIssues = useMemo(() => new Map(validateExport(rows).issues.map(issue => [issue.recordKey, issue])), [rows]);
-  const load = async (targetPage = page, targetPageSize = pageSize, filter = appliedKeyword) => {
+  const load = async (targetPage = page, targetPageSize = pageSize, filter = appliedKeyword, silent = false) => {
     const generation = ++listGeneration.current;
-    exportGeneration.current++;
-    setExportResult(null);
-    setRows([]); setTotal(0); setLoadingRows(true); setListError('');
+    if (!silent) {
+      exportGeneration.current++;
+      setExportResult(null);
+      setRows([]); setTotal(0); setLoadingRows(true); setListError('');
+    }
     try {
       const search = filter || undefined;
       if (selectedBatchId) {
@@ -1000,7 +1007,7 @@ function LocalDataPage({ systemId, matterId, matterName, selectedBatchId, onBatc
       }
       setAppliedKeyword(filter); setPage(targetPage); setPageSize(targetPageSize);
     } catch (error) {
-      if (generation === listGeneration.current) setListError(error instanceof Error ? error.message : '读取回流数据失败，请重新查询');
+      if (!silent && generation === listGeneration.current) setListError(error instanceof Error ? error.message : '读取回流数据失败，请重新查询');
     } finally {
       if (generation === listGeneration.current) setLoadingRows(false);
     }
@@ -1008,7 +1015,15 @@ function LocalDataPage({ systemId, matterId, matterName, selectedBatchId, onBatc
   useEffect(() => {
     setKeyword(''); setPage(1); setSelected(null);
   }, [systemId, matterId]);
+  useLayoutEffect(() => window.desktopApi.records.onChanged?.(scope => {
+    if (scope.systemId === systemId && scope.matterId === matterId) setEnrichmentRevision(value => value + 1);
+  }), [systemId, matterId]);
   useLayoutEffect(() => { void load(1, pageSize); }, [systemId, matterId, selectedBatchId]);
+  useEffect(() => {
+    if (loadingRows || consumedEnrichment.current === enrichmentRevision) return;
+    consumedEnrichment.current = enrichmentRevision;
+    void load(page, pageSize, appliedKeyword, true);
+  }, [enrichmentRevision, loadingRows]);
   const exportDisabled = exporting || loadingRows || !total || Boolean(listError);
   const exportData = async (target?: GovernmentExportTarget) => {
     if (!allowExport || exportDisabled || exportInFlight.current) return;

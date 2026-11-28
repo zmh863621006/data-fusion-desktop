@@ -1,9 +1,10 @@
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { Alert, App as AntApp, Button, Modal, Space, Typography } from 'antd';
 import { LicenseScopePicker } from './LicenseScopePicker';
 import { adminApi, ApiError } from './api';
 import { legacyScopeSystems, licenseScopeSnapshot, scopeEditorValues, scopeUpdatePayload, scopeValidationError, emptyScope } from './license-scope';
-import type { BootstrapData, LicenseRecord } from './types';
+import type { BootstrapData, DeviceRecord, LicenseRecord } from './types';
+import { listManagement } from './management-pagination';
 
 export function LicenseScopeEditor({ license, data, onClose, onSaved }: {
   license: LicenseRecord;
@@ -24,7 +25,18 @@ export function LicenseScopeEditor({ license, data, onClose, onSaved }: {
   });
   const [values, setValues] = useState(initial.values ?? emptyScope);
   const legacySystems = initial.snapshot ? legacyScopeSystems(initial.snapshot) : [];
-  const boundDevices = data.devices.filter(device => device.license_id === license.id && device.status === 'active');
+  const [remoteDevices, setRemoteDevices] = useState<DeviceRecord[]>([]), [devicesLoading, setDevicesLoading] = useState(Boolean(data.paginated));
+  const [devicesError, setDevicesError] = useState(false);
+  useEffect(() => {
+    if (!data.paginated) return;
+    const controller = new AbortController(); setDevicesLoading(true); setDevicesError(false);
+    void listManagement<DeviceRecord>('devices', { licenseId: license.id, status: 'active', pageSize: 100 }, controller.signal)
+      .then(result => { if (!controller.signal.aborted) setRemoteDevices(result.rows); })
+      .catch(() => { if (!controller.signal.aborted) setDevicesError(true); })
+      .finally(() => { if (!controller.signal.aborted) setDevicesLoading(false); });
+    return () => controller.abort();
+  }, [data.paginated, license.id]);
+  const boundDevices = data.paginated ? remoteDevices : data.devices.filter(device => device.license_id === license.id && device.status === 'active');
 
   const save = async () => {
     if (!initial.snapshot || saving || conflicted) return;
@@ -51,9 +63,9 @@ export function LicenseScopeEditor({ license, data, onClose, onSaved }: {
       <Alert type="info" showIcon message="影响此授权绑定的全部设备" description={<>
         {license.mode === 'offline' ? '离线授权保存后，需补发许可证并由用户重新导入；已交付的旧文件不会远程失效。' : '在线授权将在客户端下次在线校验后生效，无需重新激活。'}
         <details className="license-bound-devices">
-          <summary>已绑定且在用的设备（{boundDevices.length} 台）</summary>
+          <summary>已绑定且在用的设备（{devicesLoading ? '读取中' : devicesError ? '读取失败' : `${boundDevices.length} 台`}）</summary>
           {boundDevices.length > 0 ? <ul>{boundDevices.map(device => <li key={device.id}><Typography.Text code copyable>{device.device_id}</Typography.Text></li>)}</ul>
-            : <div>暂无在用设备</div>}
+            : <div>{devicesLoading ? '正在读取…' : devicesError ? '请关闭并重新打开查看设备' : '暂无在用设备'}</div>}
         </details>
       </>} />
       {legacySystems.length > 0 && <Alert type="warning" showIcon message="此授权包含历史“全部事项”范围" description="已按当前目录列出这些系统的现有事项（含已停用事项）。保存后将改为明确清单，不会自动包含将来新增事项；请核对后保存。" />}

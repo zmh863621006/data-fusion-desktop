@@ -77,7 +77,10 @@ test('one-window upload HTTP routes use the current signed device and selected m
   assert.equal((await f.api('/api/one-window/uploads/prepare', f.body)).status, 403);
   f.mutate('UPDATE licenses SET allowed_matters_json=? WHERE id=?', JSON.stringify({ [systemId]: [matterId] }), f.license.id);
   f.mutate('UPDATE systems SET enabled=0 WHERE id=?', systemId);
-  assert.equal((await f.api('/api/one-window/uploads/prepare', f.body)).status, 403);
+  assert.equal((await f.api('/api/one-window/uploads/prepare', f.body)).status, 200, 'catalog disabling prevents new allocation without revoking existing scopes');
+  f.mutate('UPDATE system_matters SET enabled=0 WHERE system_id=? AND id=?', systemId, matterId);
+  assert.equal((await f.api('/api/one-window/uploads/prepare', { ...f.body, taskId: randomUUID() })).status, 200);
+  assert.equal((await f.api('/api/one-window/uploads/download', { deviceId: f.deviceId, proof: f.body.proof, uploadId })).status, 200);
   f.mutate('UPDATE systems SET enabled=1 WHERE id=?', systemId);
   f.mutate('UPDATE devices SET status=? WHERE license_id=? AND device_id=?', 'revoked', f.license.id, f.deviceId);
   assert.equal((await f.api('/api/one-window/uploads/download', { deviceId: f.deviceId, proof: f.body.proof, uploadId })).status, 403);

@@ -16,10 +16,10 @@ it('returns registration immediately through the trusted batch endpoint and mark
 it('forwards batch reads, cancellation and failed-only retry with exact system scope',async()=>{
   f.get.mockResolvedValue({tasks:[]});f.cancelPending.mockResolvedValue({cancelled:2});f.retryFailed.mockResolvedValue({count:1});
   await f.handlers.get(IPC_CHANNELS.returnBatchGet)!(event,'guangdong-hrss','batch-test');
-  expect(f.get).toHaveBeenCalledExactlyOnceWith('guangdong-hrss','batch-test');expect(f.business).not.toHaveBeenCalled();
+  expect(f.get).toHaveBeenCalledExactlyOnceWith('guangdong-hrss','batch-test');expect(f.business).toHaveBeenCalledTimes(1);
   await f.handlers.get(IPC_CHANNELS.returnBatchCancelPending)!(event,'guangdong-hrss','batch-test');
   await f.handlers.get(IPC_CHANNELS.returnBatchRetryFailed)!(event,'guangdong-hrss','batch-test');
-  expect(f.cancelPending).toHaveBeenCalledExactlyOnceWith('guangdong-hrss','batch-test');expect(f.retryFailed).toHaveBeenCalledExactlyOnceWith('guangdong-hrss','batch-test');expect(f.business).toHaveBeenCalledTimes(2);
+  expect(f.cancelPending).toHaveBeenCalledExactlyOnceWith('guangdong-hrss','batch-test');expect(f.retryFailed).toHaveBeenCalledExactlyOnceWith('guangdong-hrss','batch-test');expect(f.business).toHaveBeenCalledTimes(3);
 });
 it.each([IPC_CHANNELS.matterRunBatch,IPC_CHANNELS.returnBatchGet,IPC_CHANNELS.returnBatchCancelPending,IPC_CHANNELS.returnBatchRetryFailed])('rejects child frames and other windows at %s before accessing batch services',async channel=>{
   for(const spoofed of [{...event,senderFrame:{}},{...event,sender:{id:8,mainFrame:frame}}]) await expect(f.handlers.get(channel)!(spoofed,'guangdong-hrss','batch-test')).rejects.toThrow('非受信');

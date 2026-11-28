@@ -31,7 +31,7 @@ export interface OneWindowBatch {
   partialCount: number;
   fileName: string;
   filePath: string;
-  uploadStatus: 'pending' | 'uploading' | 'uploaded' | 'failed';
+  uploadStatus: 'pending' | 'uploading' | 'uploaded' | 'failed' | 'paused';
   uploadError: string | null;
   uploadedAt: number | null;
   objectKey: string | null;

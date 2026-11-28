@@ -128,6 +128,42 @@ describe('one-window local collection and direct-upload lifecycle', () => {
     expect(upload).toHaveBeenCalledTimes(2);
   });
 
+  it('still requires permission when returning an already-uploaded batch', async () => {
+    const task = await service.run(matterId, filters);
+    permitted = false;
+    await expect(service.retry(task.id)).rejects.toThrow('LICENSE_MATTER_DENIED');
+    expect(await database.get('SELECT upload_status FROM one_window_batches WHERE task_id=?', [task.id])).toEqual({ upload_status: 'uploaded' });
+    expect(upload).toHaveBeenCalledTimes(1);
+  });
+
+  it('pauses revoked workbook permissions without starving later batches and recovers after restart', async () => {
+    const secondMatter = 'tree-removal-approval';
+    const twoMatters = plugin();
+    twoMatters.matters.push({ ...twoMatters.matters[0], id: secondMatter, name: '测试第二事项' });
+    await service.stop(); await database.close(); await open({ plugin: twoMatters });
+    upload.mockRejectedValueOnce(new Error('测试上传失败')).mockRejectedValueOnce(new Error('测试上传失败'));
+    const first = await service.run(matterId, filters);
+    now += 1;
+    const second = await service.run(secondMatter, filters);
+    const original = upload.mock.calls[0][0].bytes;
+    authorize.mockImplementation(async (id: string) => { if (id === matterId) throw new Error('LICENSE_MATTER_DENIED'); });
+    now += 5 * 60_000 + 1;
+    await service.tick();
+    expect(await database.get('SELECT upload_status,attempted_at,upload_error FROM one_window_batches WHERE task_id=?', [first.id]))
+      .toMatchObject({ upload_status: 'paused', attempted_at: now, upload_error: expect.stringContaining('授权恢复后将自动重试') });
+    await service.tick();
+    expect((await service.state(secondMatter)).batches[0]).toMatchObject({ taskId: second.id, uploadStatus: 'uploaded' });
+    expect(upload).toHaveBeenCalledTimes(3);
+    await service.stop(); await database.close(); await open({ plugin: twoMatters });
+    authorize.mockResolvedValue(undefined);
+    now += 5 * 60_000 + 1;
+    await service.tick();
+    expect((await service.state(matterId)).batches[0]).toMatchObject({ taskId: first.id, uploadStatus: 'uploaded', uploadError: null });
+    expect(upload).toHaveBeenCalledTimes(4);
+    expect(upload.mock.calls[3][0].bytes).toEqual(original);
+    expect(query).toHaveBeenCalledTimes(2);
+  });
+
   it('persists the selected filters, weekly schedule and next run across a service restart', async () => {
     const selected = { schedule: { enabled: true, loginAutoRun: false, mode: 'weekly', time: '09:30', weekdays: [1, 3, 5] },
       filters: { ...filters, dateType: 'finished', startDate: '2026-11-01', endDate: '2026-11-24', state: '4' } };

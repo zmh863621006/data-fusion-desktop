@@ -35,7 +35,7 @@ export function enterpriseInput(systemId: string, row: Record<string, unknown>):
   if ([row.qylx, row.xkXdrLb].some(value => text(value) === '自然人')) return null;
   const category = text(row.xkXdrLb || (government ? row.qylx : ''));
   if (category === '自然人' || (!government && category !== '法人及非法人组织'
-    && !(['oversize-transport', 'health-publicity'].includes(systemId) && category === '个体工商户'))) return null;
+    && !(['oversize-transport', 'online-car-permit', 'health-publicity'].includes(systemId) && category === '个体工商户'))) return null;
   const previous = evidence(row);
   const [nameKeys, creditKeys, legalKeys] = identityKeys(systemId);
   // Already complete source/manual records need no backend access (and no paid-provider lookup).
@@ -84,7 +84,7 @@ export function applyEnterpriseResult(systemId: string, row: Record<string, unkn
       }
     }
   }
-  if (systemId === 'oversize-transport' && ['success', 'partial'].includes(status) && code(next.xkXdrShxym)) {
+  if (['oversize-transport', 'online-car-permit'].includes(systemId) && ['success', 'partial'].includes(status) && code(next.xkXdrShxym)) {
     next.xkXdrLb = text(next.xkXdrShxym).startsWith('92') ? '个体工商户' : '法人及非法人组织';
   }
   const identity = Object.fromEntries([...nameKeys, ...creditKeys, ...(government ? ['cardNumber', 'applyer'] : [])].map(key=>[key,text(next[key])]));
@@ -186,7 +186,8 @@ export class EnterpriseEnrichmentService {
       }
       if (this.cache.size > 5000) this.cache.clear();
     } catch {
-      this.unavailableUntil = Math.max(this.unavailableUntil, Date.now() + 30_000);
+      // Local skips (including an active cooldown or missing authorization) must not
+      // postpone recovery. Only a failed backend request starts a new cooldown.
       // Never log names, codes, credentials or upstream response bodies.
     }
     if (signal?.aborted) unavailable = { ...unavailable, reason: '企业补全已取消，已保留原系统字段' };

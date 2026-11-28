@@ -4,6 +4,7 @@ import { DownloadOutlined, ReloadOutlined, SearchOutlined } from '@ant-design/ic
 import { PageContainer } from '@ant-design/pro-components';
 import type { Dayjs } from 'dayjs';
 import type { BootstrapData } from './types';
+import { CustomerSelect } from './management-pagination';
 import { downloadReturnBatch, latestReturnRequest, returnApi, returnBatchLabel, type ReturnBatch, type ReturnDetail, type ReturnFilters, type ReturnList, type ReturnPagination, type ReturnRecord } from './returns';
 
 const dateTime = (value?: number) => value ? new Date(value).toLocaleString('zh-CN', { hour12: false }) : '—';
@@ -113,7 +114,7 @@ export function ReturnDataPage({ data }: { data: BootstrapData }) {
     <Card className="return-filters" bordered={false}>
       <Form form={form} layout="vertical" onFinish={submit}>
         <div className="return-filter-grid">
-          <Form.Item name="customerId" label="所属客户"><Select allowClear showSearch optionFilterProp="label" placeholder="全部客户" options={data.customers.map(row => ({ value: row.id, label: row.name }))} /></Form.Item>
+          <Form.Item name="customerId" label="所属客户"><CustomerSelect data={data} placeholder="全部客户，输入名称搜索" /></Form.Item>
           <Form.Item name="deviceId" label="设备标识"><Input allowClear maxLength={128} placeholder="输入设备标识" /></Form.Item>
           <Form.Item name="systemId" label="业务系统"><Select allowClear showSearch optionFilterProp="label" placeholder="全部系统" onChange={() => form.setFieldValue('matterId', undefined)} options={data.systems.map(row => ({ value: row.id, label: row.name }))} /></Form.Item>
           <Form.Item name="matterId" label="业务事项"><Select allowClear showSearch optionFilterProp="label" placeholder={systemId ? '全部事项' : '先选择业务系统'} disabled={!systemId} options={data.matters.filter(row => row.system_id === systemId).map(row => ({ value: row.id, label: row.name }))} /></Form.Item>

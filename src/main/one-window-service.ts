@@ -236,7 +236,11 @@ export class OneWindowService {
 
   async retry(taskId: string): Promise<OneWindowBatch> {
     const batch = await this.batch(taskId);
-    await this.options.authorize(batch.matter_id, false, this.deliveryMode === 'workbook');
+    // Workbook authorization is part of uploadBatch so denied retries also persist
+    // a recoverable state and retry deadline instead of blocking the queue head.
+    if (this.deliveryMode === 'records' || batch.upload_status === 'uploaded') {
+      await this.options.authorize(batch.matter_id, false, this.deliveryMode === 'workbook');
+    }
     const operation = this.options.businessOperation(async () => {
       if (this.deliveryMode === 'records') {
         if (!this.options.retryRecords) throw new Error('数据同步重试队列尚未就绪');
@@ -261,10 +265,15 @@ export class OneWindowService {
     if (parentSignal?.aborted) controller.abort();
     this.uploading.set(taskId, controller);
     const { database, platformStore } = this.options;
+    let authorizationPaused = false;
+    const authorize = async (matterId: string) => {
+      try { await this.options.authorize(matterId, false, true); }
+      catch (error) { authorizationPaused = true; throw error; }
+    };
     try {
       const batch = await this.batch(taskId);
       if (batch.upload_status === 'uploaded') return;
-      await this.options.authorize(batch.matter_id, false, true);
+      await authorize(batch.matter_id);
       await database.run("UPDATE one_window_batches SET upload_status='uploading',upload_error=NULL,attempted_at=? WHERE task_id=?", [this.now(), taskId]);
       controller.signal.throwIfAborted();
       let bytes: Buffer;
@@ -295,7 +304,7 @@ export class OneWindowService {
           [path, createHash('sha256').update(bytes).digest('hex'), taskId]);
       }
       controller.signal.throwIfAborted();
-      await this.options.authorize(batch.matter_id, false, true);
+      await authorize(batch.matter_id);
       if (!this.options.upload) throw new Error('Excel 推送服务尚未配置');
       const receipt = await this.options.upload({ taskId, matterId: batch.matter_id, fileName: batch.file_name, bytes }, controller.signal);
       await database.run("UPDATE one_window_batches SET upload_status='uploaded',upload_error=NULL,uploaded_at=?,receipt_json=? WHERE task_id=?",
@@ -304,7 +313,9 @@ export class OneWindowService {
       const message = controller.signal.aborted ? '推送已中断，保存的批次可继续推送'
         : error instanceof Error ? error.message : 'Excel 推送失败';
       // The uploader and source adapter return fixed, credential-free error messages.
-      await database.run("UPDATE one_window_batches SET upload_status='failed',upload_error=? WHERE task_id=?", [message.slice(0, 500), taskId]);
+      await database.run('UPDATE one_window_batches SET upload_status=?,upload_error=?,attempted_at=? WHERE task_id=?',
+        [authorizationPaused ? 'paused' : 'failed', authorizationPaused
+          ? '权限校验未通过，推送已暂停；授权恢复后将自动重试，也可手动重新推送' : message.slice(0, 500), this.now(), taskId]);
       throw error;
     } finally {
       parentSignal?.removeEventListener('abort', abort);
@@ -328,8 +339,9 @@ export class OneWindowService {
     this.ticking = true;
     try {
       const retry = this.deliveryMode === 'workbook' ? await this.options.database.get<BatchRow>(`SELECT b.* FROM one_window_batches b
-        JOIN runtime_tasks t ON t.id=b.task_id WHERE b.upload_status IN ('pending','failed') AND t.status!='cancelled'
-        AND (b.attempted_at IS NULL OR b.attempted_at<?) ORDER BY b.created_at LIMIT 1`, [this.now() - 5 * 60_000]) : undefined;
+        JOIN runtime_tasks t ON t.id=b.task_id WHERE b.upload_status IN ('pending','failed','paused') AND t.status!='cancelled'
+        AND (b.attempted_at IS NULL OR b.attempted_at<?)
+        ORDER BY COALESCE(b.attempted_at,0),b.created_at,b.task_id LIMIT 1`, [this.now() - 5 * 60_000]) : undefined;
       if (this.stopped) return;
       if (retry && !this.uploading.has(retry.task_id)) {
         await this.retry(retry.task_id).catch(() => {});

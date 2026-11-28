@@ -13,7 +13,14 @@ contextBridge.exposeInMainWorld('desktopApi', {
   publications: group('publications', ['open']),
   hrss: group('hrss', ['dashboard', 'openDashboard', 'closeDashboard']),
   tasks: group('tasks', ['list', 'page', 'cancel', 'output', 'exportOutput']),
-  records: group('records', ['list', 'versions', 'update', 'export']),
+  records: {
+    ...group('records', ['list', 'versions', 'update', 'export']),
+    onChanged: (listener: (scope: unknown) => void) => {
+      const handler = (_event: Electron.IpcRendererEvent, scope: unknown) => listener(scope);
+      ipcRenderer.on('ui-redesign:records-changed', handler);
+      return () => ipcRenderer.removeListener('ui-redesign:records-changed', handler);
+    },
+  },
   exports: group('exports', ['openFolder']),
   settings: group('settings', ['get', 'update']),
   credentials: group('credentials', ['status', 'save']),

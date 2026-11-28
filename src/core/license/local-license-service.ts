@@ -1,9 +1,10 @@
 import { createHash } from 'node:crypto';
 import { hostname, platform, arch } from 'node:os';
 import { mkdir, readFile, rename, unlink, writeFile } from 'node:fs/promises';
-import { dirname } from 'node:path';
+import { dirname, join } from 'node:path';
 import { verifySignedLicense, type SignedLicenseEnvelope } from './signed-license';
 import type { LicenseGrant, LicenseService, LicenseStatus } from './types';
+import { loadDeviceIdentity, licenseFileDigest } from './device-identity';
 
 interface StoredLicense {
   envelope?: SignedLicenseEnvelope;
@@ -37,14 +38,19 @@ function decodeOfflineKey(key: string): SignedLicenseEnvelope {
 }
 
 export class LocalLicenseService implements LicenseService {
-  readonly deviceId = createDeviceId();
+  readonly deviceId: string;
+  private readonly identityError?: string;
   private revision = 0;
   private writes: Promise<void> = Promise.resolve();
   private refreshInFlight?: { revision: number; result: Promise<LicenseGrant | null> };
 
-  constructor(private readonly options: LocalLicenseOptions) {}
+  constructor(private readonly options: LocalLicenseOptions) {
+    const identity = loadDeviceIdentity(options.storagePath, options.publicKeyPem, createDeviceId(), options.allowDevelopmentLicense);
+    this.deviceId = identity.deviceId; this.identityError = identity.error;
+  }
 
   async activate(key: string): Promise<LicenseGrant> {
+    if (this.identityError) throw new Error(this.identityError);
     const revision = ++this.revision;
     const normalized = key.trim();
     if (this.options.allowDevelopmentLicense && normalized === 'DF-DEV-LOCAL') {
@@ -77,7 +83,8 @@ export class LocalLicenseService implements LicenseService {
   }
 
   async getCurrent(): Promise<LicenseGrant | null> {
-    const stored = await this.readStored();
+    if (this.identityError) return null;
+    const { stored } = await this.readStored();
     if (!stored) return null;
     if (stored.revokedAt) return null;
     if (stored.developmentGrant && this.options.allowDevelopmentLicense) {
@@ -103,15 +110,19 @@ export class LocalLicenseService implements LicenseService {
   }
 
   async clientAuthorization(): Promise<{ proof: SignedLicenseEnvelope; deviceId: string } | null> {
-    const stored = await this.readStored();
+    if (this.identityError) return null;
+    const { stored } = await this.readStored();
     if (!stored?.envelope || stored.revokedAt) return null;
-    const grant = verifySignedLicense(stored.envelope, this.options.publicKeyPem);
+    let grant: LicenseGrant;
+    try { grant = verifySignedLicense(stored.envelope, this.options.publicKeyPem); } catch { return null; }
     if (grant.deviceId !== this.deviceId) return null;
     return { proof: stored.envelope, deviceId: this.deviceId };
   }
 
   async getStatus(): Promise<LicenseStatus> {
-    const stored = await this.readStored();
+    if (this.identityError) return { state: 'invalid', deviceId: this.deviceId, message: this.identityError };
+    const { stored, error: readError } = await this.readStored();
+    if (readError) return { state: 'invalid', deviceId: this.deviceId, message: readError };
     if (!stored) return { state: 'missing', deviceId: this.deviceId, message: '尚未激活' };
     try {
       const grant = stored.developmentGrant && this.options.allowDevelopmentLicense
@@ -156,9 +167,12 @@ export class LocalLicenseService implements LicenseService {
   }
 
   private async refreshStoredOnline(revision: number): Promise<LicenseGrant | null> {
-    const stored = await this.readStored();
+    if (this.identityError) return null;
+    const { stored } = await this.readStored();
     if (!stored?.envelope || !this.options.statusEndpoint) return this.getCurrent();
-    const current = verifySignedLicense(stored.envelope, this.options.publicKeyPem, { allowExpiredForRefresh: true });
+    let current: LicenseGrant;
+    try { current = verifySignedLicense(stored.envelope, this.options.publicKeyPem, { allowExpiredForRefresh: true }); }
+    catch { return null; }
     if (current.activationMode !== 'online') return this.getCurrent();
     if (current.deviceId !== this.deviceId) throw new Error('该在线授权不属于当前设备');
     const response = await fetch(this.options.statusEndpoint, {
@@ -196,12 +210,36 @@ export class LocalLicenseService implements LicenseService {
     return { ...grant, allowedSystems, allowedTools: [...new Set([...(grant.allowedTools ?? []), 'health-publicity'])] };
   }
 
-  private async readStored(): Promise<StoredLicense | null> {
+  private async readStored(): Promise<{ stored: StoredLicense | null; error?: string }> {
+    let bytes: Buffer | undefined;
     try {
-      return JSON.parse(await readFile(this.options.storagePath, 'utf8')) as StoredLicense;
+      bytes = await readFile(this.options.storagePath);
+      if (bytes.length > 262_144) throw new Error('license size');
+      const stored = JSON.parse(bytes.toString('utf8')) as StoredLicense;
+      if (!stored || typeof stored !== 'object' || Array.isArray(stored)
+        || !Number.isSafeInteger(stored.activatedAt) || stored.activatedAt <= 0
+        || (!stored.envelope && !stored.developmentGrant)) throw new Error('license structure');
+      return { stored };
     } catch (error) {
-      if ((error as NodeJS.ErrnoException).code === 'ENOENT') return null;
-      throw error;
+      if ((error as NodeJS.ErrnoException).code === 'ENOENT') return { stored: null };
+      let recoverySaved = false;
+      if (bytes && bytes.length <= 262_144) {
+        const directory = join(dirname(this.options.storagePath), 'license-recovery');
+        const recoveryFile = join(directory, `invalid-${licenseFileDigest(bytes)}.json`);
+        try {
+          await mkdir(directory, { recursive: true, mode: 0o700 });
+          await writeFile(recoveryFile, bytes, { flag: 'wx', mode: 0o600 });
+          recoverySaved = true;
+        } catch (copyError) {
+          if ((copyError as NodeJS.ErrnoException).code === 'EEXIST') {
+            const previous = await readFile(recoveryFile).catch(() => undefined);
+            recoverySaved = Boolean(previous?.equals(bytes));
+          }
+        }
+      }
+      return { stored: null, error: bytes
+        ? `本地授权文件损坏，原文件已保留；请重新激活${recoverySaved ? '，恢复副本保存在资料目录的 license-recovery 中' : '；恢复副本未能保存，请先备份原文件'}`
+        : '本地授权文件无法读取，原文件已保留；请检查资料目录的访问权限后重试' };
     }
   }
 

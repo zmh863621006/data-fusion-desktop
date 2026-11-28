@@ -40,6 +40,8 @@ export function HrssLedgerPage({ systemId, matterId, matterName, columns, defaul
   const [revision, setRevision] = useState(0);
   const batchPages = useCompletedBatches(systemId, matterId, batchId, revision, !preview);
   const { batches } = batchPages;
+  const selectedBatch = batches.find(task => task.id === batchId);
+  const canExportEmptyPartial = Boolean(batchId && (selectedBatch?.progress.skippedRequests ?? 0) > 0);
   const [exportResult, setExportResult] = useState<ExportResult | null>(null);
   const [exporting, setExporting] = useState(false);
   const [historyRow, setHistoryRow] = useState<Row | null>(null);
@@ -77,7 +79,7 @@ export function HrssLedgerPage({ systemId, matterId, matterName, columns, defaul
   return <section className={`hrss-ledger ${preview ? 'hrss-ledger-preview' : ''}`} aria-label={systemId === 'guangdong-hrss' ? '人社列表台账' : '业务列表台账'}>
     <header className="hrss-ledger-head"><div><span className="eyebrow">{preview ? '本机数据' : '业务台账'}</span><h2>{preview ? '本地列表预览' : matterName}</h2><p>{batchId ? '当前查看已完成回流的列表快照。' : '合并保存历次列表记录；重新回流会更新相同业务记录。'}个人信息默认脱敏显示。</p></div>
       {preview ? <button className="secondary" onClick={onViewAll}>查看台账 <AppIcon name="chevron" size={14} /></button>
-        : allowExport && <button className="primary" aria-busy={exporting} disabled={exporting || loading || !total} onClick={() => void exportData()}><AppIcon name="download" size={17} />{exporting ? '正在导出…' : batchId ? '导出当前批次' : '导出台账'}</button>}
+        : allowExport && <button className="primary" aria-busy={exporting} disabled={exporting || loading || Boolean(error) || (!total && !canExportEmptyPartial)} onClick={() => void exportData()}><AppIcon name="download" size={17} />{exporting ? '正在导出…' : batchId ? '导出当前批次' : '导出台账'}</button>}
     </header>
     {!preview && batchId && <HrssBatchDateNotice details={batches.find(task => task.id === batchId)?.details} />}
     {(error || batchPages.error) && <p className="inline-error" role="alert">{error || batchPages.error}<button className="link-button" onClick={() => setRevision(value => value + 1)}>重试</button></p>}

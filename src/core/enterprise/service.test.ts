@@ -7,6 +7,34 @@ const result: EnterpriseResult = { requestId: 'request', status: 'success', reas
   id:'enterprise',name:'标准公司',creditCode:code,legalPerson:'测试法人',source:'aliyun-code',updatedAt:10,
 } };
 describe('enterprise enrichment',()=>{
+  it('does not extend a backend cooldown when rows keep arriving and retries after the original deadline', async () => {
+    const clock = vi.spyOn(Date, 'now').mockReturnValue(100_000);
+    const warning = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const fetcher = vi.fn().mockRejectedValueOnce(new Error('offline')).mockImplementation(async () => Response.json({ results: [result] }));
+    const service = new EnterpriseEnrichmentService('https://backend.test/resolve', async () => ({ proof: { payload: 'x', signature: 'x', algorithm: 'RSA-SHA256' }, deviceId: 'a' }), fetcher);
+    const row = { qymc: '标准公司', cardNumber: code };
+    try {
+      await service.enrich('government-info', 'matter', [row]);
+      for (const at of [110_000, 120_000, 129_999]) {
+        clock.mockReturnValue(at);
+        expect((await service.enrich('government-info', 'matter', [row]))[0].frdb).toBeUndefined();
+      }
+      expect(fetcher).toHaveBeenCalledTimes(1);
+      clock.mockReturnValue(130_000);
+      expect((await service.enrich('government-info', 'matter', [row]))[0].frdb).toBe('测试法人');
+      expect(fetcher).toHaveBeenCalledTimes(2);
+    } finally { clock.mockRestore(); warning.mockRestore(); }
+  });
+  it('can enrich immediately after local authorization becomes available', async () => {
+    const auth = { proof: { payload: 'x', signature: 'x', algorithm: 'RSA-SHA256' as const }, deviceId: 'a' };
+    const authorization = vi.fn().mockResolvedValueOnce(null).mockResolvedValue(auth);
+    const fetcher = vi.fn(async () => Response.json({ results: [result] }));
+    const service = new EnterpriseEnrichmentService('https://backend.test/resolve', authorization, fetcher);
+    const row = { qymc: '标准公司', cardNumber: code };
+    await service.enrich('government-info', 'matter', [row]);
+    expect(fetcher).not.toHaveBeenCalled();
+    expect((await service.enrich('government-info', 'matter', [row]))[0].frdb).toBe('测试法人');
+  });
   it('uses the verified canonical enterprise name in the new-drainage content and cached reruns', () => {
     const row = applyFixedDrainagePermitContent({ cityLsh: '1', sxmc: NEW_DRAINAGE_PERMIT_MATTER,
       qymc: '错字公司', applyer: '错字公司', cardNumber: code });

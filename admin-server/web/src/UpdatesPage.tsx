@@ -3,6 +3,7 @@ import { App, Alert, Button, Descriptions, Form, Input, Modal, Progress, Segment
 import { CloudUploadOutlined, PlusOutlined } from '@ant-design/icons';
 import { ModalForm, PageContainer, ProFormText, ProTable, type ProColumns } from '@ant-design/pro-components';
 import { adminApi, ApiError } from './api';
+import { useManagementTable } from './management-pagination';
 import { adminTableSearch } from './presentation';
 import { RELEASE_STATUS_LABELS, RELEASE_VERSION_PATTERN, WINDOWS_RELEASE_TARGET, releaseFileError, releaseFileSize, releaseStatus,
   releaseDeploymentProfile, releaseInstallerName, releaseProductName, releaseTargetLabel, releasesForTarget, type ReleaseArch, type ReleasePlatform, type ReleaseVariant, type ReleaseTarget, type ReleaseDeploymentProfile, type UploadedRelease, type UploadReleaseValues } from './releases';
@@ -62,6 +63,7 @@ function BaseUpdatesPage({ data, reload }: { data: BootstrapData; reload: () => 
   const [linuxArch, setLinuxArch] = useState<ReleaseArch>('x64');
   const [linuxVariant, setLinuxVariant] = useState<ReleaseVariant>('standard');
   const target: ReleaseTarget = { platform, arch: platform === 'linux' ? linuxArch : 'x64', variant: platform === 'linux' ? linuxVariant : 'standard' };
+  const paged = useManagementTable<UpdateRecord>(data, 'updates', { ...target });
   const [uploadTarget, setUploadTarget] = useState<ReleaseTarget>({ ...WINDOWS_RELEASE_TARGET });
   const [uploadDeploymentProfile, setUploadDeploymentProfile] = useState<ReleaseDeploymentProfile>(deploymentProfile);
   const [form] = Form.useForm<UploadReleaseValues>();
@@ -121,7 +123,7 @@ function BaseUpdatesPage({ data, reload }: { data: BootstrapData; reload: () => 
       description="1.0.25 已通过 ARM64 麒麟模拟环境完整安装和启动验证，用户已确认实体机可运行；部分实体机系统安装器仍停留在“安装中”，原因待查。" />}
     {platform === 'linux' && linuxArch === 'arm64' && linuxVariant === 'standard' && <Alert className="release-architecture-notice" type="warning" showIcon
       message="ARM64 发布前请完成目标电脑实测" description="可先上传为草稿，完成飞腾或鲲鹏麒麟电脑上的安装、回流及覆盖升级验收后，再发布到此架构。" />}
-    <ProTable<UpdateRecord> key={`${platform}-${target.arch}-${target.variant}`} rowKey="id" headerTitle={`${releaseTargetLabel(target)} · 版本记录`} dataSource={filteredRows} columns={columns} search={adminTableSearch} onSubmit={values => setFilters(values)} onReset={() => setFilters({})} pagination={{ pageSize: 10 }} options={{ reload }} scroll={{ x: 1200 }} toolBarRender={() => canManage ? [<Button type="primary" icon={<PlusOutlined />} key="new" onClick={begin}>发布新版本</Button>] : []} />
+    <ProTable<UpdateRecord> {...paged} key={`${platform}-${target.arch}-${target.variant}`} rowKey="id" headerTitle={`${releaseTargetLabel(target)} · 版本记录`} dataSource={data.paginated ? undefined : filteredRows} columns={columns} search={adminTableSearch} onSubmit={values => setFilters(values)} onReset={() => setFilters({})} pagination={{ defaultPageSize: 10 }} options={{ reload }} scroll={{ x: 1200 }} toolBarRender={() => canManage ? [<Button type="primary" icon={<PlusOutlined />} key="new" onClick={begin}>发布新版本</Button>] : []} />
     <Modal title={`上传新版本 · ${releaseTargetLabel(uploadTarget)}`} width={700} open={open} onCancel={closeUpload} destroyOnClose maskClosable={!uploading} keyboard={!uploading} className="release-upload-modal"
       footer={uploaded ? [<Button key="close" onClick={closeUpload}>暂不发布</Button>, <Button key="publish" type="primary" onClick={publishUploaded}>核对并发布</Button>]
         : [<Button key="cancel" onClick={closeUpload}>{uploading ? '取消上传' : '取消'}</Button>, <Button key="upload" type="primary" disabled={uploading} loading={uploading} onClick={() => void upload()}>上传并校验</Button>]}>

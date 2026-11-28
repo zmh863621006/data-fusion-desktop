@@ -9,6 +9,7 @@ import { createUpdateReleases } from './update-releases.mjs';
 import { createBusinessReleases } from './business-releases.mjs';
 import { createOneWindowUploads } from './one-window-uploads.mjs';
 import { createReturnBatches } from './return-batches.mjs';
+import { createManagementLists } from './management-lists.mjs';
 import { releaseTarget, RELEASE_VERSION_PATTERN } from './update-filenames.mjs';
 import { establishmentImporterFromEnv } from './establishment-oss-import.mjs';
 import { createReadStream, existsSync, mkdirSync, readFileSync, statSync } from 'node:fs';
@@ -226,6 +227,15 @@ const readJson = async (request) => {
   timeout.unref?.();
   try { for await (const chunk of request) { size += chunk.length; if (size > 1024 * 1024) throw Object.assign(new Error('请求内容过大'), { status: 413 }); chunks.push(chunk); } }
   finally { clearTimeout(timeout); }
+  // Recheck after the asynchronous body read. Reject role changes as well as
+  // logout/revocation so a route's earlier admin-only decision cannot go stale.
+  if (request.managementIdentity) {
+    const fresh = currentUser(request), previous = request.managementIdentity;
+    if (!fresh) throw Object.assign(new Error('登录会话已失效，请重新登录'), { status: 401 });
+    if (fresh.id !== previous.id || fresh.role !== previous.role || fresh.passwordChangeRequired) {
+      throw Object.assign(new Error('账号权限已变更，请刷新后重试'), { status: 403 });
+    }
+  }
   try {
     const value = chunks.length ? JSON.parse(Buffer.concat(chunks).toString('utf8')) : {};
     if (!value || typeof value !== 'object' || Array.isArray(value)) throw new Error();
@@ -260,7 +270,7 @@ async function confirmSensitive(request, user, password) {
   }
   const activeUser = currentUser(request);
   const latest = database.prepare('SELECT password_hash FROM admin_users WHERE id=?').get(user.id);
-  if (!activeUser || activeUser.role !== user.role || latest?.password_hash !== stored?.password_hash) throw Object.assign(new Error('账号状态已变更，请重新登录'), { status:403 });
+  if (!activeUser || activeUser.id !== user.id || activeUser.role !== user.role || latest?.password_hash !== stored?.password_hash) throw Object.assign(new Error('账号状态已变更，请重新登录'), { status:403 });
   security.clearFailures(user.username);
 }
 function verifyClientProof(body) {
@@ -281,6 +291,7 @@ const requireAdmin = (request, response) => {
   if (!user) { json(response, 401, { error: '请先登录管理后台' }); return null; }
   if (user.passwordChangeRequired && request.method !== 'GET') { json(response,403,{error:'请先在账号与安全中升级密码',code:'PASSWORD_CHANGE_REQUIRED'}); return null; }
   if (user.role === 'viewer' && request.method !== 'GET') { json(response, 403, { error: '只读账号不能执行管理操作' }); return null; }
+  request.managementIdentity = user;
   return user;
 };
 const signedEnvelope = (grant) => {
@@ -349,7 +360,7 @@ const oneWindowUploads = intranet ? undefined : createOneWindowUploads({ databas
     if (!license?.allow_export || !scope?.allowedSystems.includes(systemId)
       || (scope.allowedMatters?.[systemId] && !scope.allowedMatters[systemId].includes(matterId))
       || !database.prepare(`SELECT 1 FROM systems s JOIN system_matters m ON s.id=m.system_id
-        WHERE s.id=? AND m.id=? AND s.enabled=1 AND m.enabled=1`).get(systemId, matterId)) reject();
+        WHERE s.id=? AND m.id=?`).get(systemId, matterId)) reject();
     return { customerId: license.customer_id, licenseId: license.id, deviceId: body.deviceId };
   },
 });
@@ -379,10 +390,11 @@ function authorizeReturnUpload(body, { systemId, matterId }) {
   if (!license || !scope?.allowedSystems.includes(systemId)
     || scope.allowedMatters?.[systemId] && !scope.allowedMatters[systemId].includes(matterId)
     || !database.prepare(`SELECT 1 FROM systems s JOIN system_matters m ON s.id=m.system_id
-      WHERE s.id=? AND m.id=? AND s.enabled=1 AND m.enabled=1`).get(systemId, matterId)) reject();
+      WHERE s.id=? AND m.id=?`).get(systemId, matterId)) reject();
   return { customerId: license.customer_id, licenseId: license.id, deviceId: body.deviceId };
 }
 const returnBatches = createReturnBatches(database, { transaction, authorize: authorizeReturnUpload, revalidate: authorizeReturnUpload });
+const managementLists = createManagementLists(database, updateReleases.describe);
 async function api(request, response, url) {
   if (request.method === 'GET' && url.pathname === '/api/health') return json(response,200,{status:'ok'});
   if (request.method === 'GET' && url.pathname === '/api/returns/capabilities') return json(response, 200, { schema: 1, enabled: returnUploadsEnabled });
@@ -428,7 +440,7 @@ async function api(request, response, url) {
   }
   if (url.pathname === '/api/admin/enterprises' || url.pathname.startsWith('/api/admin/enterprises/')) {
     const user = requireAdmin(request, response); if (!user) return;
-    return enterprises.route(request, response, url, { user, readJson, json });
+    return enterprises.route(request, response, url, { user, readJson, json, authorize: currentUser });
   }
   if (request.method === 'POST' && url.pathname === '/api/enterprises/resolve') {
     const body = await readJson(request);
@@ -571,6 +583,11 @@ async function api(request, response, url) {
   }
   if (request.method === 'GET' && url.pathname === '/api/admin/bootstrap') {
     const user = requireAdmin(request, response); if (!user) return;
+    if (url.searchParams.get('compact') === '1') return json(response, 200, {
+      user, deployment: intranet ? 'huizhou-intranet' : 'standard', paginated: true, tools: toolCatalog,
+      systems: all('SELECT * FROM systems ORDER BY name'), matters: all('SELECT * FROM system_matters ORDER BY system_id,department_order,matter_order,name'),
+      customers: [], licenses: [], devices: [], updates: [], audits: [], summary: managementLists.summary(),
+    });
     return json(response, 200, {
       user,
       deployment: intranet ? 'huizhou-intranet' : 'standard',
@@ -580,6 +597,11 @@ async function api(request, response, url) {
       devices: all(`SELECT d.*,c.name customer_name FROM devices d JOIN licenses l ON l.id=d.license_id JOIN customers c ON c.id=l.customer_id ORDER BY d.activated_at DESC`),
       updates: all('SELECT * FROM updates ORDER BY published_at DESC').map(updateReleases.describe), audits: all('SELECT * FROM admin_audit_events ORDER BY created_at DESC LIMIT 200'),
     });
+  }
+  const managementList = /^\/api\/admin\/(customers|licenses|devices|updates)$/.exec(url.pathname);
+  if (request.method === 'GET' && managementList) {
+    if (!requireAdmin(request, response)) return;
+    return json(response, 200, managementLists.list(managementList[1], url.searchParams));
   }
   if (request.method === 'GET' && url.pathname === '/api/admin/audits') {
     const user = requireAdmin(request, response); if (!user) return;
@@ -737,7 +759,7 @@ async function api(request, response, url) {
   }
   if (request.method === 'GET' && url.pathname === '/api/admin/business-releases') {
     const user = requireAdmin(request, response); if (!user) return;
-    return json(response, 200, businessReleases.list());
+    return json(response, 200, businessReleases.list(url.searchParams));
   }
   if (request.method === 'POST' && url.pathname === '/api/admin/business-releases/upload') {
     const user = requireAdmin(request, response); if (!user) return;
@@ -861,7 +883,7 @@ const server = createServer(async (request, response) => {
     if (!path.startsWith(`${resolve(publicRoot)}${process.platform === 'win32' ? '\\' : '/'}`) || !existsSync(path) || !statSync(path).isFile()) { response.writeHead(404); return response.end('Not found'); }
     response.writeHead(200, { 'content-type': mime[extname(path)] ?? 'application/octet-stream', 'cache-control': 'no-cache' });
     createReadStream(path).on('error', () => response.destroy()).pipe(response);
-  } catch (error) { const status = [400,403,404,408,409,413,415,429,503].includes(error?.status) ? error.status : 500;
+  } catch (error) { const status = [400,401,403,404,408,409,413,415,429,503].includes(error?.status) ? error.status : 500;
     if (error?.retryAfterSeconds) response.setHeader('retry-after',error.retryAfterSeconds);
     if (status === 500) console.error('后台请求失败', { requestId, errorType: error?.name, method:request.method, path:(request.url??'').split('?')[0] });
     if (!response.headersSent) json(response, status, { error: status === 500 ? `服务器错误，请联系管理员并提供编号 ${requestId}` : error.message,

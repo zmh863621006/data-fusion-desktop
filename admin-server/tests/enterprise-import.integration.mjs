@@ -18,7 +18,7 @@ function fixture(t) {
 }
 function apply(db, rows) { return applyLegacyEnterpriseImport(db, rows, planLegacyEnterpriseImport(db, rows).digest); }
 function seed(db, { name = '测试企业有限公司', legalPerson = '测试法人', source = 'manual', status = 'success', creditCode = code } = {}) {
-  db.prepare('INSERT INTO enterprises VALUES(?,?,?,?,?,?)').run('entity', name, creditCode, legalPerson, source, 123);
+  db.prepare('INSERT INTO enterprises(id,name,credit_code,legal_person,source,updated_at) VALUES(?,?,?,?,?,?)').run('entity', name, creditCode, legalPerson, source, 123);
   db.prepare('INSERT INTO enterprise_requests(id,name,credit_code,status,enterprise_id,source_system,created_at) VALUES(?,?,?,?,?,?,?)')
     .run('request', name, creditCode, status, 'entity', 'manual', 123);
 }

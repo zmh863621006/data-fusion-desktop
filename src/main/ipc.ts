@@ -24,6 +24,8 @@ function requireSystem(systemId: string) {
   return plugin;
 }
 
+let unsubscribeRecordChanges: (() => void) | undefined;
+
 export function registerIpcHandlers(getTrustedWebContentsId: () => number | undefined, options: {
   exportOwner?: () => BrowserWindow | null;
   updates?: {
@@ -36,6 +38,13 @@ export function registerIpcHandlers(getTrustedWebContentsId: () => number | unde
   businessOperation?: <T>(operation: () => Promise<T>) => Promise<T>;
   hrssDashboard?: { contentsId(): number | undefined; open(): void; close(): void };
 } = {}): void {
+  unsubscribeRecordChanges?.();
+  unsubscribeRecordChanges = appRuntime.onRecordsChanged?.(scope => {
+    const owner = options.exportOwner?.();
+    if (owner && !owner.isDestroyed() && owner.webContents.id === getTrustedWebContentsId()) {
+      owner.webContents.send(IPC_CHANNELS.recordsChanged, scope);
+    }
+  });
   const confirmExportWarnings: ConfirmExport = async (validation, format) => {
     const owner = options.exportOwner?.();
     const details = exportWarningOptions(validation, format);
@@ -43,6 +52,11 @@ export function registerIpcHandlers(getTrustedWebContentsId: () => number | unde
     return choice.response === 1;
   };
   const businessChannels = new Set<string>([
+    IPC_CHANNELS.housingBindingState, IPC_CHANNELS.housingBindingDetail, IPC_CHANNELS.oneWindowState,
+    IPC_CHANNELS.oneWindowRecords, IPC_CHANNELS.returnUploadState, IPC_CHANNELS.returnBatchGet,
+    IPC_CHANNELS.hrssDashboardGet, IPC_CHANNELS.tasksList, IPC_CHANNELS.tasksPage,
+    IPC_CHANNELS.recordVersions, IPC_CHANNELS.settingsGet, IPC_CHANNELS.auditList,
+    IPC_CHANNELS.healthToolState, IPC_CHANNELS.practitionerNumbersGet,
     IPC_CHANNELS.housingBindingImport, IPC_CHANNELS.housingBindingCreate, IPC_CHANNELS.housingBindingRetry,
     IPC_CHANNELS.housingBindingCancel, IPC_CHANNELS.housingBindingTemplate,
     IPC_CHANNELS.returnUploadRetry,

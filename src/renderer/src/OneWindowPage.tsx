@@ -8,8 +8,8 @@ import './OneWindowPage.css';
 
 const dateTime = (value: number | null | undefined) => value ? new Date(value).toLocaleString('zh-CN', { timeZone: 'Asia/Shanghai' }) : '—';
 const uploadLabel = (batch: OneWindowBatch, records = false) => (records
-  ? { pending: '等待同步', uploading: '正在同步', uploaded: '已同步至后台', failed: '同步需重试' }
-  : { pending: '待推送', uploading: '正在推送', uploaded: '已推送至后台', failed: '推送失败' })[batch.uploadStatus];
+  ? { pending: '等待同步', uploading: '正在同步', uploaded: '已同步至后台', failed: '同步需重试', paused: '同步已暂停' }
+  : { pending: '待推送', uploading: '正在推送', uploaded: '已推送至后台', failed: '推送失败', paused: '推送已暂停' })[batch.uploadStatus];
 const sections: Record<string, string> = {
   identifiers: '关联编号', base: '主体基本信息', item: '事项信息', opinions: '办理意见', form: '电子表单',
   materials: '申请材料', files: '受理文件', licenses: '证照目录', processFiles: '过程文件', printFiles: '打印文件',
@@ -35,7 +35,7 @@ export function OneWindowDeliveryDescription({ deliveryMode, batches = false }: 
 }
 
 export function OneWindowUploadStatus({ batch, deliveryMode }: { batch: OneWindowBatch; deliveryMode: OneWindowDeliveryMode }) {
-  return <><span className={`status-chip ${batch.uploadStatus === 'uploaded' ? 'ready' : batch.uploadStatus === 'failed' ? 'warning' : ''}`}>{uploadLabel(batch, deliveryMode === 'records')}</span>
+  return <><span className={`status-chip ${batch.uploadStatus === 'uploaded' ? 'ready' : ['failed', 'paused'].includes(batch.uploadStatus) ? 'warning' : ''}`}>{uploadLabel(batch, deliveryMode === 'records')}</span>
     {batch.uploadError && <div className="one-window-upload-error">{batch.uploadError}</div>}</>;
 }
 
@@ -46,7 +46,7 @@ export function OneWindowBatchActions({ batch, deliveryMode, allowExport, retryi
   const records = deliveryMode === 'records';
   return <div className="button-row"><button className="link-button" onClick={() => onView(batch.taskId)}>查看数据</button>
     {!records && batch.filePath && <button className="link-button" onClick={() => onFolder(batch.taskId)}>打开文件夹</button>}
-    {(records || allowExport) && (batch.uploadStatus === 'failed' || records && batch.uploadStatus === 'pending')
+    {(records || allowExport) && (['failed', 'paused'].includes(batch.uploadStatus) || records && batch.uploadStatus === 'pending')
       && <button className="link-button" disabled={Boolean(retrying)} onClick={() => onRetry(batch.taskId)}>{retrying === batch.taskId ? records ? '同步中…' : '重推中…' : records ? '重试同步' : '重新推送'}</button>}
   </div>;
 }

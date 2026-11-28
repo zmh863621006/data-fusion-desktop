@@ -89,6 +89,8 @@ export class TaskEngine {
   private readonly pausedSystems = new Map<string, string>();
   private registrationTail: Promise<void> = Promise.resolve();
   private running = 0;
+  private stopped = false;
+  private stopping?: Promise<void>;
 
   list(): RuntimeTask[] {
     return [...this.tasks.values()].sort((a, b) => b.createdAt - a.createdAt);
@@ -98,7 +100,33 @@ export class TaskEngine {
     return this.tasks.get(id);
   }
 
-  constructor(private readonly store?: TaskStore, private concurrency = DEFAULT_APP_SETTINGS.taskConcurrency) {}
+  constructor(private readonly store?: TaskStore, private concurrency = DEFAULT_APP_SETTINGS.taskConcurrency,
+    private readonly completedMemoryLimit = 200) {}
+
+  /** Reject new work synchronously; drain executors AND their final writes before closing storage. */
+  stop(): Promise<void> {
+    if (this.stopping) return this.stopping;
+    this.stopped = true;
+    const entries = [...this.entries.values()];
+    for (const entry of entries) {
+      entry.controller.abort();
+      if (!entry.admitted) void this.finishQueuedCancellation(entry);
+    }
+    this.stopping = (async () => {
+      await this.registrationTail;
+      const results = await Promise.allSettled(entries.map(entry => entry.completion));
+      const failures = results.filter((result): result is PromiseRejectedResult => result.status === 'rejected');
+      if (failures.length) throw new AggregateError(failures.map(result => result.reason), '部分任务最终状态保存失败');
+    })();
+    return this.stopping;
+  }
+
+  private pruneCompleted(): void {
+    // Persistent history stays intact. Engines without a store retain their in-memory history.
+    if (!this.store) return;
+    const completed = [...this.tasks.values()].filter(task => !this.entries.has(task.id));
+    for (const task of completed.slice(0, Math.max(0, completed.length - this.completedMemoryLimit))) this.tasks.delete(task.id);
+  }
 
   setConcurrency(limit: number): void {
     this.concurrency = limit;
@@ -106,6 +134,7 @@ export class TaskEngine {
   }
 
   private admitWaiting(): void {
+    if (this.stopped) return;
     for (const [id, entry] of this.waiting) {
       if (this.running >= this.concurrency) break;
       if (!entry.ready || entry.finishing) continue;
@@ -159,6 +188,7 @@ export class TaskEngine {
   }
 
   private registerBatch(definitions: readonly TaskDefinition[]): { entries: ScheduledTask[]; ready: Promise<void> } {
+    if (this.stopped) throw new Error('应用正在退出，不能创建新任务');
     const created = definitions.map<ScheduledTask>(({ name, executor, metadata }) => {
       const frozen = structuredClone(metadata);
       const task: RuntimeTask = {
@@ -176,8 +206,8 @@ export class TaskEngine {
     });
     // Registration is synchronous up to this point. Both single and bulk callers share this
     // final check, so an async preflight cannot race another caller into an identical job.
-    const activeReturns = new Set([...this.tasks.values()].filter(task => ['queued', 'running'].includes(task.status))
-      .map(returnIdentity).filter((key): key is string => key !== undefined));
+    const activeReturns = new Set([...this.entries.values()].map(entry => returnIdentity(entry.task))
+      .filter((key): key is string => key !== undefined));
     for (const entry of created) {
       const key = returnIdentity(entry.task);
       if (!key) continue;
@@ -266,6 +296,7 @@ export class TaskEngine {
     } finally {
       this.entries.delete(task.id);
       this.waiting.delete(task.id);
+      this.pruneCompleted();
       if (entry.admitted) {
         this.running--;
         const serialId = serialSystem(task);
@@ -285,7 +316,7 @@ export class TaskEngine {
     entry.task.finishedAt = Date.now();
     try { await this.persist(entry); entry.resolve(entry.task); }
     catch (error) { entry.reject(error); }
-    finally { this.entries.delete(entry.task.id); this.admitWaiting(); }
+    finally { this.entries.delete(entry.task.id); this.pruneCompleted(); this.admitWaiting(); }
   }
 
   cancel(id: string): boolean {

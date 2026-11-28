@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from 'react';
 import { AppIcon } from './AppIcon';
 
-export type ExportResult = { path: string; rowCount: number; warningCount?: number };
+export type ExportResult = { path: string; rowCount: number; warningCount?: number; completenessWarning?: string };
 
 export async function revealExportFolder(path: string, openFolder: (path: string) => Promise<boolean>): Promise<string> {
   try {
@@ -35,6 +35,7 @@ export function ExportNotice({ result }: { result: ExportResult }) {
   return <section className="export-notice page-message" aria-label="导出结果">
     <div className="export-notice-summary" role="status"><AppIcon name="check" size={18} /><strong>已导出 {result.rowCount} 条数据</strong></div>
     {Boolean(result.warningCount) && <p className="export-notice-warning"><AppIcon name="warning" size={16} />其中 {result.warningCount} 条存在填写问题，已整行标红，请核对单元格批注。</p>}
+    {result.completenessWarning && <p className="export-notice-warning" role="alert"><AppIcon name="warning" size={16} />{result.completenessWarning}详见文件中的“批次说明”。</p>}
     <div className="export-notice-location"><span>保存位置</span><button type="button" className="export-notice-path" title="打开文件所在文件夹" aria-label={`打开文件所在文件夹：${result.path}`} aria-busy={opening} disabled={opening} onClick={() => void openFolder()}>{result.path}</button><small>{opening ? '正在打开文件夹…' : '点击路径打开文件所在文件夹'}</small></div>
     {error && <p className="export-notice-error" role="alert">{error}</p>}
   </section>;

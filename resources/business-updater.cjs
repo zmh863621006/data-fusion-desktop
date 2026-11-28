@@ -500,5 +500,64 @@ async function runStartupUpdate(input) {
   } catch (error) { return { status: 'blocked', code: /^[A-Z_]+$/.test(error.code || '') ? error.code : 'UPDATE_FAILED' }; }
   finally { if (unlock) await unlock(); }
 }
+
+/** Only the cold-start shell may call this, before any business code is loaded.
+ * Hot checks can advance current/previous while an older payload is still running.
+ */
+async function pruneStartupCache(input) {
+  const options = normalize(input);
+  payloadIdentity(input.selectedManifest, options); payloadIdentity(input.builtinManifest, options);
+  await prepareDirectory(options.directory);
+  const unlock = await acquireLock(options.directory);
+  try {
+    notAborted(options);
+    // Authenticate every retained state reference before deleting any directory.
+    const installed = await inspectInstalled({ ...options, metadataOnly: true });
+    const pending = await readJson(path.join(options.directory, 'pending.json'));
+    const keep = new Set([input.selectedManifest, input.builtinManifest, installed?.manifest,
+      installed?.previous ? validateManifest(installed.previous, options) : undefined,
+      pending ? validateManifest(pending, options) : undefined].filter(Boolean)
+      .map(manifest => path.basename(payloadLocation(options.directory, manifest).folder)));
+    const root = path.join(options.directory, 'payloads'), canonicalRoot = await fsp.realpath(root);
+    const payloadName = /^(?:0|[1-9]\d{0,5})\.(?:0|[1-9]\d{0,5})\.(?:0|[1-9]\d{0,5})-[a-f0-9]{16}$/;
+    const quarantineName = /^\.quarantine-(?:0|[1-9]\d{0,5})\.(?:0|[1-9]\d{0,5})\.(?:0|[1-9]\d{0,5})-[a-f0-9]{16}-[a-f0-9]{24}$/;
+    const candidates = [], quarantines = [];
+    for (const entry of await fsp.readdir(root, { withFileTypes: true })) {
+      if (keep.has(entry.name) || !entry.isDirectory() || entry.isSymbolicLink()) continue;
+      if (!payloadName.test(entry.name) && !quarantineName.test(entry.name)) continue;
+      const file = path.join(root, entry.name), stat = await fsp.lstat(file);
+      if (!stat.isDirectory() || stat.isSymbolicLink()) continue;
+      const candidate = { name: entry.name, file, stat };
+      (quarantineName.test(entry.name) ? quarantines : candidates).push(candidate);
+    }
+    quarantines.sort((a, b) => b.stat.mtimeMs - a.stat.mtimeMs || a.name.localeCompare(b.name));
+    candidates.push(...quarantines.slice(2));
+    let removed = 0, skipped = 0;
+    for (const candidate of candidates) {
+      notAborted(options);
+      // Never follow a junction/link, even in an obsolete cache. Only exact direct
+      // children in this updater-owned tree can be removed; unknown files stay.
+      const stat = await fsp.lstat(candidate.file);
+      if (path.dirname(candidate.file) !== root || !stat.isDirectory() || stat.isSymbolicLink()
+        || stat.ino !== candidate.stat.ino || stat.dev !== candidate.stat.dev
+        || await fsp.realpath(candidate.file) !== path.join(canonicalRoot, candidate.name)) { skipped++; continue; }
+      let entries = 0;
+      const safeTree = async (directory, depth = 0) => {
+        if (depth > 66) return false;
+        for (const entry of await fsp.readdir(directory, { withFileTypes: true })) {
+          notAborted(options);
+          if (++entries > MAX_FILES + 16 || entry.isSymbolicLink()) return false;
+          const child = path.join(directory, entry.name), info = await fsp.lstat(child);
+          if (info.isSymbolicLink() || !info.isDirectory() && !info.isFile()) return false;
+          if (info.isDirectory() && !await safeTree(child, depth + 1)) return false;
+        }
+        return true;
+      };
+      if (!await safeTree(candidate.file)) { skipped++; continue; }
+      await fsp.rm(candidate.file, { recursive: true, force: false }); removed++;
+    }
+    return { removed, skipped };
+  } finally { await unlock(); }
+}
 module.exports = { DEFAULT_FEED_BASE, MAX_ASAR_BYTES, MAX_MANIFEST_BYTES, PRODUCT, ENTRY, compareVersions, validateTarget, validateManifest,
-  validateBusinessMetadata, manifestUrl, inspectAsar, extractVerifiedPayload, ensureBuiltinPayload, inspectInstalled, runStartupUpdate, strictJson, selectBackend };
+  validateBusinessMetadata, manifestUrl, inspectAsar, extractVerifiedPayload, ensureBuiltinPayload, inspectInstalled, runStartupUpdate, pruneStartupCache, strictJson, selectBackend };

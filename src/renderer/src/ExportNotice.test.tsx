@@ -24,6 +24,14 @@ describe('administrative permit export notice', () => {
     expect(html).toContain('已导出 90 条数据');
   });
 
+  it('announces incomplete collection separately from field validation', () => {
+    const html = renderToStaticMarkup(<ExportNotice result={{ ...result, rowCount: 0, completenessWarning: '本批次超时请求已跳过，请勿视为完整数据。' }} />);
+    expect(html).toContain('本批次超时请求已跳过');
+    expect(html).toContain('批次说明');
+    expect(html).toContain('role="alert"');
+    expect(html).not.toContain('整行标红');
+  });
+
   it('escapes path text instead of interpreting it as HTML or a remote navigation target', () => {
     const html = renderToStaticMarkup(<ExportNotice result={{ path: 'C:\\导出\\<script>&许可.xlsx', rowCount: 1 }} />);
     expect(html).toContain('&lt;script&gt;&amp;许可.xlsx');

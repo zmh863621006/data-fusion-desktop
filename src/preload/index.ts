@@ -18,6 +18,10 @@ import type { AppSettings } from '../core/settings/types';
 import type { OneWindowState, OneWindowPlan, OneWindowBatch } from '../core/one-window/types';
 
 const desktopApi = {
+  startup: {
+    ready: (): Promise<boolean> => ipcRenderer.invoke(IPC_CHANNELS.rendererReady),
+    failed: (): Promise<void> => ipcRenderer.invoke(IPC_CHANNELS.rendererFailed),
+  },
   housingBinding: {
     importWorkbook: (): Promise<import('../core/housing-binding/types').HousingImportPreview | null> => ipcRenderer.invoke(IPC_CHANNELS.housingBindingImport),
     create: (input: import('../core/housing-binding/types').HousingBindingCreate): Promise<import('../core/housing-binding/types').HousingBindingJob> => ipcRenderer.invoke(IPC_CHANNELS.housingBindingCreate, input),
@@ -80,6 +84,11 @@ const desktopApi = {
     exportOutput: (id: string, keyword?: string, target?: GovernmentExportTarget): Promise<ExportResult | null> => ipcRenderer.invoke(IPC_CHANNELS.taskOutputExport, id, keyword, target),
   },
   records: {
+    onChanged: (listener: (scope: { systemId: string; matterId: string }) => void) => {
+      const handler = (_event: Electron.IpcRendererEvent, scope: { systemId: string; matterId: string }) => listener(scope);
+      ipcRenderer.on(IPC_CHANNELS.recordsChanged, handler);
+      return () => { ipcRenderer.removeListener(IPC_CHANNELS.recordsChanged, handler); };
+    },
     list: (query?: Record<string, unknown>) => ipcRenderer.invoke(IPC_CHANNELS.recordsList, query),
     versions: (systemId: string, matterId: string, recordKey: string) =>
       ipcRenderer.invoke(IPC_CHANNELS.recordVersions, systemId, matterId, recordKey),

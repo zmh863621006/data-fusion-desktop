@@ -1,4 +1,7 @@
 export const IPC_CHANNELS = {
+  rendererReady: 'renderer:ready',
+  rendererFailed: 'renderer:failed',
+  recordsChanged: 'records:changed',
   housingBindingImport: 'housing-binding:import',
   housingBindingCreate: 'housing-binding:create',
   housingBindingState: 'housing-binding:state',

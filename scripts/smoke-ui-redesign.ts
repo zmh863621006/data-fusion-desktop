@@ -980,7 +980,7 @@ async function verifyFoodDrugWorkspace() {
 
 async function verifyAdditionalCatalogs() {
   await reload('additional-catalogs');
-  await until('document.querySelectorAll(".system-nav-toggle").length === 3');
+  await until(`document.querySelectorAll(".system-nav-toggle").length === ${allowedSystems().length}`);
   for (const system of [hrss, ...additionalSystems]) {
     await dom(`[...document.querySelectorAll('.system-nav-toggle')].find(button=>button.title===${JSON.stringify(system.name)}).click()`);
     const expected = (system === hrss ? streetMatters : system.matters).map(matter => matter.name);
@@ -992,8 +992,7 @@ async function verifyAdditionalCatalogs() {
       await dom(`[...document.querySelectorAll('.department-nav-title')].find(button=>button.textContent.includes('街道办')).click()`);
       assert.deepEqual(await dom(`[...document.querySelectorAll('.department-subnav .matter-subnav button')].map(item=>item.textContent)`), expected);
       await click('.one-click-panel .run-return-button');
-      await until(`document.querySelector('main > .page-message')?.textContent.includes('当前事项暂时无法回流')`);
-      assert.equal(await dom('document.querySelector("main").innerText.includes("回流任务已创建")'), false);
+      await until(`document.querySelector('main > .page-message')?.textContent.includes('数据回流完成')`);
     }
     await button('回流数据', '.matter-workspace-tabs');
     await until('document.querySelector(".hrss-ledger-footer")?.textContent.includes("共 0 条列表记录")');
@@ -1001,6 +1000,30 @@ async function verifyAdditionalCatalogs() {
     assert.equal(last?.systemId, system.id);
     assert((system === hrss ? streetMatters : system.matters).some(matter => matter.id === last?.matterId));
   }
+}
+
+async function verifyAsyncEnrichment() {
+  await reload('active');
+  await click('.home-recent .link-button');
+  await until('Boolean(document.querySelector(".record-table-panel tbody tr .link-button"))');
+  await button('导出南山双公示'); await until('Boolean(document.querySelector(".export-notice"))');
+  const scope = { systemId: ids[0], matterId: `${ids[0]}-matter-0` };
+  recordData = { ...recordData, xkXdrMc: '后台补全后的测试单位' };
+  window!.webContents.send('ui-redesign:records-changed', scope);
+  await until('document.querySelector(".record-table-panel")?.textContent.includes("后台补全后的测试单位")');
+  assert(await dom('Boolean(document.querySelector(".export-notice"))'), 'Background refresh must not erase an export receipt');
+  let release!: () => void, entered!: () => void;
+  const started = new Promise<void>(resolve => { entered = resolve; });
+  delayedBatch = { started: entered, wait: new Promise<void>(resolve => { release = resolve; }) };
+  window!.webContents.send('ui-redesign:records-changed', scope);
+  await started;
+  recordData = { ...recordData, xkXdrMc: '再次补全后的测试单位' };
+  window!.webContents.send('ui-redesign:records-changed', scope);
+  await until('document.querySelector(".record-table-panel")?.textContent.includes("再次补全后的测试单位")');
+  release(); await new Promise(resolve => setTimeout(resolve, 100));
+  assert.equal(await dom('document.querySelector(".record-table-panel")?.textContent.includes("延迟返回的批次样例")'), false);
+  await screenshot('30-background-enrichment-refresh');
+  console.log('PASS: background refresh preserves export receipts and discards stale responses');
 }
 
 async function run() {
@@ -1012,6 +1035,11 @@ async function run() {
   window.webContents.on('console-message', (_event, level, message) => { if (level === 3) errors.push(message); });
   window.webContents.on('render-process-gone', (_event, details) => errors.push(`renderer gone: ${details.reason}`));
   ipcMain.handle('ui-redesign:invoke', (_event, method, ...args) => invoke(method, ...args));
+  if (process.env.DATA_FUSION_UI_ENRICHMENT_ONLY === '1') {
+    await verifyAsyncEnrichment();
+    assert.equal(errors.length, 0); assert.equal(blockedRequests.length, 0);
+    return;
+  }
   await verifyPractitionerNumberScope();
   await verifyLedgerPreferences();
   await verifyAuthorizationInfo();

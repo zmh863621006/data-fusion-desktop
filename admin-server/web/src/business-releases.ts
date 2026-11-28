@@ -8,7 +8,7 @@ export interface BusinessRelease {
   metadata: { minShellVersion: string; backend: { origin: string; revision: number } } | null;
   url: string; feedUrl: string | null;
 }
-export interface BusinessReleaseList { rows: BusinessRelease[]; configured: boolean; feedBase: string | null; storageMode?: 'oss' | 'local' }
+export interface BusinessReleaseList { rows: BusinessRelease[]; total?: number; configured: boolean; feedBase: string | null; storageMode?: 'oss' | 'local' }
 export const BUSINESS_MAX_BYTES = 256 * 1024 * 1024;
 export const defaultBusinessTarget: BusinessTarget = { platform: 'win32', arch: 'x64', variant: 'standard', electronMajor: 44 };
 export function businessTargetLabel(target: BusinessTarget): string {
@@ -29,7 +29,7 @@ export function businessReleasesForTarget(rows: BusinessRelease[], target: Busin
   return rows.filter(row => Object.keys(target).every(key => row.target[key as keyof BusinessTarget] === target[key as keyof BusinessTarget]));
 }
 export const businessApi = {
-  list: () => request<BusinessReleaseList>('/api/admin/business-releases'),
+  list: (params?: Record<string, string>, signal?: AbortSignal) => request<BusinessReleaseList>(`/api/admin/business-releases${params ? `?${new URLSearchParams(params)}` : ''}`, { signal }),
   publish: (id: string, enabled: boolean, confirmPassword: string) => request<BusinessRelease>(`/api/admin/business-releases/${encodeURIComponent(id)}`,
     { method: 'PATCH', body: JSON.stringify({ enabled, confirmPassword }), signal: AbortSignal.timeout(180_000) }),
 };

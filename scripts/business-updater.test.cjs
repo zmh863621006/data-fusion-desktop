@@ -54,6 +54,70 @@ test('version comparison and runtime lanes are explicit and reject incompatible 
   for (const value of [{ ...target, variant: 'kirin990' }, { ...target, platform: 'linux', electronMajor: 22 }, { ...target, arch: 'ia32' }]) assert.throws(() => updater.validateTarget(value));
   assert.throws(() => updater.compareVersions('01.0.0', '1.0.0'));
 });
+
+test('cold cache cleanup retains builtin, selected, current, previous, pending and two diagnostic caches', async t => {
+  const f = await fixture(t), manifests = new Map();
+  for (const version of ['1.0.0', '1.1.0', '1.2.0', '1.3.0', '1.4.0', '1.5.0']) {
+    const bytes = makeAsar(version), manifest = descriptor(bytes, version), signed = envelope(manifest);
+    manifests.set(version, manifest);
+    if (version === '1.0.0' || version === '1.5.0') {
+      const archive = path.join(f.directory, version + '.asar'); await fsp.writeFile(archive, bytes);
+      await updater.ensureBuiltinPayload({ ...f.options, manifest, asarFile: archive });
+    } else {
+      const result = await updater.runStartupUpdate({ ...f.options, fetcher: async url => url.endsWith('/latest.json') ? fakeResponse(200, JSON.stringify(signed)) : fakeResponse(200, bytes) });
+      assert.equal(result.status, 'updated');
+    }
+  }
+  const folder = version => version + '-' + manifests.get(version).sha256.slice(0, 16), root = path.join(f.directory, 'payloads');
+  // A running 1.1.0 is still intact after three hot checks, even though it is no
+  // longer state's current or previous. Garbage collection is never done there.
+  assert.equal(await fsp.readFile(path.join(root, folder('1.1.0'), 'app/out/main/index.js'), 'utf8'), 'module.exports = "business-1.1.0";\n');
+  await fsp.writeFile(path.join(f.directory, 'pending.json'), JSON.stringify(envelope(manifests.get('1.5.0'))));
+  const quarantineNames = [];
+  for (let i = 0; i < 3; i++) {
+    const name = '.quarantine-' + folder('1.2.0') + '-' + String(i).repeat(24), directory = path.join(root, name);
+    quarantineNames.push(name); await fsp.mkdir(directory); await fsp.writeFile(path.join(directory, 'diagnostic'), String(i));
+    await fsp.utimes(directory, new Date(1700000000000 + i * 1000), new Date(1700000000000 + i * 1000));
+  }
+  const unrelated = path.join(root, 'user-data'); await fsp.mkdir(unrelated); await fsp.writeFile(path.join(unrelated, 'sentinel'), 'keep');
+  const result = await updater.pruneStartupCache({ ...f.options, selectedManifest: manifests.get('1.1.0'), builtinManifest: manifests.get('1.0.0') });
+  assert.equal(result.removed, 2); assert.equal(result.skipped, 0);
+  const retained = await fsp.readdir(root);
+  for (const version of ['1.0.0', '1.1.0', '1.3.0', '1.4.0', '1.5.0']) assert(retained.includes(folder(version)));
+  assert(!retained.includes(folder('1.2.0'))); assert(!retained.includes(quarantineNames[0]));
+  assert(retained.includes(quarantineNames[1])); assert(retained.includes(quarantineNames[2]));
+  assert.equal(await fsp.readFile(path.join(unrelated, 'sentinel'), 'utf8'), 'keep');
+});
+
+test('cold cleanup refuses corrupt signed state and active locks before deleting anything', async t => {
+  const f = await fixture(t); await updater.runStartupUpdate(f.options);
+  const root = path.join(f.directory, 'payloads'), stale = path.join(root, '0.9.0-' + 'a'.repeat(16));
+  await fsp.mkdir(stale); await fsp.writeFile(path.join(stale, 'sentinel'), 'keep');
+  const options = { ...f.options, selectedManifest: f.manifest, builtinManifest: f.manifest };
+  const state = await fsp.readFile(path.join(f.directory, 'state.json'));
+  await fsp.writeFile(path.join(f.directory, 'state.json'), '{broken');
+  await assert.rejects(updater.pruneStartupCache(options));
+  assert.equal(await fsp.readFile(path.join(stale, 'sentinel'), 'utf8'), 'keep');
+  await fsp.writeFile(path.join(f.directory, 'state.json'), state);
+  await fsp.writeFile(path.join(f.directory, '.update.lock'), JSON.stringify({ pid: process.pid, nonce: 'busy' }));
+  await assert.rejects(updater.pruneStartupCache(options), /UPDATE_BUSY/);
+  assert.equal(await fsp.readFile(path.join(stale, 'sentinel'), 'utf8'), 'keep');
+});
+
+test('cold cleanup never traverses stale cache links or their external targets', async t => {
+  const f = await fixture(t); await updater.runStartupUpdate(f.options);
+  const root = path.join(f.directory, 'payloads'), external = path.join(f.directory, 'outside');
+  const stale = path.join(root, '0.9.0-' + 'b'.repeat(16)); await fsp.mkdir(stale); await fsp.mkdir(external);
+  await fsp.writeFile(path.join(external, 'sentinel'), 'keep');
+  try {
+    await fsp.symlink(external, path.join(stale, 'nested-link'), 'junction');
+    await fsp.symlink(external, path.join(root, '0.8.0-' + 'c'.repeat(16)), 'junction');
+  } catch { t.skip('Symlink permission unavailable'); return; }
+  const result = await updater.pruneStartupCache({ ...f.options, selectedManifest: f.manifest, builtinManifest: f.manifest });
+  assert.equal(result.removed, 0); assert.equal(result.skipped, 1);
+  assert.equal(await fsp.readFile(path.join(external, 'sentinel'), 'utf8'), 'keep');
+  assert((await fsp.lstat(path.join(stale, 'nested-link'))).isSymbolicLink());
+});
 test('manifests authenticate raw payload bytes, target, HTTPS origin and metadata before download', () => {
   const bytes = makeAsar(), manifest = descriptor(bytes), options = { feedBase, target, publicKey };
   assert.deepEqual(updater.validateManifest(envelope(manifest), options), manifest);

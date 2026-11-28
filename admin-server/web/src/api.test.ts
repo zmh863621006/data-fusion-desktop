@@ -17,20 +17,20 @@ describe('ordinary admin session startup', () => {
     const first = loadAdminSession(), second = loadAdminSession();
     expect(first).toBe(second);
     expect((await first).user?.username).toBe('admin');
-    expect(fetch.mock.calls.map(call => call[0])).toEqual(['/api/admin/bootstrap']);
+    expect(fetch.mock.calls.map(call => call[0])).toEqual(['/api/admin/bootstrap?compact=1']);
   });
   it('returns to login immediately when the session is expired, even in a browser with old device cookies', async () => {
     const fetch = vi.fn().mockResolvedValue(reply(401, {}));
     vi.stubGlobal('fetch', fetch);
     await expect(loadAdminSession()).rejects.toMatchObject({ status: 401 });
-    expect(fetch.mock.calls.map(call => call[0])).toEqual(['/api/admin/bootstrap']);
+    expect(fetch.mock.calls.map(call => call[0])).toEqual(['/api/admin/bootstrap?compact=1']);
   });
   it('can check a new password-authenticated session after an expired-session check', async () => {
     const fetch = vi.fn().mockResolvedValueOnce(reply(401, {})).mockResolvedValueOnce(reply(200, { user: { username: 'admin' } }));
     vi.stubGlobal('fetch', fetch);
     await expect(loadAdminSession()).rejects.toMatchObject({ status: 401 });
     expect((await loadAdminSession()).user?.username).toBe('admin');
-    expect(fetch.mock.calls.map(call => call[0])).toEqual(['/api/admin/bootstrap', '/api/admin/bootstrap']);
+    expect(fetch.mock.calls.map(call => call[0])).toEqual(['/api/admin/bootstrap?compact=1', '/api/admin/bootstrap?compact=1']);
   });
   it('does not retry service outages or bypass a login lock', async () => {
     let fetch = vi.fn().mockResolvedValue(reply(503, { error: '暂不可用' }));

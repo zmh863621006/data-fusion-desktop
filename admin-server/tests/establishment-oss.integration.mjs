@@ -36,7 +36,7 @@ test('imports private OSS Excel into raw records and existing enterprise lookup,
 });
 test('preserves manual canonical data and stores raw incoming evidence for review',async t=>{
   const {db,importer,errors}=fixture(t,[await batch({legal:'来源法人'})]);
-  db.prepare('INSERT INTO enterprises VALUES(?,?,?,?,?,?)').run('manual','测试企业',code,'人工维护法人','manual',1);
+  db.prepare('INSERT INTO enterprises(id,name,credit_code,legal_person,source,updated_at) VALUES(?,?,?,?,?,?)').run('manual','测试企业',code,'人工维护法人','manual',1);
   await importer.poll();assert.equal(errors.length,0);assert.equal(db.prepare('SELECT legal_person FROM enterprises').get().legal_person,'人工维护法人');
   assert.equal(db.prepare('SELECT legal_person FROM establishment_records').get().legal_person,'来源法人');assert.equal(db.prepare('SELECT status FROM enterprise_requests').get().status,'review');
 });

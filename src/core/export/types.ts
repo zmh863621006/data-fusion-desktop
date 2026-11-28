@@ -18,6 +18,24 @@ export interface ExportResult {
   createdAt: number;
   warningCount?: number;
   missingRequiredCount?: number;
+  completenessWarning?: string;
+}
+
+/** Collection metadata is separate from business columns and never changes import templates. */
+export interface ExportBatchContext {
+  taskId: string;
+  systemId: string;
+  matterId?: string;
+  businessName?: string;
+  startDate?: string;
+  endDate?: string;
+  dateBasis?: string;
+  dateFiltering?: boolean;
+  status?: string;
+  partial?: boolean;
+  skippedRequests?: number;
+  batchRowCount?: number;
+  incompleteHandling?: number;
 }
 
 export interface ExportService {

@@ -1,4 +1,4 @@
-import { app, BrowserWindow } from 'electron';
+import { app, BrowserWindow, dialog, ipcMain } from 'electron';
 import { dirname, join, resolve } from 'node:path';
 import { existsSync, mkdirSync } from 'node:fs';
 import { appRuntime } from './runtime';
@@ -16,6 +16,7 @@ import { prepareLinuxUpdate } from './linux-update-installer';
 import { businessBootstrapContext } from './business-bootstrap-context';
 import { StartupBusinessUpdates } from './startup-business-updates';
 import { installMainWindowF12 } from './devtools';
+import { RendererStartupGuard } from './renderer-startup';
 
 configureLinuxSecretStorage(app.commandLine);
 
@@ -51,7 +52,6 @@ function quitSafely(): void {
 }
 
 function createMainWindow(): void {
-  let businessPageFailed = false;
   mainWindow = new BrowserWindow({
     width: 1440,
     height: 900,
@@ -78,10 +78,35 @@ function createMainWindow(): void {
     if (currentUrl && url !== currentUrl) event.preventDefault();
   });
 
-  mainWindow.once('ready-to-show', () => { if (!businessPageFailed) { mainWindow?.show(); businessBootstrap?.ready(); } });
-  mainWindow.webContents.once('did-fail-load', (_event, code, _description, _url, isMainFrame) => {
-    if (isMainFrame && code !== -3 && businessBootstrap) { businessPageFailed = true; mainWindow?.hide(); businessBootstrap.failed('BUSINESS_PAGE_LOAD_FAILED'); }
+  const owner = mainWindow;
+  const startup = new RendererStartupGuard({
+    contentsId: () => owner.webContents.id, mainFrame: () => owner.webContents.mainFrame,
+    verifyView: async () => !owner.isDestroyed() && await owner.webContents.executeJavaScript(`(() => {
+      const root = document.getElementById('root');
+      return Boolean(root?.querySelector('.app-shell,.activation-shell')
+        && getComputedStyle(document.documentElement).getPropertyValue('--fusion-styles-ready').trim() === '1');
+    })()`),
+    show: () => { if (!owner.isDestroyed()) owner.show(); },
+    ready: () => businessBootstrap?.ready(),
+    failed: code => {
+      if (!owner.isDestroyed()) owner.hide();
+      if (businessBootstrap) businessBootstrap.failed(code);
+      else void dialog.showMessageBox({ type: 'error', message: '应用界面未能完成启动',
+        detail: '授权、会话和业务数据已保留，请重新启动应用；如果仍无法打开，请联系维护人员。', buttons: ['退出应用'] }).then(quitSafely);
+    },
   });
+  ipcMain.removeHandler(IPC_CHANNELS.rendererReady);
+  ipcMain.removeHandler(IPC_CHANNELS.rendererFailed);
+  ipcMain.handle(IPC_CHANNELS.rendererReady, event => startup.acknowledge(event));
+  ipcMain.handle(IPC_CHANNELS.rendererFailed, event => {
+    if (event.sender.id !== owner.webContents.id || event.senderFrame !== owner.webContents.mainFrame) throw new Error('拒绝来自非受信页面的启动确认');
+    startup.fail('BUSINESS_RENDERER_FAILED');
+  });
+  mainWindow.once('ready-to-show', () => startup.firstPaint());
+  mainWindow.webContents.once('did-fail-load', (_event, code, _description, _url, isMainFrame) => {
+    if (isMainFrame && code !== -3) startup.fail('BUSINESS_PAGE_LOAD_FAILED');
+  });
+  mainWindow.webContents.on('render-process-gone', () => startup.fail('BUSINESS_RENDERER_GONE'));
   mainWindow.on('close', (event) => {
     if (!shutdownComplete && updates?.snapshot().status === 'installing') { event.preventDefault(); return; }
     if (!shutdownComplete) { event.preventDefault(); quitSafely(); }
@@ -90,6 +115,9 @@ function createMainWindow(): void {
     if (mainWindow) void appRuntime.restoreSourceTabs(mainWindow).catch(() => console.warn('部分原系统标签页暂未恢复，请手动打开'));
   });
   mainWindow.once('closed', () => {
+    startup.dispose();
+    ipcMain.removeHandler(IPC_CHANNELS.rendererReady);
+    ipcMain.removeHandler(IPC_CHANNELS.rendererFailed);
     loginTabController.close();
     mainWindow = null;
   });

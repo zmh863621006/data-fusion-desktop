@@ -1,5 +1,6 @@
 import { AppError } from '../../core/errors/app-error';
 import type { QueryContext, QueryPage } from '../../core/query/types';
+import { normalizeCreditCode } from '../../core/enterprise/credit-code';
 
 const AUTHORITY_NAME = '惠州市交通运输局';
 const AUTHORITY_CODE = '114413000071877877';
@@ -8,11 +9,17 @@ const text = (row: Record<string, unknown>, key: string): string => String(row[k
 export function mapOnlineCarPermit(row: Record<string, unknown>): Record<string, unknown> {
   const companyName = text(row, 'companyName');
   const companyId = text(row, 'companyId');
-  const organization = companyName.includes('公司') && companyName.length > 4;
+  const creditCode = normalizeCreditCode(companyId);
+  // The source uses companyId for both an identity document and a credit code.
+  // A verified credit code takes precedence over the name (centres and sole traders
+  // need not contain “公司”). Retain the source value for existing named businesses.
+  const personalIdentity = /^(?:\d{15}|\d{17}[\dXx])$/.test(companyId) && !creditCode;
+  const organization = Boolean(creditCode) || (!personalIdentity && /(公司|企业|集团|厂|店|中心|合作社|事务所|经营部|车行)/.test(companyName));
+  const category = creditCode.startsWith('92') ? '个体工商户' : organization ? '法人及非法人组织' : '自然人';
   return {
     xzxkmc: '网络预约出租汽车运输证许可', xkXdrMc: companyName,
-    xkXdrLb: organization ? '法人及非法人组织' : '自然人',
-    xkXdrShxym: organization ? companyId : '', xkXdrGszc: '', xkXdrZzjg: '', xkXdrSwdj: '', xkXdrSydw: '', xkXdrShzz: '',
+    xkXdrLb: category,
+    xkXdrShxym: organization ? creditCode || companyId : '', xkXdrGszc: '', xkXdrZzjg: '', xkXdrSwdj: '', xkXdrSydw: '', xkXdrShzz: '',
     xkFrdb: '', xkFrZjlx: '', xkFrZjhm: '',
     xkXdrZjlx: organization ? '' : (/^\d/.test(companyId) ? '身份证' : '港澳台通行证'),
     xkXdrZjhm: organization ? '' : companyId,

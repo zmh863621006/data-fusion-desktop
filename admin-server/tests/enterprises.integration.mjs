@@ -148,12 +148,12 @@ function storeFixture(t, provider) {
 
 test('cached missing legal person or code is completed, persisted and then reused without a provider call', async t => {
   const calls=[];const f=storeFixture(t,async keyword=>{calls.push(keyword);return{name:'部分公司',creditCode:code,legalPerson:'补全法人'};});
-  f.db.prepare('INSERT INTO enterprises VALUES(?,?,?,?,?,?)').run('partial','部分公司',code,'','legacy',1);
+  f.db.prepare('INSERT INTO enterprises(id,name,credit_code,legal_person,source,updated_at) VALUES(?,?,?,?,?,?)').run('partial','部分公司',code,'','legacy',1);
   const completed=await f.resolve([{name:'部分公司',creditCode:code}]);
   assert.equal(completed[0].status,'success');assert.equal(completed[0].enterprise.legalPerson,'补全法人');assert.deepEqual(calls,['部分公司']);
   await f.resolve([{name:'部分公司'}]);assert.equal(calls.length,1);
   f.db.prepare('DELETE FROM enterprise_requests').run();f.db.prepare('DELETE FROM enterprises').run();
-  f.db.prepare('INSERT INTO enterprises VALUES(?,?,?,?,?,?)').run('missing-code','部分公司','','已有法人','legacy',1);
+  f.db.prepare('INSERT INTO enterprises(id,name,credit_code,legal_person,source,updated_at) VALUES(?,?,?,?,?,?)').run('missing-code','部分公司','','已有法人','legacy',1);
   const missingCode=await f.resolve([{name:'部分公司'}]);
   assert.equal(missingCode[0].status,'review','conflicting legal persons are preserved for review');
   assert.equal(f.db.prepare('SELECT legal_person FROM enterprises').get().legal_person,'已有法人');
@@ -193,8 +193,8 @@ test('90 companies resolve with bounded provider concurrency and the minute budg
 
 test('oversize exact credit-code cache ignores conflicting names and ambiguous aliases without a provider call', async t => {
   const calls=[];const f=storeFixture(t,async keyword=>{calls.push(keyword);return null;});
-  f.db.prepare('INSERT INTO enterprises VALUES(?,?,?,?,?,?)').run('correct','同名运输公司',code,'正确法人','manual',1);
-  f.db.prepare('INSERT INTO enterprises VALUES(?,?,?,?,?,?)').run('different','同名运输公司',otherCode,'另一法人','manual',1);
+  f.db.prepare('INSERT INTO enterprises(id,name,credit_code,legal_person,source,updated_at) VALUES(?,?,?,?,?,?)').run('correct','同名运输公司',code,'正确法人','manual',1);
+  f.db.prepare('INSERT INTO enterprises(id,name,credit_code,legal_person,source,updated_at) VALUES(?,?,?,?,?,?)').run('different','同名运输公司',otherCode,'另一法人','manual',1);
   const resolved=await f.resolve([{name:'同名运输公司',creditCode:code},{name:'过期错字名称',creditCode:code}],'oversize-transport');
   assert.ok(resolved.every(value=>value.status==='success' && value.enterprise.id==='correct' && value.enterprise.legalPerson==='正确法人'));
   assert.equal(calls.length,0);
@@ -205,7 +205,7 @@ test('oversize exact credit-code cache ignores conflicting names and ambiguous a
 
 test('oversize valid source code queries only that code and can resolve despite a different cached name match', async t => {
   const calls=[];const f=storeFixture(t,async keyword=>{calls.push(keyword);return{name:'规范运输企业',creditCode:code,legalPerson:'源代码法人'};});
-  f.db.prepare('INSERT INTO enterprises VALUES(?,?,?,?,?,?)').run('same-name','错误旧名称',otherCode,'不能使用的法人','manual',1);
+  f.db.prepare('INSERT INTO enterprises(id,name,credit_code,legal_person,source,updated_at) VALUES(?,?,?,?,?,?)').run('same-name','错误旧名称',otherCode,'不能使用的法人','manual',1);
   const resolved=await f.resolve([{name:'错误旧名称',creditCode:code}],'oversize-transport');
   assert.equal(resolved[0].status,'success');assert.equal(resolved[0].enterprise.creditCode,code);assert.equal(resolved[0].enterprise.legalPerson,'源代码法人');
   assert.deepEqual(calls,[code]);
@@ -259,7 +259,7 @@ test('name-first not-found cooldown does not suppress oversize strategy, while s
 
 test('oversize partial code cache supplements the missing legal person by code and preserves existing canonical fields', async t => {
   const calls=[];const f=storeFixture(t,async keyword=>{calls.push(keyword);return{name:'规范企业',creditCode:code,legalPerson:'补充法人'};});
-  f.db.prepare('INSERT INTO enterprises VALUES(?,?,?,?,?,?)').run('partial','规范企业',code,'','manual',1);
+  f.db.prepare('INSERT INTO enterprises(id,name,credit_code,legal_person,source,updated_at) VALUES(?,?,?,?,?,?)').run('partial','规范企业',code,'','manual',1);
   const resolved=await f.resolve([{name:'错误企业名',creditCode:code}],'oversize-transport');
   assert.equal(resolved[0].status,'success');assert.equal(resolved[0].enterprise.id,'partial');assert.equal(resolved[0].enterprise.name,'规范企业');assert.equal(resolved[0].enterprise.legalPerson,'补充法人');assert.deepEqual(calls,[code]);
   await f.resolve([{name:'另一个别名',creditCode:code}],'oversize-transport');assert.equal(calls.length,1);
@@ -283,7 +283,7 @@ test('oversize preserves an existing review and manual fields even when the prov
   const f=storeFixture(t,async()=>{release();return new Promise(resolve=>{finish=resolve;});});
   const input={name:'人工维护公司',creditCode:code};const inflight=f.resolve([input],'oversize-transport');await started;
   const request=f.db.prepare('SELECT * FROM enterprise_requests').get();
-  f.db.prepare('INSERT INTO enterprises VALUES(?,?,?,?,?,?)').run('manual','人工维护公司',code,'人工法人','manual',1);
+  f.db.prepare('INSERT INTO enterprises(id,name,credit_code,legal_person,source,updated_at) VALUES(?,?,?,?,?,?)').run('manual','人工维护公司',code,'人工法人','manual',1);
   f.db.prepare("UPDATE enterprise_requests SET enterprise_id='manual',status='success' WHERE id=?").run(request.id);
   finish({name:'人工维护公司',creditCode:code,legalPerson:'云端不同法人'});
   const corrected=await inflight;assert.equal(corrected[0].status,'success');assert.equal(corrected[0].enterprise.legalPerson,'人工法人');
@@ -304,7 +304,7 @@ test('authorized oversize client source selects code-first without adding a user
 
 test('strategy cooldown migration is additive and idempotent without changing enterprise, request, history or provider cache rows', t => {
   const f=storeFixture(t,async()=>null);
-  f.db.prepare('INSERT INTO enterprises VALUES(?,?,?,?,?,?)').run('existing','已维护公司',code,'已维护法人','manual',123);
+  f.db.prepare('INSERT INTO enterprises(id,name,credit_code,legal_person,source,updated_at) VALUES(?,?,?,?,?,?)').run('existing','已维护公司',code,'已维护法人','manual',123);
   const request=f.store.register({name:'已维护公司',creditCode:code});
   f.db.prepare("UPDATE enterprise_requests SET status='review',reason='待人工核对',attempts=3,queried_at=456 WHERE id=?").run(request.requestId);
   f.db.prepare('INSERT INTO enterprise_provider_queries VALUES(?,?,?,?)').run(code,'not_found','',456);
@@ -326,4 +326,44 @@ test('Aliyun adapter encodes keywords and separates HTTP/business/malformed fail
   await assert.rejects(aliyunProvider('x',async()=>new Response('private',{status:403}))('x'),/HTTP 403/);
   await assert.rejects(aliyunProvider('x',async()=>new Response(JSON.stringify({code:500,msg:'private'})))('x'),/业务错误/);
   await assert.rejects(aliyunProvider('x',async()=>new Response('not json'))('x'),/格式异常/);
+});
+
+test('manual revalidation preserves successful data until explicit confirmation and audits old values', async t => {
+  let calls = 0, legalPerson = '原法人';
+  const f = await fixture(t, async () => { calls++; return { name: '核验测试公司', creditCode: code, legalPerson }; });
+  await f.api(`${f.base}/settings`, { enabled: true }, 'PATCH');
+  const id = await f.add('核验测试公司', code); await f.run([id]);
+  const original = (await f.rows()).find(row => row.id === id);
+  assert.equal(calls, 1); assert(original.last_verified_at > 0);
+  const wait = async () => { for (let n = 0; n < 100; n++) { if (!(await f.api(`${f.base}/settings`)).body.job.running) return; await new Promise(resolve => setTimeout(resolve, 5)); } throw new Error('revalidation timeout'); };
+  legalPerson = '新法人'; await f.run([id]); assert.equal(calls, 1, 'normal queries reuse complete data without paid refresh');
+  assert.equal((await f.api(`${f.base}/revalidate`, { ids: [id] })).status, 202); await wait();
+  let row = (await f.rows()).find(row => row.id === id);
+  assert.equal(calls, 2); assert.equal(row.status, 'success'); assert.equal(row.legal_person, '原法人'); assert.equal(row.revalidation_status, 'different');
+  assert.equal(row.last_verified_at, original.last_verified_at);
+  const proposal = JSON.parse(row.proposal_json); assert.equal(proposal.legalPerson, '新法人'); assert.equal(proposal.expected.legalPerson, '原法人');
+  const history = (await f.api(`${f.base}/${id}/history`)).body;
+  assert(history.some(item => item.source === 'manual-revalidation' && item.before_json.includes('原法人') && item.after_json.includes('新法人')));
+  assert.equal((await f.api(`${f.base}/${id}`, { ...proposal, expected: { ...proposal.expected, legalPerson: 'outdated' } }, 'PATCH')).status, 409);
+  assert.equal((await f.api(`${f.base}/${id}`, proposal, 'PATCH')).status, 200);
+  row = (await f.rows()).find(item => item.id === id); assert.equal(row.legal_person, '新法人'); assert.equal(row.proposal_json, '');
+  const before = row.last_verified_at;
+  assert.equal((await f.api(`${f.base}/revalidate`, { ids: [id] })).status, 202); await wait();
+  row = (await f.rows()).find(item => item.id === id); assert.equal(row.revalidation_status, 'same'); assert(row.last_verified_at >= before);
+  const settings = (await f.api(`${f.base}/settings`)).body;
+  assert.equal(settings.statistics.providerRequests, 3); assert(settings.statistics.libraryHits >= 1);
+});
+
+test('revalidation provider errors do not downgrade canonical records; aged cache is visible without automatic spend', async t => {
+  let fail = false;
+  const f = await fixture(t, async () => { if (fail) throw new Error('private upstream error'); return { name: '失败核验测试公司', creditCode: code, legalPerson: '原法人' }; });
+  await f.api(`${f.base}/settings`, { enabled: true }, 'PATCH'); const id = await f.add('失败核验测试公司', code); await f.run([id]); fail = true;
+  assert.equal((await f.api(`${f.base}/revalidate`, { ids: [id] })).status, 202);
+  for (let n = 0; n < 100 && (await f.api(`${f.base}/settings`)).body.job.running; n++) await new Promise(resolve => setTimeout(resolve, 5));
+  const row = (await f.rows()).find(item => item.id === id);
+  assert.equal(row.status, 'success'); assert.equal(row.legal_person, '原法人'); assert.equal(row.revalidation_status, 'error'); assert(!row.revalidation_reason.includes('private'));
+  let calls = 0; const cached = storeFixture(t, async () => { calls++; return { name: '旧缓存公司', creditCode: otherCode, legalPerson: '已有法人' }; });
+  let values = await cached.resolve([{ name: '旧缓存公司' }]); assert.equal(values[0].enterprise.freshness, 'current');
+  cached.advance(365 * 86400000); values = await cached.resolve([{ name: '旧缓存公司' }]);
+  assert.equal(calls, 1); assert.equal(values[0].enterprise.freshness, 'stale'); assert.equal(cached.store.settings().statistics.libraryHits, 1);
 });

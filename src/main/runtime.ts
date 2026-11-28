@@ -32,7 +32,7 @@ import { SqlitePlatformStore, type LocalRecordQuery, type TaskHistoryQuery } fro
 import type { AppSettings } from '../core/settings/types';
 import type { AuditEventType } from '../core/audit/types';
 import { LocalExportService } from '../core/export/local-export-service';
-import type { ExportFormat } from '../core/export/types';
+import type { ExportBatchContext, ExportFormat } from '../core/export/types';
 import { assertGovernmentExportTarget, GOVERNMENT_EXPORT_LABELS, type GovernmentExportTarget } from '../core/export/government-target';
 import { ApplicationExportDirectory, type ExportIdentity } from '../core/export/export-directory';
 import type { ConfirmExport } from '../core/double-publicity/validation';
@@ -73,6 +73,8 @@ import { createHousingTemplate } from '../core/housing-binding/workbook';
 import { HOUSING_SYSTEM_ID, HOUSING_MATTER_ID } from '../core/housing-binding/types';
 import { ReturnUploadQueue, type ReturnUploadState } from '../core/returns/upload-queue';
 import { canonicalRecordQuery, localRecordQuerySystem, visibleRecordMatter } from './shenzhen-record-scope';
+import { LocalEnrichmentQueue } from './local-enrichment-queue';
+import { exportBatchContext } from './export-batch-context';
 
 const PRODUCT_PUBLIC_KEY = `-----BEGIN PUBLIC KEY-----
 MIIBojANBgkqhkiG9w0BAQEFAAOCAY8AMIIBigKCAYEAn2Th5TQoO3juKQte8Ai+
@@ -169,6 +171,10 @@ export class AppRuntime {
   private enterpriseService?: EnterpriseEnrichmentService;
   private healthPublicityService?: HealthPublicityService;
   private activeBusinessOperations = 0;
+  private readonly businessDrainWaiters = new Set<() => void>();
+  private readonly localEnrichment = new LocalEnrichmentQueue();
+  private readonly recordListeners = new Set<(scope: { systemId: string; matterId: string }) => void>();
+  private shutdownPromise?: Promise<void>;
   private updateInstallation = false;
   private hrssReturnTail: Promise<void> = Promise.resolve();
   private hrssReturnPending = 0;
@@ -231,7 +237,12 @@ export class AppRuntime {
   async businessOperation<T>(operation: () => Promise<T>): Promise<T> {
     if (this.updateInstallation || this.shuttingDown) throw new Error('应用正在保存并更新，请稍后再操作');
     this.activeBusinessOperations++;
-    try { return await operation(); } finally { this.activeBusinessOperations--; }
+    try { return await operation(); } finally {
+      if (--this.activeBusinessOperations === 0) {
+        for (const resolve of this.businessDrainWaiters) resolve();
+        this.businessDrainWaiters.clear();
+      }
+    }
   }
   updateBusy(): boolean {
     return this.activeBusinessOperations > 0 || this.tasks.list().some(task => ['queued', 'running'].includes(task.status) && task.type !== 'app-update');
@@ -450,7 +461,8 @@ export class AppRuntime {
     return plugin?.matters.find(matter => matter.id === matterId)?.name ?? plugin?.name ?? matterId;
   }
 
-  private async exportRecords(records: StoredRecord[], format: ExportFormat, identity: ExportIdentity, path?: string, confirm?: ConfirmExport, target?: GovernmentExportTarget) {
+  private async exportRecords(records: StoredRecord[], format: ExportFormat, identity: ExportIdentity, path?: string, confirm?: ConfirmExport, target?: GovernmentExportTarget, batchContext?: ExportBatchContext) {
+    assertFeatureLicensed(await this.currentGrant(), 'export');
     if (records.some(record => record.systemId === oneWindowCatalog.id)) {
       if (records.some(record => record.systemId !== oneWindowCatalog.id) || target || format !== 'xlsx') throw new Error('一窗业务详情请单独导出为 Excel');
       const bytes = await createOneWindowWorkbook(records.map(record => record.data), { businessName: identity.businessName,
@@ -466,18 +478,19 @@ export class AppRuntime {
     }
     assertGovernmentExportTarget(target, format, records.map(record => record.systemId));
     if (target) identity = { ...identity, businessName: `${GOVERNMENT_EXPORT_LABELS[target]}-${identity.businessName}` };
-    const isHrss = records.some(record => record.systemId === 'guangdong-hrss' || record.systemId === SHENZHEN_SYSTEM_ID);
-    const listColumns = isHrss ? [...new Map(records.flatMap(record =>
+    const columnScopes = records.length ? records : batchContext?.matterId ? [{ systemId: batchContext.systemId, matterId: batchContext.matterId }] : [];
+    const isHrss = columnScopes.some(record => record.systemId === 'guangdong-hrss' || record.systemId === SHENZHEN_SYSTEM_ID);
+    const listColumns = isHrss ? [...new Map(columnScopes.flatMap(record =>
       this.plugins.get(record.systemId)?.matters.find(matter => matter.id === record.matterId)?.listColumns ?? []).map(column => [column.key, column])).values()] : undefined;
     if (isHrss) identity = { ...identity, kind: 'list-ledger' };
-    if (path) return this.exportService.export(path, format, records, confirm, listColumns, target);
+    if (path) return this.exportService.export(path, format, records, confirm, listColumns, target, batchContext);
     if (!this.exportDirectory) throw new Error('固定导出目录尚未就绪，请重新启动应用');
     let confirmed: boolean | undefined;
     const confirmOnce: ConfirmExport | undefined = confirm ? async (validation, targetFormat) => {
       if (confirmed === undefined) confirmed = await confirm(validation, targetFormat);
       return confirmed;
     } : undefined;
-    return this.exportDirectory.export(records, identity, format, destination => this.exportService.export(destination, format, records, confirmOnce, listColumns, target));
+    return this.exportDirectory.export(records, identity, format, destination => this.exportService.export(destination, format, records, confirmOnce, listColumns, target, batchContext));
   }
 
   async exportFolder(path: unknown): Promise<string> {
@@ -535,15 +548,36 @@ export class AppRuntime {
     const selectedSystem = localRecordQuerySystem(query);
     if (selectedSystem) await this.requireLicense(selectedSystem, query.matterId);
     const result = await this.platformStore.listRecords(canonicalRecordQuery(query, grant));
-    await this.refreshEnterpriseRecords(result.rows, true);
     const visibleRows = result.rows.map(row => visibleRecordMatter(row, query, grant));
     for (const matter of new Set(visibleRows.filter(row => row.systemId === SHENZHEN_SYSTEM_ID).map(row => row.matterId))) {
       await this.requireLicense(SHENZHEN_SYSTEM_ID, matter);
     }
+    this.scheduleLocalEnrichment(result.rows, true);
     return { ...result, rows: visibleRows };
   }
 
-  private async refreshEnterpriseRecords<T extends { systemId: string; matterId: string; recordKey: string; data: Record<string, unknown> }>(records: T[], readLatestLedger = false): Promise<void> {
+  onRecordsChanged(listener: (scope: { systemId: string; matterId: string }) => void): () => void {
+    this.recordListeners.add(listener);
+    return () => { this.recordListeners.delete(listener); };
+  }
+
+  private scheduleLocalEnrichment(records: Array<{ systemId: string; matterId: string; recordKey: string; data: Record<string, unknown> }>, ledger: boolean): void {
+    if (this.shuttingDown || !this.enterpriseService) return;
+    const eligible = records.filter(row => enterpriseInput(row.systemId, row.data));
+    if (!eligible.length) return;
+    const key = JSON.stringify([ledger, ...eligible.map(row => [row.systemId, row.matterId, row.recordKey])]);
+    // The renderer's first response is a stable snapshot, even if the lookup finishes immediately.
+    const snapshot = structuredClone(eligible);
+    this.localEnrichment.schedule(key, async signal => {
+      for (const row of new Map(snapshot.map(row => [`${row.systemId}:${row.matterId}`, row])).values()) {
+        if (signal.aborted) return;
+        await this.requireLicense(row.systemId, row.matterId);
+      }
+      await this.refreshEnterpriseRecords(snapshot, ledger, signal);
+    });
+  }
+
+  private async refreshEnterpriseRecords<T extends { systemId: string; matterId: string; recordKey: string; data: Record<string, unknown> }>(records: T[], readLatestLedger = false, signal?: AbortSignal): Promise<void> {
     if (!this.enterpriseService || !this.platformStore) return;
     const groups = new Map<string, T[]>();
     for (const row of records) {
@@ -553,17 +587,26 @@ export class AppRuntime {
       else groups.set(key, [row]);
     }
     for (const rows of groups.values()) {
+      if (signal?.aborted) return;
       const { systemId, matterId } = rows[0];
       if (systemId === 'guangdong-hrss' || systemId === SHENZHEN_SYSTEM_ID || systemId === oneWindowCatalog.id) continue;
-      const enriched = await this.enterpriseService.enrich(systemId, matterId, rows.map(row => row.data));
+      const enriched = await this.enterpriseService.enrich(systemId, matterId, rows.map(row => row.data), signal);
+      if (signal?.aborted) return;
+      if (signal) await this.requireLicense(systemId, matterId);
+      if (signal?.aborted) return;
+      let changed = false;
       const matter = this.plugins.get(systemId)?.matters.find(item => item.id === matterId);
       for (let i = 0; i < rows.length; i++) {
         if (JSON.stringify(rows[i].data) === JSON.stringify(enriched[i])) continue;
         if (matter && buildRecordKey(enriched[i], matter.uniqueKey) !== rows[i].recordKey) continue;
         await this.platformStore.applyEnterpriseEnrichment(systemId, matterId, rows[i].recordKey, rows[i].data, enriched[i]);
+        changed = true;
         rows[i].data = readLatestLedger
           ? (await this.repository?.find(systemId, matterId, rows[i].recordKey))?.data ?? enriched[i]
           : enriched[i];
+      }
+      if (changed) for (const listener of this.recordListeners) {
+        try { listener({ systemId, matterId }); } catch { /* A closed renderer must not fail an export. */ }
       }
     }
   }
@@ -575,12 +618,18 @@ export class AppRuntime {
     if (!this.platformStore) throw new Error('本地数据模块未就绪');
     const selectedSystem = localRecordQuerySystem(query);
     if (selectedSystem) await this.requireLicense(selectedSystem, query.matterId);
-    const records = (await this.platformStore.recordsForExport(canonicalRecordQuery(query, grant!)))
+    let records = (await this.platformStore.recordsForExport(canonicalRecordQuery(query, grant!)))
       .map(row => visibleRecordMatter(row, query, grant!));
     if (records.length === 0) throw new Error('当前筛选条件没有可导出的数据');
     const matters = new Map(records.map(record => [`${record.systemId}:${record.matterId}`, record]));
     for (const record of matters.values()) await this.requireLicense(record.systemId, record.matterId);
     await this.refreshEnterpriseRecords(records);
+    if (this.enterpriseService) {
+      records = (await this.platformStore.recordsForExport(canonicalRecordQuery(query, grant!)))
+        .map(row => visibleRecordMatter(row, query, grant!));
+      for (const record of new Map(records.map(row => [`${row.systemId}:${row.matterId}`, row])).values()) await this.requireLicense(record.systemId, record.matterId);
+      if (!records.length) throw new Error('当前筛选条件没有可导出的数据');
+    }
     const names = [...new Set([...matters.values()].map(record => this.businessName(record.systemId, record.matterId)))];
     return this.exportRecords(records, format, { businessName: names.length > 3 ? `${names.slice(0, 3).join('、')}等${names.length}项业务` : names.join('、') }, path, confirm, target);
   }
@@ -627,8 +676,8 @@ export class AppRuntime {
     if (task?.type !== 'data-return' || !task.systemId || !task.matterId) throw new Error('回流批次不存在');
     await this.requireLicense(task.systemId, task.matterId);
     const result = await this.platformStore.listTaskOutput(taskId, page, pageSize, keyword);
-    await this.refreshEnterpriseRecords(result.rows);
-    return this.platformStore.listTaskOutput(taskId, page, pageSize, keyword);
+    this.scheduleLocalEnrichment(result.rows, false);
+    return result;
   }
 
   async exportTaskOutput(taskId: string, path?: string, keyword?: string, confirm?: ConfirmExport, target?: GovernmentExportTarget) {
@@ -639,23 +688,30 @@ export class AppRuntime {
     assertGovernmentExportTarget(target, 'xlsx', [task.systemId]);
     await this.requireLicense(task.systemId, task.matterId);
     const rows = await this.platformStore.taskRowsForExport(taskId, keyword);
-    const records: StoredRecord[] = rows.map(row => ({
+    const batchContext = exportBatchContext(task, this.businessName(task.systemId, task.matterId));
+    if (batchContext) Object.assign(batchContext, await this.platformStore.taskOutputCompleteness(taskId));
+    let records: StoredRecord[] = rows.map(row => ({
       systemId: row.systemId, matterId: row.matterId, recordKey: row.recordKey, data: row.data,
       firstSeenAt: task.createdAt, updatedAt: task.finishedAt ?? task.createdAt,
     }));
-    if (records.length === 0) throw new Error('当前批次没有可导出的数据');
+    if (records.length === 0 && !(batchContext && (batchContext.skippedRequests ?? 0) > 0)) throw new Error('当前批次没有可导出的数据');
     if (this.enterpriseService && !['guangdong-hrss', oneWindowCatalog.id].includes(task.systemId)) {
       const enriched = await this.enterpriseService.enrich(task.systemId, task.matterId, records.map(row => row.data));
       for (let i = 0; i < records.length; i++) {
         await this.platformStore.applyEnterpriseEnrichment(task.systemId, task.matterId, records[i].recordKey, records[i].data, enriched[i]);
-        records[i].data = enriched[i];
       }
+      // A compare-and-set can reject an obsolete response after a newer edit/enrichment.
+      // Export the saved batch, never the uncommitted response from the provider.
+      await this.requireLicense(task.systemId, task.matterId);
+      records = (await this.platformStore.taskRowsForExport(taskId, keyword)).map(row => ({
+        ...row, firstSeenAt: task.createdAt, updatedAt: task.finishedAt ?? task.createdAt,
+      }));
     }
     return this.exportRecords(records, 'xlsx', {
       businessName: this.businessName(task.systemId, task.matterId),
       startDate: task.details?.dateFilterStatus === 'pending' ? undefined : task.details?.startDate,
       endDate: task.details?.dateFilterStatus === 'pending' ? undefined : task.details?.endDate,
-    }, path, confirm, target);
+    }, path, confirm, target, batchContext);
   }
 
   async runOneClickReturn(systemId: string, matterId: string, context: TaskContext, requestedContext?: QueryContext) {
@@ -969,22 +1025,30 @@ export class AppRuntime {
     return this.returnUploads.retry();
   }
 
-  async shutdown(): Promise<void> {
+  shutdown(): Promise<void> {
+    return this.shutdownPromise ??= this.drainAndShutdown();
+  }
+
+  private async drainAndShutdown(): Promise<void> {
     this.shuttingDown = true;
-    await Promise.all(this.plugins.list().map(plugin => plugin.loginPage?.cancelBackgroundWork?.()));
     // Abort the queue before waiting for collectors that may be awaiting its HTTP work.
-    const uploadsStopped = this.returnUploads?.stop();
-    await this.housingBindingService?.stop();
-    await this.oneWindowService?.stop();
-    await uploadsStopped;
-    await this.licenseMonitor?.stop();
-    await loginTabController.flushSessionStorage();
-    await this.credentialStore?.flush();
-    await this.sessionRecovery?.flush();
-    await this.sessionStore?.flush();
-    await this.repository?.close();
+    const drains = [this.tasks.stop(), this.localEnrichment.stop(), this.returnUploads?.stop(),
+      this.housingBindingService?.stop(), this.oneWindowService?.stop(), this.licenseMonitor?.stop(),
+      ...this.plugins.list().map(plugin => plugin.loginPage?.cancelBackgroundWork?.()),
+      this.activeBusinessOperations > 0 ? new Promise<void>(resolve => this.businessDrainWaiters.add(resolve)) : undefined];
+    // Even a failed final write must not short-circuit draining other work.
+    const settled = await Promise.allSettled(drains);
+    for (const flush of [
+      () => loginTabController.flushSessionStorage(), () => this.credentialStore?.flush(),
+      () => this.sessionRecovery?.flush(), () => this.sessionStore?.flush(), () => this.repository?.close(),
+    ]) {
+      try { await flush(); } catch (reason) { settled.push({ status: 'rejected', reason }); }
+    }
     this.repository = undefined;
     this.syncEngine = undefined;
+    this.platformStore = undefined;
+    this.recordListeners.clear();
+    if (settled.some(result => result.status === 'rejected')) throw new Error('部分后台任务未能正常保存，请检查退出日志');
   }
 
   private removeExpiredPreviews(): void {

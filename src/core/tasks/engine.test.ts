@@ -8,6 +8,59 @@ function gate() {
 }
 
 describe('task scheduling', () => {
+  it('stops admission and waits for running work, queued registration and final writes', async () => {
+    const registration = gate(), finish = gate(), terminal = gate();
+    const states: RuntimeTask[] = [];
+    const engine = new TaskEngine({
+      saveMany: async () => { await registration.wait; },
+      save: async task => { if (task.status === 'cancelled') await terminal.wait; states.push(task); },
+      listTasks: async () => states,
+    }, 1);
+    let signal: AbortSignal | undefined;
+    const first = engine.run('running', async context => { signal = context.signal; await finish.wait; });
+    registration.release();
+    await vi.waitFor(() => expect(signal).toBeDefined());
+    const executeQueued = vi.fn(async () => {});
+    const queued = engine.run('queued', executeQueued);
+    let drained = false;
+    const stopping = engine.stop().then(() => { drained = true; });
+    expect(signal!.aborted).toBe(true);
+    await expect(engine.run('late', executeQueued)).rejects.toThrow('正在退出');
+    expect(drained).toBe(false);
+    finish.release();
+    await Promise.resolve();
+    expect(drained).toBe(false);
+    terminal.release();
+    await stopping;
+    expect((await Promise.all([first, queued])).map(task => task.status)).toEqual(['cancelled', 'cancelled']);
+    expect(executeQueued).not.toHaveBeenCalled();
+    expect(states.filter(task => task.status === 'cancelled')).toHaveLength(2);
+    await engine.stop();
+  });
+
+  it('cancels tasks stopped while initial persistence is still pending', async () => {
+    const initial = gate(), execute = vi.fn(async () => {});
+    const engine = new TaskEngine({ save: async task => { if (task.status === 'queued') await initial.wait; }, listTasks: async () => [] });
+    const task = engine.run('early', execute);
+    const stopped = engine.stop();
+    initial.release();
+    await stopped;
+    expect((await task).status).toBe('cancelled');
+    expect(execute).not.toHaveBeenCalled();
+  });
+
+  it('bounds completed memory without deleting persistent history or active jobs', async () => {
+    const history = new Map<string, RuntimeTask>();
+    const engine = new TaskEngine({ save: async task => { history.set(task.id, task); }, listTasks: async () => [...history.values()] }, 2, 3);
+    const active = gate();
+    const pending = engine.run('active', () => active.wait);
+    for (let i = 0; i < 12; i++) await engine.run(`done-${i}`, async () => i);
+    expect(engine.list()).toHaveLength(4);
+    expect(engine.list().some(task => task.name === 'active' && task.status === 'running')).toBe(true);
+    expect(await engine.history()).toHaveLength(13);
+    active.release(); await pending;
+    expect(engine.list()).toHaveLength(3);
+  });
   it('admits tasks in order and applies settings changes to waiting tasks', async () => {
     const engine = new TaskEngine(undefined, 1);
     const gates = Array.from({ length: 4 }, gate);

@@ -1,4 +1,5 @@
 import { createHash, createPublicKey, randomUUID, sign, verify } from 'node:crypto';
+import { pageOptions } from './management-lists.mjs';
 import { createReadStream } from 'node:fs';
 import { chmod, lstat, mkdir, open, rename, unlink } from 'node:fs/promises';
 import { dirname, join, resolve } from 'node:path';
@@ -200,6 +201,16 @@ export function createBusinessReleases(db, { directory, publicOrigin, privateKey
     if (mirror.mode === 'local') return mirror.sendPayload(request, response, objectEntry(row));
     response.writeHead(302, { location: mirror.payloadUrl(objectEntry(row)), 'cache-control': 'no-store' }); response.end(); return true;
   }
-  return { upload, publish, serve, list: () => ({ rows: db.prepare('SELECT * FROM business_releases ORDER BY created_at DESC,id DESC').all().map(describe), configured: Boolean(mirror), storageMode, feedBase: mirror?.feedBase ?? null }),
+  return { upload, publish, serve, list: (params = new URLSearchParams()) => {
+    const extra = { configured: Boolean(mirror), storageMode, feedBase: mirror?.feedBase ?? null };
+    if (params.get('paginated') !== '1') return { ...extra, rows: db.prepare('SELECT * FROM business_releases ORDER BY created_at DESC,id DESC').all().map(describe) };
+    const { page, pageSize } = pageOptions(params), clauses = [], args = [];
+    for (const [key, field] of [['platform','platform'],['arch','arch'],['variant','variant'],['electronMajor','electron_major']]) {
+      if (params.get(key)) { clauses.push(`${field}=?`); args.push(params.get(key).slice(0,80)); }
+    }
+    const where = clauses.length ? `WHERE ${clauses.join(' AND ')}` : '';
+    return { ...extra, page, pageSize, total: db.prepare(`SELECT count(*) n FROM business_releases ${where}`).get(...args).n,
+      rows: db.prepare(`SELECT * FROM business_releases ${where} ORDER BY created_at DESC,id DESC LIMIT ? OFFSET ?`).all(...args, pageSize, (page-1)*pageSize).map(describe) };
+  },
     close() { closed = true; for (const request of requests) request.destroy(); if (completions.size) return Promise.allSettled([...completions]); } };
 }

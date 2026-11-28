@@ -6,6 +6,58 @@ import { expect, it } from 'vitest';
 import { LocalExportService } from './local-export-service';
 import { ApplicationExportDirectory } from './export-directory';
 
+it('exports a partial batch with its selected range and skipped-request evidence in a separate sheet', async () => {
+  const directory = await mkdtemp(join(tmpdir(), 'hrss-partial-export-'));
+  try {
+    const records = [{ systemId: 'guangdong-hrss', matterId: 'unemployment', recordKey: 'test', firstSeenAt: 1, updatedAt: 1,
+      data: { name: '测试人员', applyDate: '2026-11-02' } }];
+    const columns = [{ key: 'name', label: '姓名' }, { key: 'applyDate', label: '登记日期' }];
+    const file = join(directory, 'partial.xlsx');
+    const result = await new LocalExportService().export(file, 'xlsx', records, undefined, columns, undefined,
+      { taskId: 'TEST-BATCH', systemId: 'guangdong-hrss', matterId: 'unemployment', businessName: '失业信息', status: 'completed',
+        startDate: '2026-11-01', endDate: '2026-11-28', dateBasis: '登记日期', skippedRequests: 2, batchRowCount: 1 });
+    expect(result?.completenessWarning).toContain('未完成');
+    const workbook = new ExcelJS.Workbook(); await workbook.xlsx.readFile(file);
+    expect(workbook.worksheets.map(sheet => sheet.name)).toEqual(['业务列表台账', '批次说明']);
+    expect(workbook.worksheets[0].getRow(1).values).toEqual([undefined, '姓名', '登记日期']);
+    const note = workbook.getWorksheet('批次说明')!;
+    const values: Record<string, unknown> = {};
+    note.eachRow(row => { values[String(row.getCell(1).value)] = row.getCell(2).value; });
+    expect(values).toMatchObject({ '批次编号': 'TEST-BATCH', '采集完整性': '部分完成 / 待补齐', '所选开始日期': '2026-11-01',
+      '所选结束日期': '2026-11-28', '跳过请求次数': 2, '本批次已保存条数': 1, '本次导出条数': 1 });
+  } finally { await rm(directory, { recursive: true, force: true }); }
+});
+
+it('keeps a header-only ledger and failure evidence when every request was skipped', async () => {
+  const directory = await mkdtemp(join(tmpdir(), 'hrss-empty-partial-'));
+  try {
+    const file = join(directory, 'empty.xlsx');
+    const result = await new LocalExportService().export(file, 'xlsx', [], undefined, [{ key: 'name', label: '姓名' }], undefined,
+      { taskId: 'TEST-EMPTY', systemId: 'guangdong-hrss', status: 'completed', skippedRequests: 1, batchRowCount: 0 });
+    expect(result).toMatchObject({ rowCount: 0, completenessWarning: expect.any(String) });
+    const workbook = new ExcelJS.Workbook(); await workbook.xlsx.readFile(file);
+    expect(workbook.worksheets[0].rowCount).toBe(1);
+    expect(JSON.stringify(workbook.getWorksheet('批次说明')!.model)).toContain('不代表原系统在所选范围内没有数据');
+  } finally { await rm(directory, { recursive: true, force: true }); }
+});
+
+it('does not add metadata sheets or columns to official publicity import templates', async () => {
+  const directory = await mkdtemp(join(tmpdir(), 'permit-structure-'));
+  try {
+    const records = [{ systemId: 'oversize-transport', matterId: 'oversize-transport-return', recordKey: 'test', firstSeenAt: 1, updatedAt: 1,
+      data: { xkXdrMc: '测试企业', xkXdrLb: '法人及非法人组织', xkFrdb: '测试法人' } }];
+    const service = new LocalExportService();
+    const beforeFile = join(directory, 'before.xlsx'), afterFile = join(directory, 'after.xlsx');
+    await service.export(beforeFile, 'xlsx', records);
+    await service.export(afterFile, 'xlsx', records, undefined, undefined, undefined,
+      { taskId: 'TEST-PERMIT', systemId: 'oversize-transport', status: 'completed', skippedRequests: 1 });
+    const before = new ExcelJS.Workbook(), after = new ExcelJS.Workbook();
+    await before.xlsx.readFile(beforeFile); await after.xlsx.readFile(afterFile);
+    expect(after.worksheets.map(sheet => [sheet.name, sheet.getSheetValues()])).toEqual(before.worksheets.map(sheet => [sheet.name, sheet.getSheetValues()]));
+    expect(after.getWorksheet('批次说明')).toBeUndefined();
+  } finally { await rm(directory, { recursive: true, force: true }); }
+}, 15_000);
+
 it('exports only declared list columns with Chinese headings and opens the managed ledger folder', async () => {
   const directory = await mkdtemp(join(tmpdir(), 'hrss-export-'));
   try {

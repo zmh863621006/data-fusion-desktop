@@ -300,6 +300,15 @@ export class SqlitePlatformStore implements TaskStore, AuditLog, SettingsStore {
     return (await this.selectTaskOutput(taskId, keyword)).rows;
   }
 
+  /** Batch-wide completeness must not depend on the selected page or keyword. */
+  async taskOutputCompleteness(taskId: string): Promise<{ batchRowCount: number; incompleteHandling: number }> {
+    const row = await this.database.get<{ batchRowCount: number; incompleteHandling: number }>(
+      `SELECT COUNT(*) AS batchRowCount,
+        COALESCE(SUM(CASE WHEN json_extract(data_json,'$.handlingRecordStatus')='failed' THEN 1 ELSE 0 END),0) AS incompleteHandling
+       FROM task_output_rows WHERE task_id=?`, [taskId]);
+    return row ?? { batchRowCount: 0, incompleteHandling: 0 };
+  }
+
   private async selectTaskOutput(taskId: string, keyword?: string, page?: RowPage) {
     const keywordClause = keyword ? ' AND (record_key LIKE ? OR data_json LIKE ?)' : '';
     const keywordParams = keyword ? [`%${keyword}%`, `%${keyword}%`] : [];

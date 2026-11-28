@@ -1,7 +1,8 @@
 import ExcelJS from 'exceljs';
 import { writeFile } from 'node:fs/promises';
 import type { StoredRecord } from '../storage/types';
-import type { ExportFormat, ExportResult } from './types';
+import type { ExportBatchContext, ExportFormat, ExportResult } from './types';
+import { appendBatchCompleteness, batchCompleteness } from './batch-completeness';
 import { DOUBLE_PUBLICITY_TEMPLATE, isDoublePublicityData } from '../double-publicity/template';
 import { exportFieldValue, validateExport, type ConfirmExport, type ExportRowIssue } from '../double-publicity/validation';
 import { createPermitWorkbook, fillPermitRow, PERMIT_FIRST_DATA_ROW } from '../double-publicity/permit-workbook';
@@ -43,7 +44,8 @@ function csvCell(value: unknown): string {
 
 export class LocalExportService {
   async export(path: string, format: ExportFormat, records: StoredRecord[], confirm?: ConfirmExport,
-    listColumns?: readonly { key: string; label: string }[], target?: GovernmentExportTarget): Promise<ExportResult | null> {
+    listColumns?: readonly { key: string; label: string }[], target?: GovernmentExportTarget,
+    batchContext?: ExportBatchContext): Promise<ExportResult | null> {
     const systems = records.map(record => record.systemId);
     const selectedTarget = target ?? (format === 'xlsx' && systems.some(supportsCollectionExport) ? 'collection-disclosure' : undefined);
     assertGovernmentExportTarget(selectedTarget, format, systems);
@@ -66,15 +68,19 @@ export class LocalExportService {
       await writeFile(path, buffer, { flag: 'wx' });
       return { path, rowCount: records.length, createdAt: Date.now(), warningCount: validation.invalid, missingRequiredCount: validation.missingRows };
     }
-    if (records.some(record => ['guangdong-hrss', 'shenzhen-integrated-services'].includes(record.systemId))) {
-      const systemId = records[0].systemId, shenzhen = systemId === 'shenzhen-integrated-services';
+    if (records.some(record => ['guangdong-hrss', 'shenzhen-integrated-services'].includes(record.systemId))
+      || !records.length && batchContext && ['guangdong-hrss', 'shenzhen-integrated-services'].includes(batchContext.systemId)) {
+      const systemId = records[0]?.systemId ?? batchContext!.systemId, shenzhen = systemId === 'shenzhen-integrated-services';
       const exportError = shenzhen ? '请按深圳一体化业务事项单独导出台账' : '请按人社业务事项单独导出台账';
       if (!records.every(record => record.systemId === systemId) || !listColumns?.length) throw new Error(exportError);
+      if (batchContext && (batchContext.systemId !== systemId || records.some(record => batchContext.matterId && record.matterId !== batchContext.matterId))) throw new Error('批次说明与导出业务不匹配');
       const columns = listColumns.filter(column => column.key !== 'handlingRecords');
       if (!columns.length) throw new Error(exportError);
       const values = records.map(record => Object.fromEntries(columns.map(column => [column.key, column.key === 'handlingRecordStatus'
         ? hrssHandlingStatusLabel(record.data[column.key]) : column.key === 'handlingRecordCount'
           ? handlingCountLabel(record.data[column.key], record.data) : cellValue(record.data[column.key])])));
+      const incompleteHandling = records.filter(record => record.data.handlingRecordStatus === 'failed').length;
+      const completenessWarning = batchContext ? batchCompleteness(batchContext, records.length, incompleteHandling).warning : undefined;
       if (format === 'xlsx') {
         const workbook = new ExcelJS.Workbook();
         workbook.creator = '数据融合助手';
@@ -125,13 +131,15 @@ export class LocalExportService {
           history.autoFilter = { from: { row: 1, column: 1 }, to: { row: history.rowCount, column: history.columnCount } };
           history.getColumn('opinion').alignment = { vertical: 'top', wrapText: true };
         }
+        if (batchContext) appendBatchCompleteness(workbook, batchContext, records.length, incompleteHandling);
         await writeFile(path, Buffer.from(await workbook.xlsx.writeBuffer()), { flag: 'wx' });
       } else if (format === 'csv') {
         const lines = [columns.map(column => csvCell(column.label)).join(','), ...values.map(row => columns.map(column => csvCell(row[column.key])).join(','))];
         await writeFile(path, `\uFEFF${lines.join('\r\n')}`, { encoding: 'utf8', flag: 'wx' });
       } else await writeFile(path, JSON.stringify(shenzhen
         ? values.map((row, index) => ({ ...row, handlingRecords: readHandlingRecords(records[index].data.handlingRecords, systemId) })) : values, null, 2), { encoding: 'utf8', flag: 'wx' });
-      return { path, rowCount: records.length, createdAt: Date.now(), warningCount: 0, missingRequiredCount: 0 };
+      return { path, rowCount: records.length, createdAt: Date.now(), warningCount: 0, missingRequiredCount: 0,
+        ...(completenessWarning ? { completenessWarning } : {}) };
     }
     const permitCount = records.filter(record => permitSystems.has(record.systemId) || isDoublePublicityData(record.data)).length;
     if (format === 'xlsx' && permitCount > 0 && permitCount !== records.length) {
